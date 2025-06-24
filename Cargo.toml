@@ -1,0 +1,12 @@
+[package]
+name = "vulkano-tut"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bytemuck = "1.23.1"
+vulkano = "0.32.3"
+vulkano-shaders = "0.32.0"
+vulkano-win = "0.32.0"
+winit = "0.27.3"
+nalgebra-glm = "0.17.0"
