@@ -1,5 +1,6 @@
 use bytemuck::{Pod, Zeroable};
 
+use vulkano::buffer::cpu_pool::CpuBufferPoolSubbuffer;
 use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer, CpuBufferPool, TypedBufferAccess};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::command_buffer::{
@@ -14,6 +15,7 @@ use vulkano::image::view::ImageView;
 use vulkano::image::{self, AttachmentImage, ImageAccess, SwapchainImage};
 use vulkano::instance::{Instance, InstanceCreateInfo};
 use vulkano::memory::allocator::StandardMemoryAllocator;
+use vulkano::pipeline::graphics::color_blend::{AttachmentBlend, BlendFactor, BlendOp, ColorBlendState};
 use vulkano::pipeline::graphics::depth_stencil::DepthStencilState;
 use vulkano::pipeline::graphics::input_assembly::InputAssemblyState;
 use vulkano::pipeline::graphics::rasterization::{CullMode, RasterizationState};
@@ -83,6 +85,73 @@ impl MVP {
     }
 }
 
+mod deferred_vert {
+    vulkano_shaders::shader!{
+        ty: "vertex",
+        path: "src/shaders/deferred.vert",
+        types_meta: {
+            use bytemuck::{Pod, Zeroable};
+
+            #[derive(Clone, Copy, Zeroable, Pod)]
+        },
+    }
+}
+
+mod deferred_frag {
+    vulkano_shaders::shader!{
+        ty: "fragment",
+        path: "src/shaders/deferred.frag"
+    }
+}
+
+mod directional_vert {
+    vulkano_shaders::shader!{
+        ty: "vertex",
+        path: "src/shaders/directional.vert",
+        types_meta: {
+            use bytemuck::{Pod, Zeroable};
+
+            #[derive(Clone, Copy, Zeroable, Pod)]
+        },
+    }
+}
+
+mod directional_frag {
+    vulkano_shaders::shader!{
+        ty: "fragment",
+        path: "src/shaders/directional.frag",
+        types_meta: {
+            use bytemuck::{Pod, Zeroable};
+
+            #[derive(Clone, Copy, Zeroable, Pod)]
+        },
+    }
+}
+
+mod ambient_vert {
+    vulkano_shaders::shader!{
+        ty: "vertex",
+        path: "src/shaders/ambient.vert",
+        types_meta: {
+            use bytemuck::{Pod, Zeroable};
+
+            #[derive(Clone, Copy, Zeroable, Pod)]
+        },
+    }
+}
+
+mod ambient_frag {
+    vulkano_shaders::shader!{
+        ty: "fragment",
+        path: "src/shaders/ambient.frag",
+        types_meta: {
+            use bytemuck::{Pod, Zeroable};
+
+            #[derive(Clone, Copy, Zeroable, Pod)]
+        },
+    }
+}
+
 
 fn main() {
     let mut mvp = MVP::new();
@@ -98,9 +167,17 @@ fn main() {
         intensity: 0.2,
     };
 
-    let directional_light = DirectionalLight {
-        position: [-4.0, -4.0, 0.0, 1.0],
-        color: [1.0, 1.0, 1.0],
+    let directional_light_r = DirectionalLight {
+        position: [-4.0, 0.0, -4.0, 1.0],
+        color: [1.0, 0.0, 0.0],
+    };
+    let directional_light_g = DirectionalLight {
+        position: [0.0, -4.0, 1.0, 1.0],
+        color: [0.0, 1.0, 0.0],
+    };
+    let directional_light_b = DirectionalLight {
+        position: [4.0, -2.0, 1.0, 1.0],
+        color: [0.0, 0.0, 1.0],
     };
 
     let instance = {
@@ -211,89 +288,34 @@ fn main() {
     let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
     let descriptor_set_allocator = StandardDescriptorSetAllocator::new(device.clone());
 
-    mod vs {
-        vulkano_shaders::shader! {
-                ty: "vertex",
-                src: "
-                    #version 450
-                    layout(location = 0) in vec3 position;
-                    layout(location = 1) in vec3 normal;
-                    layout(location = 2) in vec3 color;
 
-                    layout(location = 0) out vec3 out_color;
-                    layout(location = 1) out vec3 out_normal;
-                    layout(location = 2) out vec3 frag_pos;
-
-                    layout(set = 0, binding = 0) uniform MVP_Data {
-                        mat4 model;
-                        mat4 view;
-                        mat4 projection;
-                    } uniforms;
-
-                    void main() {
-                        mat4 worldview = uniforms.view * uniforms.model;
-                        gl_Position = uniforms.projection * worldview * vec4(position, 1.0);
-                        out_color = color;
-                        out_normal = mat3(uniforms.model) * normal;
-                        frag_pos = vec3(uniforms.model * vec4(position, 1.0));
-                    }
-                ",
-                types_meta: {
-                    use bytemuck::{Pod, Zeroable};
-
-                    #[derive(Clone, Copy, Zeroable, Pod)]
-                },
-        }
-    }
-
-    mod fs {
-        vulkano_shaders::shader! {
-            ty: "fragment",
-            src: "
-                #version 450
-                layout(location = 0) in vec3 in_color;
-                layout(location = 1) in vec3 in_normal;
-                layout(location = 2) in vec3 frag_pos;
-
-                layout(location = 0) out vec4 f_color;
-
-                layout(set = 0, binding = 1) uniform Ambient_Data {
-                    vec3 color;
-                    float intensity;
-                } ambient;
-
-                layout(set = 0, binding = 2) uniform Directional_Light_Data {
-                    vec4 position;
-                    vec3 color;
-                } directional;
-
-                void main() {
-                    vec3 ambient_color = ambient.intensity * ambient.color;
-                    vec3 light_direction = normalize(directional.position.xyz - frag_pos);
-                    float directional_intensity = max(dot(in_normal, light_direction), 0.0);
-                    vec3 directional_color = directional_intensity * directional.color;
-                    vec3 combined_color = (ambient_color + directional_color) * in_color;
-                    f_color = vec4(combined_color, 1.0);
-                }
-            ",
-            types_meta: {
-                    use bytemuck::{Pod, Zeroable};
-
-                    #[derive(Clone, Copy, Zeroable, Pod)]
-            },
-        }
-    }
-
-    let vs = vs::load(device.clone()).unwrap();
-    let fs = fs::load(device.clone()).unwrap();
     
-    let render_pass = vulkano::single_pass_renderpass!(
+    let deferred_vert = deferred_vert::load(device.clone()).unwrap();
+    let deferred_frag = deferred_frag::load(device.clone()).unwrap();
+    let directional_vert = directional_vert::load(device.clone()).unwrap();
+    let directional_frag = directional_frag::load(device.clone()).unwrap();
+    let ambient_vert = ambient_vert::load(device.clone()).unwrap();
+    let ambient_frag = ambient_frag::load(device.clone()).unwrap();
+
+    let render_pass = vulkano::ordered_passes_renderpass!(
         device.clone(),
         attachments: {
-            color: {
+            final_color: {
                 load: Clear,
                 store: Store,
                 format: swapchain.image_format(),
+                samples: 1,
+            },
+            color: {
+                load: Clear,
+                store: DontCare,
+                format: Format::A2B10G10R10_UNORM_PACK32,
+                samples: 1,
+            },
+            normals: {
+                load: Clear,
+                store: DontCare,
+                format: Format::R16G16B16A16_SFLOAT,
                 samples: 1,
             },
             depth: {
@@ -303,32 +325,87 @@ fn main() {
                 samples: 1,
             }
         },
-        pass: {
-            color: [color],
-            depth_stencil: {depth}
-        }
+        passes: [
+            {
+                color: [color, normals],
+                depth_stencil: {depth},
+                input: []
+            },
+            {
+                color: [final_color],
+                depth_stencil: {},
+                input: [color, normals]
+            }
+        ] 
     )
     .unwrap();
 
-    let pipeline = GraphicsPipeline::start()
+    let deferred_pass = Subpass::from(render_pass.clone(), 0).unwrap();
+    let lighting_pass = Subpass::from(render_pass.clone(), 1).unwrap();
+
+    let deferred_pipeline = GraphicsPipeline::start()
         .vertex_input_state(BuffersDefinition::new().vertex::<Vertex>())
-        .vertex_shader(vs.entry_point("main").unwrap(), ())
+        .vertex_shader(deferred_vert.entry_point("main").unwrap(), ())
         .input_assembly_state(InputAssemblyState::new())
         .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
-        .fragment_shader(fs.entry_point("main").unwrap(), ())
+        .fragment_shader(deferred_frag.entry_point("main").unwrap(), ())
         .depth_stencil_state(DepthStencilState::simple_depth_test())
         .rasterization_state(RasterizationState::new().cull_mode(CullMode::Back))
-        .render_pass(Subpass::from(render_pass.clone(), 0).unwrap())
+        .render_pass(deferred_pass)
         .build(device.clone())
         .unwrap();
 
-    let uniform_buffer: CpuBufferPool<vs::ty::MVP_Data> =
+    let directional_pipeline = GraphicsPipeline::start()
+        .vertex_input_state(BuffersDefinition::new().vertex::<Vertex>())
+        .vertex_shader(directional_vert.entry_point("main").unwrap(), ())
+        .input_assembly_state(InputAssemblyState::new())
+        .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
+        .fragment_shader(directional_frag.entry_point("main").unwrap(), ())
+        .color_blend_state(
+            ColorBlendState::new(lighting_pass.num_color_attachments()).blend(AttachmentBlend {
+                color_op: BlendOp::Add,
+                color_source: BlendFactor::One,
+                color_destination: BlendFactor::One,
+                alpha_op: BlendOp::Max,
+                alpha_source: BlendFactor::One,
+                alpha_destination: BlendFactor::One,
+            }),
+        )
+        .depth_stencil_state(DepthStencilState::simple_depth_test())
+        .rasterization_state(RasterizationState::new().cull_mode(CullMode::Back))
+        .render_pass(lighting_pass.clone())
+        .build(device.clone())
+        .unwrap();
+
+    let ambient_pipeline = GraphicsPipeline::start()
+        .vertex_input_state(BuffersDefinition::new().vertex::<Vertex>())
+        .vertex_shader(ambient_vert.entry_point("main").unwrap(), ())
+        .input_assembly_state(InputAssemblyState::new())
+        .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
+        .fragment_shader(ambient_frag.entry_point("main").unwrap(), ())
+        .color_blend_state(
+            ColorBlendState::new(lighting_pass.num_color_attachments()).blend(AttachmentBlend {
+                color_op: BlendOp::Add,
+                color_source: BlendFactor::One,
+                color_destination: BlendFactor::One,
+                alpha_op: BlendOp::Max,
+                alpha_source: BlendFactor::One,
+                alpha_destination: BlendFactor::One,
+            }),
+        )
+        .depth_stencil_state(DepthStencilState::simple_depth_test())
+        .rasterization_state(RasterizationState::new().cull_mode(CullMode::Back))
+        .render_pass(lighting_pass.clone())
+        .build(device.clone())
+        .unwrap();
+
+    let uniform_buffer: CpuBufferPool<deferred_vert::ty::MVP_Data> =
         CpuBufferPool::uniform_buffer(memory_allocator.clone());
     
-    let ambient_buffer: CpuBufferPool<fs::ty::Ambient_Data> =
+    let ambient_buffer: CpuBufferPool<ambient_frag::ty::Ambient_Data> =
         CpuBufferPool::uniform_buffer(memory_allocator.clone());
 
-    let directional_buffer: CpuBufferPool<fs::ty::Directional_Light_Data> = 
+    let directional_buffer: CpuBufferPool<directional_frag::ty::Directional_Light_Data> = 
         CpuBufferPool::uniform_buffer(memory_allocator.clone());
 
     let vertices = [
@@ -537,7 +614,12 @@ fn main() {
         depth_range: 0.0..0.1,
     };
 
-    let mut framebuffers = window_size_dependant_setup(&memory_allocator ,&images, render_pass.clone(), &mut viewport);
+    let (mut framebuffers, mut color_buffer, mut normal_buffer) = window_size_dependant_setup(
+        &memory_allocator, 
+        &images, 
+        render_pass.clone(), 
+        &mut viewport,
+    );
 
     let mut recreate_swapchain = false;
     let mut previous_frame_end = Some(Box::new(sync::now(device.clone())) as Box<dyn GpuFuture>);
@@ -583,9 +665,19 @@ fn main() {
                         Err(e) => panic!("Failed to recreate swapchain: {:?}", e),
                     };
 
+                    let (new_framebuffers, new_color_buffer, new_normal_buffer) =
+                    window_size_dependant_setup(
+                        &memory_allocator, 
+                        &new_images, 
+                        render_pass.clone(), 
+                        &mut viewport
+                    );
+
                     swapchain = new_swapchain;
-                    framebuffers =
-                        window_size_dependant_setup(&memory_allocator ,&new_images, render_pass.clone(), &mut viewport);
+                    framebuffers = new_framebuffers;
+                    color_buffer = new_color_buffer;
+                    normal_buffer = new_normal_buffer;
+
                     recreate_swapchain = false;
                 }
 
@@ -604,7 +696,12 @@ fn main() {
                     recreate_swapchain = true;
                 }
 
-                let clear_values = vec![Some([0.0, 0.0, 0.0, 1.0].into()), Some(1.0.into())];
+                let clear_values = vec![
+                    Some([0.0, 0.0, 0.0, 1.0].into()),
+                    Some([0.0, 0.0, 0.0, 1.0].into()),
+                    Some([0.0, 0.0, 0.0, 1.0].into()),
+                    Some(1.0.into()),
+                ];
 
                 let uniform_subbuffer = {
                     let elapsed = rotation_start.elapsed().as_secs() as f64
@@ -628,7 +725,7 @@ fn main() {
                     model = mvp.model * model;
 
 
-                    let uniform_data = vs::ty::MVP_Data {
+                    let uniform_data = deferred_vert::ty::MVP_Data {
                         model: model.into(),
                         view: mvp.view.into(),
                         projection: mvp.projection.into(),
@@ -638,7 +735,7 @@ fn main() {
                 };
 
                 let ambient_subbuffer = {
-                    let uniform_data = fs::ty::Ambient_Data {
+                    let uniform_data = ambient_frag::ty::Ambient_Data {
                         color: ambient_light.color.into(),
                         intensity: ambient_light.intensity.into(),
                     };
@@ -646,60 +743,162 @@ fn main() {
                     ambient_buffer.from_data(uniform_data).unwrap()
                 };
 
-                let directional_subbuffer = {
-                    let uniform_data = fs::ty::Directional_Light_Data {
-                        position: directional_light.position.into(),
-                        color: directional_light.color.into(),
-                    };
-
-                    directional_buffer.from_data(uniform_data).unwrap()
-                };
-
-                let layout = pipeline.layout().set_layouts().get(0).unwrap();
-                let set = PersistentDescriptorSet::new(
+                let deferred_layout = deferred_pipeline.layout().set_layouts().get(0).unwrap();
+                let deferred_set = PersistentDescriptorSet::new(
                     &descriptor_set_allocator,
-                    layout.clone(),
-                [
-                        WriteDescriptorSet::buffer(0, uniform_subbuffer),
-                        WriteDescriptorSet::buffer(1, ambient_subbuffer),
-                        WriteDescriptorSet::buffer(2, directional_subbuffer),
-                                ],   
+                    deferred_layout.clone(),
+                    [
+                        WriteDescriptorSet::buffer(0, uniform_subbuffer.clone()),
+                    ],   
+                )
+                .unwrap();
+
+                let ambient_layout = ambient_pipeline.layout().set_layouts().get(0).unwrap();
+                let ambient_set = PersistentDescriptorSet::new(
+                    &descriptor_set_allocator,
+                    ambient_layout.clone(),
+                    [
+                    WriteDescriptorSet::image_view(0, color_buffer.clone()),
+                    WriteDescriptorSet::buffer(2, uniform_subbuffer.clone()),
+                    WriteDescriptorSet::buffer(3, ambient_subbuffer.clone()),
+                    ],   
                 )
                 .unwrap();
 
 
-                let mut cmd_buffer_builder = AutoCommandBufferBuilder::primary(
+                let mut commands = AutoCommandBufferBuilder::primary(
                     &command_buffer_allocator,
                     queue.queue_family_index(),
                     CommandBufferUsage::OneTimeSubmit,
                 )
                 .unwrap();
 
-                cmd_buffer_builder
-                    .begin_render_pass(RenderPassBeginInfo {
-                        clear_values,
-                        ..RenderPassBeginInfo::framebuffer(
-                            framebuffers[image_index as usize].clone(),
-                        )
-                    },
-                    SubpassContents::Inline,
+                commands
+                    .begin_render_pass(
+                        RenderPassBeginInfo {
+                            clear_values,
+                            ..RenderPassBeginInfo::framebuffer(
+                                framebuffers[image_index as usize].clone(),
+                            )
+                        },
+                        SubpassContents::Inline,
+                    )
+                    .unwrap()
+                    .set_viewport(0, [viewport.clone()])
+                    .bind_pipeline_graphics(deferred_pipeline.clone())
+                    .bind_descriptor_sets(
+                        PipelineBindPoint::Graphics,
+                        deferred_pipeline.layout().clone(),
+                        0,
+                        deferred_set.clone(),
+                    )
+                    .bind_vertex_buffers(0, vertex_buffer.clone())
+                    .draw(vertex_buffer.len() as u32, 1, 0, 0)
+                    .unwrap()
+                    .next_subpass(SubpassContents::Inline)
+                    .unwrap();
+                
+                let directional_layout = directional_pipeline.layout().set_layouts().get(0).unwrap();
+
+                //directional_light_r
+                let mut directional_subbuffer = 
+                    generate_directional_buffer(&directional_buffer, &directional_light_r);
+                
+                let directional_set = PersistentDescriptorSet::new(
+                    &descriptor_set_allocator,
+                    directional_layout.clone(),
+                    [
+                        WriteDescriptorSet::image_view(0, color_buffer.clone()),
+                        WriteDescriptorSet::image_view(1, normal_buffer.clone()),
+                        WriteDescriptorSet::buffer(2, uniform_subbuffer.clone()),
+                        WriteDescriptorSet::buffer(3, directional_subbuffer.clone()),
+                    ],
                 )
-                .unwrap()
-                .set_viewport(0, [viewport.clone()])
-                .bind_pipeline_graphics(pipeline.clone())
-                .bind_descriptor_sets(
-                    PipelineBindPoint::Graphics,
-                    pipeline.layout().clone(),
-                    0,
-                    set.clone(),
+                .unwrap();
+                
+                commands
+                    .bind_pipeline_graphics(directional_pipeline.clone())
+                    .bind_descriptor_sets(
+                        PipelineBindPoint::Graphics,
+                        directional_pipeline.layout().clone(),
+                        0,
+                        directional_set.clone(),
+                    )
+                    .bind_vertex_buffers(0, vertex_buffer.clone())
+                    .draw(vertex_buffer.len() as u32, 1, 0, 0)
+                    .unwrap();
+
+                // directional_light_g
+                directional_subbuffer =
+                    generate_directional_buffer(&directional_buffer, &directional_light_g);
+
+                let directional_set = PersistentDescriptorSet::new(
+                    &descriptor_set_allocator,
+                    directional_layout.clone(),
+                    [
+                        WriteDescriptorSet::image_view(0, color_buffer.clone()),
+                        WriteDescriptorSet::image_view(1, normal_buffer.clone()),
+                        WriteDescriptorSet::buffer(2, uniform_subbuffer.clone()),
+                        WriteDescriptorSet::buffer(3, directional_subbuffer.clone()),
+                    ],
                 )
-                .bind_vertex_buffers(0, vertex_buffer.clone())
-                .draw(vertex_buffer.len() as u32, 1, 0, 0)
-                .unwrap()
-                .end_render_pass()
                 .unwrap();
 
-                let command_buffer = cmd_buffer_builder.build().unwrap();
+                commands
+                    .bind_pipeline_graphics(directional_pipeline.clone())
+                    .bind_descriptor_sets(
+                        PipelineBindPoint::Graphics,
+                        directional_pipeline.layout().clone(),
+                        0,
+                        directional_set.clone(),
+                    )
+                    .bind_vertex_buffers(0, vertex_buffer.clone())
+                    .draw(vertex_buffer.len() as u32, 1, 0, 0)
+                    .unwrap();
+
+                // directional_light_b
+                directional_subbuffer =
+                    generate_directional_buffer(&directional_buffer, &directional_light_b);
+
+                let directional_set = PersistentDescriptorSet::new(
+                    &descriptor_set_allocator,
+                    directional_layout.clone(),
+                    [
+                        WriteDescriptorSet::image_view(0, color_buffer.clone()),
+                        WriteDescriptorSet::image_view(1, normal_buffer.clone()),
+                        WriteDescriptorSet::buffer(2, uniform_subbuffer.clone()),
+                        WriteDescriptorSet::buffer(3, directional_subbuffer.clone()),
+                    ],
+                )
+                .unwrap();
+
+                commands
+                    .bind_pipeline_graphics(directional_pipeline.clone())
+                    .bind_descriptor_sets(
+                        PipelineBindPoint::Graphics,
+                        directional_pipeline.layout().clone(),
+                        0,
+                        directional_set.clone(),
+                    )
+                    .bind_vertex_buffers(0, vertex_buffer.clone())
+                    .draw(vertex_buffer.len() as u32, 1, 0, 0)
+                    .unwrap();
+
+                commands
+                    .bind_pipeline_graphics(ambient_pipeline.clone())
+                    .bind_descriptor_sets(
+                        PipelineBindPoint::Graphics,
+                        ambient_pipeline.layout().clone(),
+                        0,
+                        ambient_set.clone(),
+                    )
+                    .bind_vertex_buffers(0, vertex_buffer.clone())
+                    .draw(vertex_buffer.len() as u32, 1, 0, 0)
+                    .unwrap()
+                    .end_render_pass()
+                    .unwrap();
+
+                let command_buffer = commands.build().unwrap();
 
                 let future = previous_frame_end
                     .take()
@@ -735,7 +934,11 @@ fn window_size_dependant_setup(
     images: &[Arc<SwapchainImage>],
     render_pass: Arc<RenderPass>,
     viewport: &mut Viewport,
-) -> Vec<Arc<Framebuffer>> {
+) -> (
+    Vec<Arc<Framebuffer>>,
+    Arc<ImageView<AttachmentImage>>,
+    Arc<ImageView<AttachmentImage>>,
+) {
     let dimensions = images[0].dimensions().width_height();
     viewport.dimensions = [dimensions[0] as f32, dimensions[1] as f32];
 
@@ -744,18 +947,57 @@ fn window_size_dependant_setup(
     )
     .unwrap();
 
-    images
+    let color_buffer = ImageView::new_default(
+        AttachmentImage::transient_input_attachment(
+            allocator,
+            dimensions,
+            Format::A2B10G10R10_UNORM_PACK32,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    let normal_buffer = ImageView::new_default(
+        AttachmentImage::transient_input_attachment(
+            allocator,
+            dimensions,
+            Format::R16G16B16A16_SFLOAT,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    let framebuffers = images
         .iter()
         .map(|image| {
             let view = ImageView::new_default(image.clone()).unwrap();
             Framebuffer::new(
                 render_pass.clone(),
                 FramebufferCreateInfo {
-                    attachments: vec![view, depth_buffer.clone()],
+                    attachments: vec![
+                        view, 
+                        color_buffer.clone(),
+                        normal_buffer.clone(),
+                        depth_buffer.clone(),
+                    ],
                     ..Default::default()
                 },
             )
             .unwrap()
         })
-        .collect::<Vec<_>>()
+        .collect::<Vec<_>>();
+
+    (framebuffers, color_buffer.clone(), normal_buffer.clone())
+}
+
+fn generate_directional_buffer(
+    pool: &CpuBufferPool<directional_frag::ty::Directional_Light_Data>,
+    light: &DirectionalLight,
+) -> Arc<CpuBufferPoolSubbuffer<directional_frag::ty::Directional_Light_Data>> {
+    let uniform_data = directional_frag::ty::Directional_Light_Data {
+        position: light.position.into(),
+        color: light.color.into(),
+    };
+
+    pool.from_data(uniform_data).unwrap()
 }
