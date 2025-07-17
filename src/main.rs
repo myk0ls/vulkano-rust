@@ -1,6 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 
 use vulkano::buffer::cpu_pool::CpuBufferPoolSubbuffer;
+use vulkano::buffer::sys::Buffer;
 use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer, CpuBufferPool, TypedBufferAccess};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::command_buffer::{
@@ -42,6 +43,11 @@ use nalgebra_glm::{
     half_pi, identity, look_at, perspective, pi, rotate_normalized_axis, translate, vec3, TMat4,
 };
 
+mod model;
+use model::Model;
+mod obj_loader;
+use obj_loader::{DummyVertex, NormalVertex};
+
 use std::clone;
 use std::ptr::null;
 use std::sync::Arc;
@@ -54,7 +60,8 @@ struct Vertex {
     normal: [f32; 3],
     color: [f32; 3],
 }
-vulkano::impl_vertex!(Vertex, position, normal, color);
+vulkano::impl_vertex!(NormalVertex, position, normal, color);
+vulkano::impl_vertex!(DummyVertex, position);
 
 #[derive(Default, Debug, Clone)]
 struct AmbientLight {
@@ -129,14 +136,9 @@ mod directional_frag {
 }
 
 mod ambient_vert {
-    vulkano_shaders::shader!{
+    vulkano_shaders::shader! {
         ty: "vertex",
-        path: "src/shaders/ambient.vert",
-        types_meta: {
-            use bytemuck::{Pod, Zeroable};
-
-            #[derive(Clone, Copy, Zeroable, Pod)]
-        },
+        path: "src/shaders/ambient.vert"
     }
 }
 
@@ -154,30 +156,23 @@ mod ambient_frag {
 
 
 fn main() {
+    let mut model = Model::new("data/models/suzanne.obj").build();
     let mut mvp = MVP::new();
     mvp.view = look_at(
         &vec3(0.0, 0.0, 0.1),
     &vec3(0.0, 0.0, 0.0),
         &vec3(0.0, 1.0, 0.0),
     );
-    mvp.model = translate(&identity(), &vec3(0.0, 0.0, -5.0));
+    model.translate(vec3(0.0, 0.0, -4.0));
 
     let ambient_light = AmbientLight {
         color: [1.0, 1.0, 1.0],
         intensity: 0.2,
     };
 
-    let directional_light_r = DirectionalLight {
-        position: [-4.0, 0.0, -4.0, 1.0],
-        color: [1.0, 0.0, 0.0],
-    };
-    let directional_light_g = DirectionalLight {
-        position: [0.0, -4.0, 1.0, 1.0],
-        color: [0.0, 1.0, 0.0],
-    };
-    let directional_light_b = DirectionalLight {
-        position: [4.0, -2.0, 1.0, 1.0],
-        color: [0.0, 0.0, 1.0],
+    let directional_light = DirectionalLight {
+        position: [-4.0, -4.0, 0.0, 1.0],
+        color: [1.0, 1.0, 1.0],
     };
 
     let instance = {
@@ -344,7 +339,7 @@ fn main() {
     let lighting_pass = Subpass::from(render_pass.clone(), 1).unwrap();
 
     let deferred_pipeline = GraphicsPipeline::start()
-        .vertex_input_state(BuffersDefinition::new().vertex::<Vertex>())
+        .vertex_input_state(BuffersDefinition::new().vertex::<NormalVertex>())
         .vertex_shader(deferred_vert.entry_point("main").unwrap(), ())
         .input_assembly_state(InputAssemblyState::new())
         .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
@@ -356,7 +351,7 @@ fn main() {
         .unwrap();
 
     let directional_pipeline = GraphicsPipeline::start()
-        .vertex_input_state(BuffersDefinition::new().vertex::<Vertex>())
+        .vertex_input_state(BuffersDefinition::new().vertex::<DummyVertex>())
         .vertex_shader(directional_vert.entry_point("main").unwrap(), ())
         .input_assembly_state(InputAssemblyState::new())
         .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
@@ -378,7 +373,7 @@ fn main() {
         .unwrap();
 
     let ambient_pipeline = GraphicsPipeline::start()
-        .vertex_input_state(BuffersDefinition::new().vertex::<Vertex>())
+        .vertex_input_state(BuffersDefinition::new().vertex::<NormalVertex>())
         .vertex_shader(ambient_vert.entry_point("main").unwrap(), ())
         .input_assembly_state(InputAssemblyState::new())
         .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
@@ -408,195 +403,6 @@ fn main() {
     let directional_buffer: CpuBufferPool<directional_frag::ty::Directional_Light_Data> = 
         CpuBufferPool::uniform_buffer(memory_allocator.clone());
 
-    let vertices = [
-        // front face
-        Vertex {
-            position: [-1.000000, -1.000000, 1.000000],
-            normal: [0.0000, 0.0000, 1.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [-1.000000, 1.000000, 1.000000],
-            normal: [0.0000, 0.0000, 1.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [1.000000, 1.000000, 1.000000],
-            normal: [0.0000, 0.0000, 1.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [-1.000000, -1.000000, 1.000000],
-            normal: [0.0000, 0.0000, 1.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [1.000000, 1.000000, 1.000000],
-            normal: [0.0000, 0.0000, 1.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [1.000000, -1.000000, 1.000000],
-            normal: [0.0000, 0.0000, 1.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        // back face
-        Vertex {
-            position: [1.000000, -1.000000, -1.000000],
-            normal: [0.0000, 0.0000, -1.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [1.000000, 1.000000, -1.000000],
-            normal: [0.0000, 0.0000, -1.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [-1.000000, 1.000000, -1.000000],
-            normal: [0.0000, 0.0000, -1.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [1.000000, -1.000000, -1.000000],
-            normal: [0.0000, 0.0000, -1.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [-1.000000, 1.000000, -1.000000],
-            normal: [0.0000, 0.0000, -1.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [-1.000000, -1.000000, -1.000000],
-            normal: [0.0000, 0.0000, -1.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        // top face
-        Vertex {
-            position: [-1.000000, -1.000000, 1.000000],
-            normal: [0.0000, -1.0000, 0.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [1.000000, -1.000000, 1.000000],
-            normal: [0.0000, -1.0000, 0.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [1.000000, -1.000000, -1.000000],
-            normal: [0.0000, -1.0000, 0.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [-1.000000, -1.000000, 1.000000],
-            normal: [0.0000, -1.0000, 0.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [1.000000, -1.000000, -1.000000],
-            normal: [0.0000, -1.0000, 0.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [-1.000000, -1.000000, -1.000000],
-            normal: [0.0000, -1.0000, 0.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        // bottom face
-        Vertex {
-            position: [1.000000, 1.000000, 1.000000],
-            normal: [0.0000, 1.0000, 0.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [-1.000000, 1.000000, 1.000000],
-            normal: [0.0000, 1.0000, 0.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [-1.000000, 1.000000, -1.000000],
-            normal: [0.0000, 1.0000, 0.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [1.000000, 1.000000, 1.000000],
-            normal: [0.0000, 1.0000, 0.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [-1.000000, 1.000000, -1.000000],
-            normal: [0.0000, 1.0000, 0.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [1.000000, 1.000000, -1.000000],
-            normal: [0.0000, 1.0000, 0.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        // left face
-        Vertex {
-            position: [-1.000000, -1.000000, -1.000000],
-            normal: [-1.0000, 0.0000, 0.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [-1.000000, 1.000000, -1.000000],
-            normal: [-1.0000, 0.0000, 0.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [-1.000000, 1.000000, 1.000000],
-            normal: [-1.0000, 0.0000, 0.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [-1.000000, -1.000000, -1.000000],
-            normal: [-1.0000, 0.0000, 0.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [-1.000000, 1.000000, 1.000000],
-            normal: [-1.0000, 0.0000, 0.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [-1.000000, -1.000000, 1.000000],
-            normal: [-1.0000, 0.0000, 0.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        // right face
-        Vertex {
-            position: [1.000000, -1.000000, 1.000000],
-            normal: [1.0000, 0.0000, 0.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [1.000000, 1.000000, 1.000000],
-            normal: [1.0000, 0.0000, 0.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [1.000000, 1.000000, -1.000000],
-            normal: [1.0000, 0.0000, 0.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [1.000000, -1.000000, 1.000000],
-            normal: [1.0000, 0.0000, 0.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [1.000000, 1.000000, -1.000000],
-            normal: [1.0000, 0.0000, 0.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-        Vertex {
-            position: [1.000000, -1.000000, -1.000000],
-            normal: [1.0000, 0.0000, 0.0000],
-            color: [1.0, 0.35, 0.137],
-        },
-    ];
-
     let vertex_buffer = CpuAccessibleBuffer::from_iter(
         &memory_allocator,
         BufferUsage {
@@ -604,7 +410,18 @@ fn main() {
             ..BufferUsage::empty()
         },
         false,
-        vertices,
+        model.data().iter().cloned(),
+    )
+    .unwrap();
+
+    let dummy_verts = CpuAccessibleBuffer::from_iter(
+        &memory_allocator,
+        BufferUsage {
+            vertex_buffer: true,
+            ..BufferUsage::empty()
+        },
+        false,
+        DummyVertex::list().iter().cloned(),
     )
     .unwrap();
 
@@ -707,26 +524,15 @@ fn main() {
                     let elapsed = rotation_start.elapsed().as_secs() as f64
                         + rotation_start.elapsed().subsec_nanos() as f64 / 1_000_000_000.0;
                     let elapsed_as_radians = elapsed * pi::<f64>() / 180.0;
-                    let mut model: TMat4<f32> = rotate_normalized_axis(
-                        &identity(),
-                        elapsed_as_radians as f32 * 50.0,
-                        &vec3(0.0, 0.0, 1.0),
-                    );
-                    model = rotate_normalized_axis(
-                        &model,
-                        elapsed_as_radians as f32 * 30.0,
-                        &vec3(0.0, 1.0, 0.0),
-                    );
-                    model = rotate_normalized_axis(
-                        &model,
-                        elapsed_as_radians as f32 * 20.0,
-                        &vec3(1.0, 0.0, 0.0),
-                    );
-                    model = mvp.model * model;
+                    model.zero_rotation();
+                    model.rotate(pi(), vec3(0.0, 1.0, 0.0));
+                    model.rotate(elapsed_as_radians as f32 * 10.0, vec3(1.0, 0.0, 0.0));
+                    model.rotate(elapsed_as_radians as f32 * 30.0, vec3(0.0, 1.0, 0.0));
+                    model.rotate(elapsed_as_radians as f32 * 50.0, vec3(0.0, 0.0, 1.0));
 
 
                     let uniform_data = deferred_vert::ty::MVP_Data {
-                        model: model.into(),
+                        model: model.model_matrix().into(),
                         view: mvp.view.into(),
                         projection: mvp.projection.into(),
                     };
@@ -759,12 +565,26 @@ fn main() {
                     ambient_layout.clone(),
                     [
                     WriteDescriptorSet::image_view(0, color_buffer.clone()),
-                    WriteDescriptorSet::buffer(2, uniform_subbuffer.clone()),
-                    WriteDescriptorSet::buffer(3, ambient_subbuffer.clone()),
+                    WriteDescriptorSet::buffer(1, ambient_subbuffer.clone()),
                     ],   
                 )
                 .unwrap();
 
+
+               let directional_subbuffer =
+                    generate_directional_buffer(&directional_buffer, &directional_light);
+
+                let directional_layout = directional_pipeline.layout().set_layouts().get(0).unwrap();
+                let directional_set = PersistentDescriptorSet::new(
+                    &descriptor_set_allocator,
+                    directional_layout.clone(),
+                    [
+                        WriteDescriptorSet::image_view(0, color_buffer.clone()),
+                        WriteDescriptorSet::image_view(1, normal_buffer.clone()),
+                        WriteDescriptorSet::buffer(2, directional_subbuffer.clone()),
+                    ],
+                )
+                .unwrap();
 
                 let mut commands = AutoCommandBufferBuilder::primary(
                     &command_buffer_allocator,
@@ -796,27 +616,7 @@ fn main() {
                     .draw(vertex_buffer.len() as u32, 1, 0, 0)
                     .unwrap()
                     .next_subpass(SubpassContents::Inline)
-                    .unwrap();
-                
-                let directional_layout = directional_pipeline.layout().set_layouts().get(0).unwrap();
-
-                //directional_light_r
-                let mut directional_subbuffer = 
-                    generate_directional_buffer(&directional_buffer, &directional_light_r);
-                
-                let directional_set = PersistentDescriptorSet::new(
-                    &descriptor_set_allocator,
-                    directional_layout.clone(),
-                    [
-                        WriteDescriptorSet::image_view(0, color_buffer.clone()),
-                        WriteDescriptorSet::image_view(1, normal_buffer.clone()),
-                        WriteDescriptorSet::buffer(2, uniform_subbuffer.clone()),
-                        WriteDescriptorSet::buffer(3, directional_subbuffer.clone()),
-                    ],
-                )
-                .unwrap();
-                
-                commands
+                    .unwrap()
                     .bind_pipeline_graphics(directional_pipeline.clone())
                     .bind_descriptor_sets(
                         PipelineBindPoint::Graphics,
@@ -824,67 +624,9 @@ fn main() {
                         0,
                         directional_set.clone(),
                     )
-                    .bind_vertex_buffers(0, vertex_buffer.clone())
-                    .draw(vertex_buffer.len() as u32, 1, 0, 0)
-                    .unwrap();
-
-                // directional_light_g
-                directional_subbuffer =
-                    generate_directional_buffer(&directional_buffer, &directional_light_g);
-
-                let directional_set = PersistentDescriptorSet::new(
-                    &descriptor_set_allocator,
-                    directional_layout.clone(),
-                    [
-                        WriteDescriptorSet::image_view(0, color_buffer.clone()),
-                        WriteDescriptorSet::image_view(1, normal_buffer.clone()),
-                        WriteDescriptorSet::buffer(2, uniform_subbuffer.clone()),
-                        WriteDescriptorSet::buffer(3, directional_subbuffer.clone()),
-                    ],
-                )
-                .unwrap();
-
-                commands
-                    .bind_pipeline_graphics(directional_pipeline.clone())
-                    .bind_descriptor_sets(
-                        PipelineBindPoint::Graphics,
-                        directional_pipeline.layout().clone(),
-                        0,
-                        directional_set.clone(),
-                    )
-                    .bind_vertex_buffers(0, vertex_buffer.clone())
-                    .draw(vertex_buffer.len() as u32, 1, 0, 0)
-                    .unwrap();
-
-                // directional_light_b
-                directional_subbuffer =
-                    generate_directional_buffer(&directional_buffer, &directional_light_b);
-
-                let directional_set = PersistentDescriptorSet::new(
-                    &descriptor_set_allocator,
-                    directional_layout.clone(),
-                    [
-                        WriteDescriptorSet::image_view(0, color_buffer.clone()),
-                        WriteDescriptorSet::image_view(1, normal_buffer.clone()),
-                        WriteDescriptorSet::buffer(2, uniform_subbuffer.clone()),
-                        WriteDescriptorSet::buffer(3, directional_subbuffer.clone()),
-                    ],
-                )
-                .unwrap();
-
-                commands
-                    .bind_pipeline_graphics(directional_pipeline.clone())
-                    .bind_descriptor_sets(
-                        PipelineBindPoint::Graphics,
-                        directional_pipeline.layout().clone(),
-                        0,
-                        directional_set.clone(),
-                    )
-                    .bind_vertex_buffers(0, vertex_buffer.clone())
-                    .draw(vertex_buffer.len() as u32, 1, 0, 0)
-                    .unwrap();
-
-                commands
+                    .bind_vertex_buffers(0, dummy_verts.clone())
+                    .draw(dummy_verts.len() as u32, 1, 0, 0)
+                    .unwrap()
                     .bind_pipeline_graphics(ambient_pipeline.clone())
                     .bind_descriptor_sets(
                         PipelineBindPoint::Graphics,
@@ -892,11 +634,12 @@ fn main() {
                         0,
                         ambient_set.clone(),
                     )
-                    .bind_vertex_buffers(0, vertex_buffer.clone())
-                    .draw(vertex_buffer.len() as u32, 1, 0, 0)
+                    .bind_vertex_buffers(0, dummy_verts.clone())
+                    .draw(dummy_verts.len() as u32, 1, 0, 0)
                     .unwrap()
                     .end_render_pass()
                     .unwrap();
+
 
                 let command_buffer = commands.build().unwrap();
 
