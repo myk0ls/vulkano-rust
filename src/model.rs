@@ -1,4 +1,4 @@
-use nalgebra_glm::{identity, rotate_normalized_axis, translate, TMat4, TVec3};
+use nalgebra_glm::{identity, inverse_transpose, rotate_normalized_axis, translate, TMat4, TVec3};
 use vulkano::{half::vec, pipeline::cache};
 
 use std::cell::Cell;
@@ -9,6 +9,9 @@ pub struct Model {
     data: Vec<NormalVertex>,
     translation: TMat4<f32>,
     rotation: TMat4<f32>,
+    model: TMat4<f32>,
+    normals: TMat4<f32>,
+    requires_update: bool,
     //uniform_scale: f32,
     //specular_intensity: f32,
     //shininess: f32,
@@ -49,6 +52,9 @@ impl ModelBuilder {
             data: loader.as_normal_vertices(),
             translation: identity(),
             rotation: identity(),
+            model: identity(),
+            normals: identity(),
+            requires_update: false,
             cache: Cell::new(None),
             //uniform_scale: self.scale_factor,
             //specular_intensity: self.specular_intensity,
@@ -92,6 +98,15 @@ impl Model {
         self.cache.set(Some(ModelMatrices { model }));
 
         model
+    }
+
+    pub fn model_matrices(&mut self) -> (TMat4<f32>, TMat4<f32>) {
+        if self.requires_update {
+            self.model = self.translation * self.rotation;
+            self.normals = inverse_transpose(self.model);
+            self.requires_update = false;
+        }
+        (self.model, self.normals)
     }
 
     pub fn rotate(&mut self, radians: f32, v: TVec3<f32>) {
