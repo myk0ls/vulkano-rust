@@ -117,6 +117,7 @@ impl Model {
     pub fn translate(&mut self, v: TVec3<f32>) {
         self.translation = translate(&self.translation, &v);
         self.cache.set(None);
+        self.requires_update = true;
     }
 
     /// Return the model's rotation to 0
