@@ -7,6 +7,7 @@ mod loader;
 mod vertex;
 pub use self::loader::Loader;
 use bytemuck::{Pod, Zeroable};
+use vulkano::{pipeline::graphics::vertex_input::Vertex};
 
 use std::fmt;
 
@@ -15,11 +16,12 @@ use std::fmt;
 /// This is due to a quirk of the Vulkan API in that *all*
 /// render passes require some sort of input.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Zeroable, Pod)]
+#[derive(Clone, Copy, Debug, Default, Zeroable, Pod, vulkano::pipeline::graphics::vertex_input::Vertex)]
 pub struct DummyVertex {
     /// A regular position vector with the z-value shaved off for space.
     /// This assumes the shaders will take a `vec2` and transform it as
     /// needed.
+    #[format(R32G32_SFLOAT)]
     pub position: [f32; 2],
 }
 
@@ -69,19 +71,24 @@ impl DummyVertex {
 
 /// A structure for the vertex information used in earlier lessons
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Zeroable, Pod)]
+#[derive(Clone, Copy, Debug, Default, Zeroable, Pod, vulkano::pipeline::graphics::vertex_input::Vertex)]
 pub struct ColoredVertex {
+    #[format(R32G32_SFLOAT)]
     pub position: [f32; 3],
+    #[format(R32G32_SFLOAT)]
     pub color: [f32; 3],
 }
 
 /// A structure used for the vertex information starting
 /// from our lesson on lighting
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Zeroable, Pod)]
+#[derive(Clone, Copy, Debug, Default, Zeroable, Pod, vulkano::pipeline::graphics::vertex_input::Vertex)]
 pub struct NormalVertex {
+    #[format(R32G32_SFLOAT)]
     pub position: [f32; 3],
+    #[format(R32G32_SFLOAT)]
     pub normal: [f32; 3],
+    #[format(R32G32_SFLOAT)]
     pub color: [f32; 3],
 }
 

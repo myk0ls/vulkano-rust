@@ -1,27 +1,24 @@
 use std::{mem, sync::Arc};
 
 use nalgebra_glm::{half_pi, identity, perspective, TMat4};
-use vulkano::{buffer::{cpu_pool::CpuBufferPoolSubbuffer, BufferUsage, CpuAccessibleBuffer, CpuBufferPool, TypedBufferAccess}, command_buffer::{allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer, RenderPassBeginInfo, SubpassContents}, descriptor_set::{allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet}, device::{physical::PhysicalDeviceType, Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo}, format::Format, image::{swapchain, view::ImageView, AttachmentImage, ImageAccess, SwapchainImage}, instance::{self, Instance, InstanceCreateInfo}, library, memory::allocator::StandardMemoryAllocator, pipeline::{graphics::{color_blend::{AttachmentBlend, BlendFactor, BlendOp, ColorBlendState}, depth_stencil::DepthStencilState, input_assembly::InputAssemblyState, rasterization::{CullMode, RasterizationState}, vertex_input::BuffersDefinition, viewport::{Viewport, ViewportState}}, GraphicsPipeline, Pipeline, PipelineBindPoint}, render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass}, swapchain::{AcquireError, Surface, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo, SwapchainCreationError, SwapchainPresentInfo}, sync::{self, FlushError, GpuFuture}, Version, VulkanLibrary};
+use vulkano::{buffer::{cpu_pool::CpuBufferPoolSubbuffer, BufferUsage, CpuAccessibleBuffer, CpuBufferPool, TypedBufferAccess}, command_buffer::{allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer, RenderPassBeginInfo, SubpassContents}, descriptor_set::{allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo}, PersistentDescriptorSet, WriteDescriptorSet}, device::{physical::PhysicalDeviceType, Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags}, format::Format, image::{swapchain, view::ImageView, AttachmentImage, ImageAccess, SwapchainImage}, instance::{self, Instance, InstanceCreateInfo}, library, memory::allocator::StandardMemoryAllocator, pipeline::{graphics::{color_blend::{AttachmentBlend, BlendFactor, BlendOp, ColorBlendState}, depth_stencil::{DepthState, DepthStencilState, DepthStencilStateFlags, StencilState}, input_assembly::InputAssemblyState, multisample::MultisampleState, rasterization::{CullMode, RasterizationState}, vertex_input::{BuffersDefinition, Vertex, VertexDefinition}, viewport::{Viewport, ViewportState}, GraphicsPipelineCreateInfo}, GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineShaderStageCreateInfo}, render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass}, swapchain::{AcquireError, Surface, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo, SwapchainCreationError, SwapchainPresentInfo}, sync::{self, FlushError, GpuFuture}, NonExhaustive, Version, VulkanLibrary};
 
 use vulkano::swapchain::acquire_next_image;
 
-use vulkano_win::{required_extensions, VkSurfaceBuild};
 use winit::{event_loop::EventLoop, window::{Window, WindowBuilder}};
 
 use crate::{model::Model, obj_loader::{DummyVertex, NormalVertex}, system::DirectionalLight};
 
-vulkano::impl_vertex!(DummyVertex, position);
-vulkano::impl_vertex!(NormalVertex, position, normal, color);
 
 mod deferred_vert {
     vulkano_shaders::shader!{
         ty: "vertex",
         path: "src/system/shaders/deferred.vert",
-        types_meta: {
-            use bytemuck::{Pod, Zeroable};
+        // types_meta: {
+        //     use bytemuck::{Pod, Zeroable};
 
-            #[derive(Clone, Copy, Zeroable, Pod)]
-        },
+        //     #[derive(Clone, Copy, Zeroable, Pod)]
+        // },
     }
 }
 
@@ -43,11 +40,11 @@ mod directional_frag {
     vulkano_shaders::shader!{
         ty: "fragment",
         path: "src/system/shaders/directional.frag",
-        types_meta: {
-            use bytemuck::{Pod, Zeroable};
+        // types_meta: {
+        //     use bytemuck::{Pod, Zeroable};
 
-            #[derive(Clone, Copy, Zeroable, Pod)]
-        },
+        //     #[derive(Clone, Copy, Zeroable, Pod)]
+        // },
     }
 }
 
@@ -62,11 +59,11 @@ mod ambient_frag {
     vulkano_shaders::shader!{
         ty: "fragment",
         path: "src/system/shaders/ambient.frag",
-        types_meta: {
-            use bytemuck::{Pod, Zeroable};
+        // types_meta: {
+        //     use bytemuck::{Pod, Zeroable};
 
-            #[derive(Clone, Copy, Zeroable, Pod)]
-        },
+        //     #[derive(Clone, Copy, Zeroable, Pod)]
+        // },
     }
 }
 
@@ -89,10 +86,10 @@ pub struct System {
     memory_allocator: Arc<StandardMemoryAllocator>,
     descriptor_set_allocator: StandardDescriptorSetAllocator,
     command_buffer_allocator: StandardCommandBufferAllocator,
-    vp_buffer:Arc<CpuAccessibleBuffer<deferred_vert::ty::VP_Data>>,
-    model_uniform_buffer:CpuBufferPool<deferred_vert::ty::Model_Data>,
-    ambient_buffer:Arc<CpuAccessibleBuffer<ambient_frag::ty::Ambient_Data>>,
-    directional_buffer:CpuBufferPool<directional_frag::ty::Directional_Light_Data>,
+    vp_buffer:Arc<CpuAccessibleBuffer<deferred_vert::VP_Data>>,
+    model_uniform_buffer:CpuBufferPool<deferred_vert::Model_Data>,
+    ambient_buffer:Arc<CpuAccessibleBuffer<ambient_frag::Ambient_Data>>,
+    directional_buffer:CpuBufferPool<directional_frag::Directional_Light_Data>,
     render_pass: Arc<RenderPass>,
     deferred_pipeline: Arc<GraphicsPipeline>,
     directional_pipeline: Arc<GraphicsPipeline>,
@@ -128,7 +125,7 @@ impl System {
     pub fn new(event_loop: &EventLoop<()>) -> System {
         let instance = {
             let library = VulkanLibrary::new().unwrap();
-            let extensions = vulkano_win::required_extensions(&library);
+            let extensions = Surface::required_extensions(&event_loop).unwrap();
 
             Instance::new(
                 library,
@@ -140,9 +137,18 @@ impl System {
             .unwrap()
         };
 
-        let surface = WindowBuilder::new()
-            .build_vk_surface(event_loop, instance.clone())
-            .unwrap();
+//         let window = WindowBuilder::new().build(window_target);
+// //.build_vk_surface(event_loop, instance.clone())
+//             //.unwrap();
+
+//         let surface = Surface::from_window(instance.clone(), Arc::new(window));
+
+        let window = Arc::new(WindowBuilder::new()
+            .with_title("Vulkan App")
+            .build(&event_loop)
+            .unwrap());
+
+        let surface = Surface::from_window(instance.clone(), window.clone()).unwrap();
 
         let device_extensions = DeviceExtensions {
             khr_swapchain: true,
@@ -159,7 +165,7 @@ impl System {
                     .enumerate()
                     .position(|(i, q)| {
                         // pick first queue_familiy_index that handles graphics and can draw on the surface created by winit
-                        q.queue_flags.graphics
+                        q.queue_flags.intersects(QueueFlags::GRAPHICS)
                             && p.surface_support(i as u32, &surface).unwrap_or(false)
                     })
                     .map(|i| (p, i as u32))
@@ -201,7 +207,7 @@ impl System {
                 .unwrap();
 
             let usage = caps.supported_usage_flags;
-            let alpha = caps.supported_composite_alpha.iter().next().unwrap();
+            let alpha = caps.supported_composite_alpha.into_iter().next().unwrap();
 
             let image_format = Some(
                 device
@@ -209,7 +215,7 @@ impl System {
                     .surface_formats(&surface, Default::default())
                     .unwrap()[0]
                     .0,
-            );
+            ).unwrap();
 
             let window = surface.object().unwrap().downcast_ref::<Window>().unwrap();
             let image_extent: [u32; 2] = window.inner_size().into();
@@ -233,7 +239,7 @@ impl System {
         };
 
         let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
-        let descriptor_set_allocator = StandardDescriptorSetAllocator::new(device.clone());
+        let descriptor_set_allocator = StandardDescriptorSetAllocator::new(device.clone(), Default::default());
         let command_buffer_allocator =
             StandardCommandBufferAllocator::new(device.clone(), Default::default());
 
@@ -247,28 +253,28 @@ impl System {
         let render_pass = vulkano::ordered_passes_renderpass!(device.clone(),
             attachments: {
                 final_color: {
-                    load: Clear,
-                    store: Store,
                     format: swapchain.image_format(),
                     samples: 1,
+                    load_op: Clear,
+                    store_op: Store,
                 },
                 color: {
-                    load: Clear,
-                    store: DontCare,
                     format: Format::A2B10G10R10_UNORM_PACK32,
                     samples: 1,
+                    load_op: Clear,
+                    store_op: DontCare,
                 },
                 normals: {
-                    load: Clear,
-                    store: DontCare,
                     format: Format::R16G16B16A16_SFLOAT,
                     samples: 1,
+                    load_op: Clear,
+                    store_op: DontCare,
                 },
                 depth: {
-                    load: Clear,
-                    store: DontCare,
                     format: Format::D16_UNORM,
                     samples: 1,
+                    load_op: Clear,
+                    store_op: DontCare,
                 }
             },
             passes: [
@@ -300,6 +306,39 @@ impl System {
             .build(device.clone())
             .unwrap();
 
+        let stages = [
+            PipelineShaderStageCreateInfo::new(deferred_vert.entry_point("main").unwrap()),
+            PipelineShaderStageCreateInfo::new(deferred_frag.entry_point("main").unwrap()),
+        ];
+
+        let vertex_input_state = NormalVertex::per_vertex()
+            .definition(&deferred_vert.entry_point("main").unwrap())
+            .unwrap();
+
+        let new_deferred_pipeline = {
+
+            GraphicsPipeline::new(
+                device.clone(),
+                None,
+                GraphicsPipelineCreateInfo {
+                    stages: stages.into_iter().collect(),
+                    vertex_input_state: Some(vertex_input_state),
+                    input_assembly_state: Some(InputAssemblyState::default()),
+                    viewport_state: Some(ViewportState::default()),
+                    rasterization_state: Some(RasterizationState::default()),
+                    multisample_state: Some(MultisampleState::default()),
+                    depth_stencil_state: Some(DepthStencilState { 
+                        depth: Some(DepthState::simple()),
+                        ..Default::default()
+                    }),
+
+                    
+                }
+            )
+            .unwrap();
+        };
+        
+
         let directional_pipeline = GraphicsPipeline::start()
             .vertex_input_state(BuffersDefinition::new().vertex::<DummyVertex>())
             .vertex_shader(directional_vert.entry_point("main").unwrap(), ())
@@ -315,6 +354,12 @@ impl System {
                         alpha_op: BlendOp::Max,
                         alpha_source: BlendFactor::One,
                         alpha_destination: BlendFactor::One,
+                        src_color_blend_factor: todo!(),
+                        dst_color_blend_factor: todo!(),
+                        color_blend_op: todo!(),
+                        src_alpha_blend_factor: todo!(),
+                        dst_alpha_blend_factor: todo!(),
+                        alpha_blend_op: todo!(),
                     },
                 ),
             )
@@ -758,10 +803,10 @@ impl System {
 
     fn generate_directional_buffer(
         &self,
-        pool: &CpuBufferPool<directional_frag::ty::Directional_Light_Data>,
+        pool: &CpuBufferPool<directional_frag::Directional_Light_Data>,
         light: &DirectionalLight,
-    ) -> Arc<CpuBufferPoolSubbuffer<directional_frag::ty::Directional_Light_Data>> {
-        let uniform_data = directional_frag::ty::Directional_Light_Data {
+    ) -> Arc<CpuBufferPoolSubbuffer<directional_frag::Directional_Light_Data>> {
+        let uniform_data = directional_frag::Directional_Light_Data {
             position: light.position.into(),
             color: light.color.into(),
         };
@@ -813,7 +858,7 @@ impl System {
                 ..BufferUsage::empty()
             },
             false,
-            deferred_vert::ty::VP_Data {
+            deferred_vert::VP_Data {
                 view: self.vp.view.into(),
                 projection: self.vp.projection.into(),
             },
@@ -906,7 +951,7 @@ impl System {
                 ..BufferUsage::empty()
             },
             false,
-            deferred_vert::ty::VP_Data {
+            deferred_vert::VP_Data {
                 view: self.vp.view.into(),
                 projection: self.vp.projection.into(),
             },
