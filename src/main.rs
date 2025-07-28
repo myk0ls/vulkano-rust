@@ -2,19 +2,38 @@ mod model;
 mod obj_loader;
 mod system;
 
-use std::time::Instant;
+use core::f64;
+use std::{collections::HashSet, time::Instant};
+
+use rapier3d::prelude::*;
 
 use nalgebra_glm::{look_at, pi, vec3};
 use system::System;
-use vulkano::{buffer::sys, sync::{self, GpuFuture}};
-use winit::{event::{Event, WindowEvent}};
+use vulkano::{
+    buffer::sys,
+    sync::{self, GpuFuture},
+};
+use winit::event::{
+    DeviceEvent, ElementState, Event, KeyboardInput, MouseButton, VirtualKeyCode, WindowEvent,
+};
 use winit::event_loop::{ControlFlow, EventLoop};
 
 use crate::{model::Model, system::DirectionalLight};
 
+const MOVE_SPEED: f32 = 0.1;
+const FALL_SPEED: f32 = 0.025;
+const sensitivity: f32 = 0.005;
+
 fn main() {
     let event_loop = EventLoop::new();
     let mut system = System::new(&event_loop);
+
+    let mut pressed_keys = HashSet::new();
+    let mut pressed_mouse_buttons = HashSet::new();
+
+    let mut yaw: f32 = 0.0;
+    let mut pitch: f32 = 0.0;
+    let mut radius: f32 = 0.1;
 
     system.set_view(&look_at(
         &vec3(0.0, 0.0, 0.1),
@@ -22,10 +41,20 @@ fn main() {
         &vec3(0.0, 1.0, 0.0),
     ));
 
-    let mut suzanne = Model::new("data/models/suzanne.obj").build();
-    suzanne.translate(vec3(0.0, 0.0, -4.0));
+    let mut suzanne = Model::new("data/models/suzanne.obj")
+        //.color([0.5, 0.2, 1.0])
+        //.uniform_scale_factor(2.0)
+        .build();
+    suzanne.translate(vec3(0.0, 0.0, -7.0));
+    suzanne.rotate(pi(), vec3(0.0, 0.0, 1.0));
 
-    let directional_light = DirectionalLight::new([-4.0, -4.0, 0.0, -2.0], [1.0, 0.0, 0.0]);
+    let mut platform = Model::new("data/models/cube.obj").build();
+    platform.translate(vec3(0.0, 3.0, -7.0));
+
+    //let directional_light = DirectionalLight::new([-4.0, -4.0, 0.0, -2.0], [1.0, 0.0, 0.0]);
+    //let directional_light_two = DirectionalLight::new([4.0, 4.0, 0.0, -2.0], [1.0, 0.0, 0.0]);
+
+    let rotation_start = Instant::now();
 
     let mut previous_frame_end =
         Some(Box::new(sync::now(system.device.clone())) as Box<dyn GpuFuture>);
@@ -43,6 +72,87 @@ fn main() {
         } => {
             system.recreate_swapchain();
         }
+        Event::WindowEvent {
+            event:
+                WindowEvent::KeyboardInput {
+                    input:
+                        KeyboardInput {
+                            virtual_keycode: Some(keycode),
+                            state,
+                            ..
+                        },
+                    ..
+                },
+            ..
+        } => match state {
+            ElementState::Pressed => {
+                pressed_keys.insert(keycode);
+            }
+            ElementState::Released => {
+                pressed_keys.remove(&keycode);
+            }
+        },
+
+        Event::WindowEvent {
+            event: WindowEvent::MouseInput { state, button, .. },
+            ..
+        } => match state {
+            ElementState::Pressed => {
+                pressed_mouse_buttons.insert(button);
+            }
+            ElementState::Released => {
+                pressed_mouse_buttons.remove(&button);
+            }
+        },
+
+        Event::DeviceEvent {
+            event: DeviceEvent::MouseMotion { delta: (dx, dy) },
+            ..
+        } => {
+            if (dx != 0.0 || dy != 0.0) && pressed_mouse_buttons.contains(&MouseButton::Right) {
+                yaw += dx as f32 * sensitivity;
+                pitch += dy as f32 * sensitivity;
+
+                pitch.clamp(
+                    -std::f32::consts::FRAC_2_PI + 0.01,
+                    std::f32::consts::FRAC_2_PI + 0.01,
+                );
+
+                let eye = vec3(
+                    radius * pitch.cos() * yaw.sin(),
+                    radius * pitch.sin(),
+                    radius * pitch.cos() * yaw.cos(),
+                );
+
+                let center = vec3(0.0, 0.0, 0.0);
+                let up = vec3(0.0, 1.0, 0.0);
+
+                let view = look_at(&eye, &center, &up);
+                system.set_view(&view);
+            }
+        }
+
+        Event::MainEventsCleared => {
+            let mut movement = vec3(0.0, 0.0, 0.0);
+            if pressed_keys.contains(&VirtualKeyCode::W) {
+                movement.y = -MOVE_SPEED;
+            }
+            if pressed_keys.contains(&VirtualKeyCode::S) {
+                movement.y = MOVE_SPEED;
+            }
+            if pressed_keys.contains(&VirtualKeyCode::A) {
+                movement.x = -MOVE_SPEED;
+            }
+            if pressed_keys.contains(&VirtualKeyCode::D) {
+                movement.x = MOVE_SPEED;
+            }
+            if pressed_keys.contains(&VirtualKeyCode::F8) {
+                *control_flow = ControlFlow::Exit;
+            }
+
+            suzanne.translate(movement);
+        }
+
         Event::RedrawEventsCleared => {
             previous_frame_end
                 .as_mut()
@@ -50,11 +160,23 @@ fn main() {
                 .unwrap()
                 .cleanup_finished();
 
+            let elapsed = rotation_start.elapsed().as_secs() as f32
+                + rotation_start.elapsed().subsec_nanos() as f32 / 1_000_000_000.0;
+            let elapsed_as_radians = elapsed * 30.0 * (pi::<f32>() / 180.0);
+
+            let x: f32 = 2.0 * elapsed_as_radians.cos();
+            let z: f32 = -7.0 + (2.0 * elapsed_as_radians.sin());
+
+            let directional_light = DirectionalLight::new([x, 0.0, z, 1.0], [1.0, 1.0, 1.0]);
 
             system.start();
             system.geometry(&mut suzanne);
+            system.geometry(&mut platform);
             system.ambient();
             system.directional(&directional_light);
+            //system.directional(&directional_light_two);
+            system.light_object(&directional_light);
+            //system.light_object(&directional_light_two);
             system.finish(&mut previous_frame_end);
         }
         _ => (),

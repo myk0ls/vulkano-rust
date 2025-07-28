@@ -1,20 +1,68 @@
 use std::{mem, sync::Arc};
 
-use nalgebra_glm::{half_pi, identity, perspective, TMat4};
-use vulkano::{buffer::{cpu_pool::CpuBufferPoolSubbuffer, BufferUsage, CpuAccessibleBuffer, CpuBufferPool, TypedBufferAccess}, command_buffer::{allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer, RenderPassBeginInfo, SubpassContents}, descriptor_set::{allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet}, device::{physical::PhysicalDeviceType, Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo}, format::Format, image::{swapchain, view::ImageView, AttachmentImage, ImageAccess, SwapchainImage}, instance::{self, Instance, InstanceCreateInfo}, library, memory::allocator::StandardMemoryAllocator, pipeline::{graphics::{color_blend::{AttachmentBlend, BlendFactor, BlendOp, ColorBlendState}, depth_stencil::DepthStencilState, input_assembly::InputAssemblyState, rasterization::{CullMode, RasterizationState}, vertex_input::BuffersDefinition, viewport::{Viewport, ViewportState}}, GraphicsPipeline, Pipeline, PipelineBindPoint}, render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass}, swapchain::{AcquireError, Surface, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo, SwapchainCreationError, SwapchainPresentInfo}, sync::{self, FlushError, GpuFuture}, Version, VulkanLibrary};
+use nalgebra_glm::{TMat4, half_pi, identity, perspective};
+use vulkano::{
+    Version, VulkanLibrary,
+    buffer::{
+        BufferUsage, CpuAccessibleBuffer, CpuBufferPool, TypedBufferAccess,
+        cpu_pool::CpuBufferPoolSubbuffer,
+    },
+    command_buffer::{
+        AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer,
+        RenderPassBeginInfo, SubpassContents, allocator::StandardCommandBufferAllocator,
+    },
+    descriptor_set::{
+        PersistentDescriptorSet, WriteDescriptorSet, allocator::StandardDescriptorSetAllocator,
+    },
+    device::{
+        Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo,
+        physical::PhysicalDeviceType,
+    },
+    format::Format,
+    image::{AttachmentImage, ImageAccess, SwapchainImage, swapchain, view::ImageView},
+    instance::{self, Instance, InstanceCreateInfo},
+    library,
+    memory::allocator::StandardMemoryAllocator,
+    pipeline::{
+        GraphicsPipeline, Pipeline, PipelineBindPoint,
+        graphics::{
+            color_blend::{AttachmentBlend, BlendFactor, BlendOp, ColorBlendState},
+            depth_stencil::DepthStencilState,
+            input_assembly::InputAssemblyState,
+            rasterization::{CullMode, RasterizationState},
+            vertex_input::BuffersDefinition,
+            viewport::{Viewport, ViewportState},
+        },
+    },
+    render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass},
+    swapchain::{
+        AcquireError, Surface, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo,
+        SwapchainCreationError, SwapchainPresentInfo,
+    },
+    sync::{self, FlushError, GpuFuture},
+};
 
 use vulkano::swapchain::acquire_next_image;
 
-use vulkano_win::{required_extensions, VkSurfaceBuild};
-use winit::{event_loop::EventLoop, window::{Window, WindowBuilder}};
+use vulkano_win::{VkSurfaceBuild, required_extensions};
+use winit::{
+    dpi::{LogicalSize, PhysicalPosition},
+    event_loop::EventLoop,
+    window::{Window, WindowBuilder},
+};
 
-use crate::{model::Model, obj_loader::{DummyVertex, NormalVertex}, system::DirectionalLight};
+use crate::{
+    model::Model,
+    obj_loader::{ColoredVertex, DummyVertex, NormalVertex},
+    system::DirectionalLight,
+};
 
 vulkano::impl_vertex!(DummyVertex, position);
 vulkano::impl_vertex!(NormalVertex, position, normal, color);
+vulkano::impl_vertex!(ColoredVertex, position, color);
 
 mod deferred_vert {
-    vulkano_shaders::shader!{
+    vulkano_shaders::shader! {
         ty: "vertex",
         path: "src/system/shaders/deferred.vert",
         types_meta: {
@@ -26,21 +74,21 @@ mod deferred_vert {
 }
 
 mod deferred_frag {
-    vulkano_shaders::shader!{
+    vulkano_shaders::shader! {
         ty: "fragment",
         path: "src/system/shaders/deferred.frag"
     }
 }
 
 mod directional_vert {
-    vulkano_shaders::shader!{
+    vulkano_shaders::shader! {
         ty: "vertex",
         path: "src/system/shaders/directional.vert"
     }
 }
 
 mod directional_frag {
-    vulkano_shaders::shader!{
+    vulkano_shaders::shader! {
         ty: "fragment",
         path: "src/system/shaders/directional.frag",
         types_meta: {
@@ -52,14 +100,14 @@ mod directional_frag {
 }
 
 mod ambient_vert {
-    vulkano_shaders::shader!{
+    vulkano_shaders::shader! {
         ty: "vertex",
         path: "src/system/shaders/ambient.vert"
     }
 }
 
 mod ambient_frag {
-    vulkano_shaders::shader!{
+    vulkano_shaders::shader! {
         ty: "fragment",
         path: "src/system/shaders/ambient.frag",
         types_meta: {
@@ -70,12 +118,32 @@ mod ambient_frag {
     }
 }
 
+mod light_obj_vert {
+    vulkano_shaders::shader! {
+        ty: "vertex",
+        path: "src/system/shaders/light_obj.vert",
+        types_meta: {
+            use bytemuck::{Pod, Zeroable};
+
+            #[derive(Clone, Copy, Zeroable, Pod)]
+        },
+    }
+}
+
+mod light_obj_frag {
+    vulkano_shaders::shader! {
+        ty: "fragment",
+        path: "src/system/shaders/light_obj.frag"
+    }
+}
+
 #[derive(Debug, Clone)]
 enum RenderStage {
     Stopped,
     Deferred,
     Ambient,
     Directional,
+    LightObject,
     NeedsRedraw,
 }
 
@@ -89,14 +157,15 @@ pub struct System {
     memory_allocator: Arc<StandardMemoryAllocator>,
     descriptor_set_allocator: StandardDescriptorSetAllocator,
     command_buffer_allocator: StandardCommandBufferAllocator,
-    vp_buffer:Arc<CpuAccessibleBuffer<deferred_vert::ty::VP_Data>>,
-    model_uniform_buffer:CpuBufferPool<deferred_vert::ty::Model_Data>,
-    ambient_buffer:Arc<CpuAccessibleBuffer<ambient_frag::ty::Ambient_Data>>,
-    directional_buffer:CpuBufferPool<directional_frag::ty::Directional_Light_Data>,
+    vp_buffer: Arc<CpuAccessibleBuffer<deferred_vert::ty::VP_Data>>,
+    model_uniform_buffer: CpuBufferPool<deferred_vert::ty::Model_Data>,
+    ambient_buffer: Arc<CpuAccessibleBuffer<ambient_frag::ty::Ambient_Data>>,
+    directional_buffer: CpuBufferPool<directional_frag::ty::Directional_Light_Data>,
     render_pass: Arc<RenderPass>,
     deferred_pipeline: Arc<GraphicsPipeline>,
     directional_pipeline: Arc<GraphicsPipeline>,
     ambient_pipeline: Arc<GraphicsPipeline>,
+    light_obj_pipeline: Arc<GraphicsPipeline>,
     dummy_verts: Arc<CpuAccessibleBuffer<[DummyVertex]>>,
     framebuffers: Vec<Arc<Framebuffer>>,
     color_buffer: Arc<ImageView<AttachmentImage>>,
@@ -112,7 +181,7 @@ pub struct System {
 #[derive(Debug, Clone)]
 struct VP {
     view: TMat4<f32>,
-    projection: TMat4<f32>
+    projection: TMat4<f32>,
 }
 
 impl VP {
@@ -132,11 +201,12 @@ impl System {
 
             Instance::new(
                 library,
-            InstanceCreateInfo {
-                enabled_extensions: extensions,
-                max_api_version: Some(Version::V1_1),
-                ..Default::default()
-            })
+                InstanceCreateInfo {
+                    enabled_extensions: extensions,
+                    max_api_version: Some(Version::V1_1),
+                    ..Default::default()
+                },
+            )
             .unwrap()
         };
 
@@ -212,6 +282,22 @@ impl System {
             );
 
             let window = surface.object().unwrap().downcast_ref::<Window>().unwrap();
+
+            let window_width = 1600.0;
+            let window_height = 900.0;
+
+            window.set_inner_size(LogicalSize::new(window_width, window_height));
+
+            let primary_monitor = event_loop.primary_monitor().unwrap();
+
+            let monitor_size = primary_monitor.size();
+            let monitor_position = primary_monitor.position();
+
+            let x = monitor_position.x + (monitor_size.width as i32 - window_width as i32) / 2;
+            let y = monitor_position.y + (monitor_size.height as i32 - window_height as i32) / 2;
+
+            window.set_outer_position(PhysicalPosition::new(x, y));
+
             let image_extent: [u32; 2] = window.inner_size().into();
 
             let aspect_ratio = image_extent[0] as f32 / image_extent[1] as f32;
@@ -243,6 +329,8 @@ impl System {
         let directional_frag = directional_frag::load(device.clone()).unwrap();
         let ambient_vert = ambient_vert::load(device.clone()).unwrap();
         let ambient_frag = ambient_frag::load(device.clone()).unwrap();
+        let light_obj_frag = light_obj_frag::load(device.clone()).unwrap();
+        let light_obj_vert = light_obj_vert::load(device.clone()).unwrap();
 
         let render_pass = vulkano::ordered_passes_renderpass!(device.clone(),
             attachments: {
@@ -279,11 +367,12 @@ impl System {
                 },
                 {
                     color: [final_color],
-                    depth_stencil: {},
+                    depth_stencil: {depth},
                     input: [color, normals]
                 }
             ]
-        ).unwrap();
+        )
+        .unwrap();
 
         let deferred_pass = Subpass::from(render_pass.clone(), 0).unwrap();
         let lighting_pass = Subpass::from(render_pass.clone(), 1).unwrap();
@@ -344,6 +433,18 @@ impl System {
             .build(device.clone())
             .unwrap();
 
+        let light_obj_pipeline = GraphicsPipeline::start()
+            .vertex_input_state(BuffersDefinition::new().vertex::<ColoredVertex>())
+            .vertex_shader(light_obj_vert.entry_point("main").unwrap(), ())
+            .input_assembly_state(InputAssemblyState::new())
+            .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
+            .fragment_shader(light_obj_frag.entry_point("main").unwrap(), ())
+            .depth_stencil_state(DepthStencilState::simple_depth_test())
+            .rasterization_state(RasterizationState::new().cull_mode(CullMode::Back))
+            .render_pass(lighting_pass.clone())
+            .build(device.clone())
+            .unwrap();
+
         let vp_buffer = CpuAccessibleBuffer::from_data(
             &memory_allocator,
             BufferUsage {
@@ -377,7 +478,7 @@ impl System {
 
         let directional_buffer: CpuBufferPool<directional_frag::ty::Directional_Light_Data> =
             CpuBufferPool::uniform_buffer(memory_allocator.clone());
-        
+
         let dummy_verts = CpuAccessibleBuffer::from_iter(
             &memory_allocator,
             BufferUsage {
@@ -416,7 +517,7 @@ impl System {
         let image_index = 0;
         let acquire_future = None;
 
-        System{
+        System {
             instance,
             surface,
             device,
@@ -434,6 +535,7 @@ impl System {
             deferred_pipeline,
             directional_pipeline,
             ambient_pipeline,
+            light_obj_pipeline,
             dummy_verts,
             framebuffers,
             color_buffer,
@@ -451,13 +553,13 @@ impl System {
         match self.render_stage {
             RenderStage::Stopped => {
                 self.render_stage = RenderStage::Deferred;
-            },
+            }
             RenderStage::NeedsRedraw => {
                 self.recreate_swapchain();
                 self.commands = None;
                 self.render_stage = RenderStage::Stopped;
                 return;
-            },
+            }
             _ => {
                 self.render_stage = RenderStage::Stopped;
                 self.commands = None;
@@ -514,6 +616,7 @@ impl System {
     pub fn finish(&mut self, previous_frame_end: &mut Option<Box<dyn GpuFuture>>) {
         match self.render_stage {
             RenderStage::Directional => {}
+            RenderStage::LightObject => {}
             RenderStage::NeedsRedraw => {
                 self.recreate_swapchain();
                 self.commands = None;
@@ -533,7 +636,7 @@ impl System {
 
         let af = self.acquire_future.take().unwrap();
 
-        let mut local_future: Option<Box<dyn GpuFuture>> = 
+        let mut local_future: Option<Box<dyn GpuFuture>> =
             Some(Box::new(sync::now(self.device.clone())) as Box<dyn GpuFuture>);
 
         mem::swap(&mut local_future, previous_frame_end);
@@ -646,7 +749,7 @@ impl System {
                 ..BufferUsage::empty()
             },
             false,
-            ambient_frag::ty::Ambient_Data {color, intensity},
+            ambient_frag::ty::Ambient_Data { color, intensity },
         )
         .unwrap();
     }
@@ -655,16 +758,16 @@ impl System {
         match self.render_stage {
             RenderStage::Deferred => {
                 self.render_stage = RenderStage::Ambient;
-            },
+            }
             RenderStage::Ambient => {
                 return;
-            },
+            }
             RenderStage::NeedsRedraw => {
                 self.recreate_swapchain();
                 self.commands = None;
                 self.render_stage = RenderStage::Stopped;
                 return;
-            },
+            }
             _ => {
                 self.commands = None;
                 self.render_stage = RenderStage::Stopped;
@@ -753,6 +856,82 @@ impl System {
                 directional_set.clone(),
             )
             .draw(self.dummy_verts.len() as u32, 1, 0, 0)
+            .unwrap();
+    }
+
+    pub fn light_object(&mut self, directional_light: &DirectionalLight) {
+        match self.render_stage {
+            RenderStage::Directional => {
+                self.render_stage = RenderStage::LightObject;
+            }
+            RenderStage::LightObject => {}
+            RenderStage::NeedsRedraw => {
+                self.recreate_swapchain();
+                self.render_stage = RenderStage::Stopped;
+                self.commands = None;
+                return;
+            }
+            _ => {
+                self.render_stage = RenderStage::Stopped;
+                self.commands = None;
+                return;
+            }
+        }
+
+        let mut model = Model::new("data/models/sphere.obj")
+            .color(directional_light.color)
+            .uniform_scale_factor(0.2)
+            .build();
+
+        model.translate(directional_light.get_position());
+
+        let model_subbuffer = {
+            let (model_mat, normal_mat) = model.model_matrices();
+
+            let uniform_data = deferred_vert::ty::Model_Data {
+                model: model_mat.into(),
+                normals: normal_mat.into(),
+            };
+
+            self.model_uniform_buffer.from_data(uniform_data).unwrap()
+        };
+
+        let model_layout = self
+            .light_obj_pipeline
+            .layout()
+            .set_layouts()
+            .get(1)
+            .unwrap();
+        let model_set = PersistentDescriptorSet::new(
+            &self.descriptor_set_allocator,
+            model_layout.clone(),
+            [WriteDescriptorSet::buffer(0, model_subbuffer.clone())],
+        )
+        .unwrap();
+
+        let vertex_buffer = CpuAccessibleBuffer::from_iter(
+            &self.memory_allocator,
+            BufferUsage {
+                vertex_buffer: true,
+                ..BufferUsage::empty()
+            },
+            false,
+            model.color_data().iter().cloned(),
+        )
+        .unwrap();
+
+        self.commands
+            .as_mut()
+            .unwrap()
+            .bind_pipeline_graphics(self.light_obj_pipeline.clone())
+            .bind_descriptor_sets(
+                PipelineBindPoint::Graphics,
+                self.light_obj_pipeline.layout().clone(),
+                0,
+                (self.vp_set.clone(), model_set.clone()),
+            )
+            .bind_vertex_buffers(0, vertex_buffer.clone())
+            .draw(vertex_buffer.len() as u32, 1, 0, 0)
             .unwrap();
     }
 

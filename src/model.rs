@@ -1,9 +1,11 @@
-use nalgebra_glm::{identity, inverse_transpose, rotate_normalized_axis, translate, TMat4, TVec3};
+use nalgebra_glm::{
+    TMat4, TVec3, identity, inverse_transpose, rotate_normalized_axis, scale, translate, vec3,
+};
 use vulkano::{half::vec, pipeline::cache};
 
 use std::cell::Cell;
 
-use crate::obj_loader::{Loader, NormalVertex};
+use crate::obj_loader::{ColoredVertex, Loader, NormalVertex};
 
 pub struct Model {
     data: Vec<NormalVertex>,
@@ -12,24 +14,23 @@ pub struct Model {
     model: TMat4<f32>,
     normals: TMat4<f32>,
     requires_update: bool,
-    //uniform_scale: f32,
+    uniform_scale: f32,
     //specular_intensity: f32,
     //shininess: f32,
-
     cache: Cell<Option<ModelMatrices>>,
 }
 
 #[derive(Copy, Clone)]
 struct ModelMatrices {
     model: TMat4<f32>,
-    //normals: TMat4<f32>,
+    normals: TMat4<f32>,
 }
 
 pub struct ModelBuilder {
     file_name: String,
     custom_color: [f32; 3],
     invert: bool,
-    //scale_factor: f32,
+    scale_factor: f32,
     //specular_intensity: f32,
     //shininess: f32,
 }
@@ -40,7 +41,7 @@ impl ModelBuilder {
             file_name: file,
             custom_color: [1.0, 0.35, 0.137],
             invert: true,
-            //scale_factor: 1.0,
+            scale_factor: 1.0,
             //specular_intensity: 0.5,
             //shininess: 32.0,
         }
@@ -54,12 +55,17 @@ impl ModelBuilder {
             rotation: identity(),
             model: identity(),
             normals: identity(),
+            uniform_scale: self.scale_factor,
             requires_update: false,
             cache: Cell::new(None),
-            //uniform_scale: self.scale_factor,
             //specular_intensity: self.specular_intensity,
             //shininess: self.shininess,
         }
+    }
+
+    pub fn uniform_scale_factor(mut self, scale: f32) -> ModelBuilder {
+        self.scale_factor = scale;
+        self
     }
 
     pub fn color(mut self, new_color: [f32; 3]) -> ModelBuilder {
@@ -87,22 +93,26 @@ impl Model {
         self.data.clone()
     }
 
-    pub fn model_matrix(&self) -> TMat4<f32> {
-        if let Some(cache) = self.cache.get() {
-            return cache.model;
-        }
+    // pub fn model_matrix(&self) -> TMat4<f32> {
+    //     if let Some(cache) = self.cache.get() {
+    //         return cache.model;
+    //     }
 
-        // recalculate matrix
-        let model = self.translation * self.rotation;
+    //     // recalculate matrix
+    //     let model = self.translation * self.rotation;
 
-        self.cache.set(Some(ModelMatrices { model }));
+    //     self.cache.set(Some(ModelMatrices { model, normals }));
 
-        model
-    }
+    //     model
+    // }
 
     pub fn model_matrices(&mut self) -> (TMat4<f32>, TMat4<f32>) {
         if self.requires_update {
             self.model = self.translation * self.rotation;
+            self.model = scale(
+                &self.model,
+                &vec3(self.uniform_scale, self.uniform_scale, self.uniform_scale),
+            );
             self.normals = inverse_transpose(self.model);
             self.requires_update = false;
         }
@@ -112,6 +122,7 @@ impl Model {
     pub fn rotate(&mut self, radians: f32, v: TVec3<f32>) {
         self.rotation = rotate_normalized_axis(&self.rotation, radians, &v);
         self.cache.set(None);
+        self.requires_update = true;
     }
 
     pub fn translate(&mut self, v: TVec3<f32>) {
@@ -124,5 +135,16 @@ impl Model {
     pub fn zero_rotation(&mut self) {
         self.rotation = identity();
         self.cache.set(None);
+    }
+
+    pub fn color_data(&self) -> Vec<ColoredVertex> {
+        let mut ret: Vec<ColoredVertex> = Vec::new();
+        for v in &self.data {
+            ret.push(ColoredVertex {
+                position: v.position,
+                color: v.color,
+            });
+        }
+        ret
     }
 }
