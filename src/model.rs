@@ -15,8 +15,8 @@ pub struct Model {
     normals: TMat4<f32>,
     requires_update: bool,
     uniform_scale: f32,
-    //specular_intensity: f32,
-    //shininess: f32,
+    specular_intensity: f32,
+    shininess: f32,
     cache: Cell<Option<ModelMatrices>>,
 }
 
@@ -31,8 +31,8 @@ pub struct ModelBuilder {
     custom_color: [f32; 3],
     invert: bool,
     scale_factor: f32,
-    //specular_intensity: f32,
-    //shininess: f32,
+    specular_intensity: f32,
+    shininess: f32,
 }
 
 impl ModelBuilder {
@@ -42,8 +42,8 @@ impl ModelBuilder {
             custom_color: [1.0, 0.35, 0.137],
             invert: true,
             scale_factor: 1.0,
-            //specular_intensity: 0.5,
-            //shininess: 32.0,
+            specular_intensity: 0.5,
+            shininess: 32.0,
         }
     }
 
@@ -58,8 +58,8 @@ impl ModelBuilder {
             uniform_scale: self.scale_factor,
             requires_update: false,
             cache: Cell::new(None),
-            //specular_intensity: self.specular_intensity,
-            //shininess: self.shininess,
+            specular_intensity: self.specular_intensity,
+            shininess: self.shininess,
         }
     }
 
@@ -80,6 +80,12 @@ impl ModelBuilder {
 
     pub fn invert_winding_order(mut self, invert: bool) -> ModelBuilder {
         self.invert = invert;
+        self
+    }
+
+    pub fn specular(mut self, specular_intensity: f32, shininess: f32) -> ModelBuilder {
+        self.specular_intensity = specular_intensity;
+        self.shininess = shininess;
         self
     }
 }
@@ -146,5 +152,9 @@ impl Model {
             });
         }
         ret
+    }
+
+    pub fn specular(&self) -> (f32, f32) {
+        (self.specular_intensity.clone(), self.shininess.clone())
     }
 }

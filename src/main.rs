@@ -14,7 +14,8 @@ use vulkano::{
     sync::{self, GpuFuture},
 };
 use winit::event::{
-    DeviceEvent, ElementState, Event, KeyboardInput, MouseButton, VirtualKeyCode, WindowEvent,
+    DeviceEvent, ElementState, Event, KeyboardInput, MouseButton, MouseScrollDelta, VirtualKeyCode,
+    WindowEvent,
 };
 use winit::event_loop::{ControlFlow, EventLoop};
 
@@ -33,7 +34,9 @@ fn main() {
 
     let mut yaw: f32 = 0.0;
     let mut pitch: f32 = 0.0;
-    let mut radius: f32 = 0.1;
+    let mut radius: f32 = 7.0;
+    let scroll_strength = 0.5;
+    let mut center = vec3(0.0, 0.0, 0.0);
 
     system.set_view(&look_at(
         &vec3(0.0, 0.0, 0.1),
@@ -45,11 +48,11 @@ fn main() {
         //.color([0.5, 0.2, 1.0])
         //.uniform_scale_factor(2.0)
         .build();
-    suzanne.translate(vec3(0.0, 0.0, -7.0));
+    suzanne.translate(vec3(0.0, 0.0, 0.0));
     suzanne.rotate(pi(), vec3(0.0, 0.0, 1.0));
 
     let mut platform = Model::new("data/models/cube.obj").build();
-    platform.translate(vec3(0.0, 3.0, -7.0));
+    platform.translate(vec3(0.0, 3.0, 0.0));
 
     //let directional_light = DirectionalLight::new([-4.0, -4.0, 0.0, -2.0], [1.0, 0.0, 0.0]);
     //let directional_light_two = DirectionalLight::new([4.0, 4.0, 0.0, -2.0], [1.0, 0.0, 0.0]);
@@ -113,9 +116,14 @@ fn main() {
                 yaw += dx as f32 * sensitivity;
                 pitch += dy as f32 * sensitivity;
 
-                pitch.clamp(
-                    -std::f32::consts::FRAC_2_PI + 0.01,
-                    std::f32::consts::FRAC_2_PI + 0.01,
+                // pitch.clamp(
+                //     -std::f32::consts::FRAC_2_PI + 0.01,
+                //     std::f32::consts::FRAC_2_PI + 0.01,
+                // );
+
+                pitch = pitch.clamp(
+                    -std::f32::consts::FRAC_PI_2 + 0.01,
+                    std::f32::consts::FRAC_PI_2 - 0.01,
                 );
 
                 let eye = vec3(
@@ -124,13 +132,47 @@ fn main() {
                     radius * pitch.cos() * yaw.cos(),
                 );
 
-                let center = vec3(0.0, 0.0, 0.0);
                 let up = vec3(0.0, 1.0, 0.0);
 
                 let view = look_at(&eye, &center, &up);
                 system.set_view(&view);
             }
         }
+
+        Event::DeviceEvent {
+            event: DeviceEvent::MouseWheel { delta, .. },
+            ..
+        } => match delta {
+            MouseScrollDelta::LineDelta(_x, y) => {
+                //println!("Mouse wheel y: {}", y);
+                //println!("Radius: {}", radius);
+                if y == 1.0 {
+                    radius -= scroll_strength;
+                }
+                if y == -1.0 {
+                    radius += scroll_strength;
+                }
+
+                radius = radius.clamp(0.0, 10.0);
+
+                pitch = pitch.clamp(
+                    -std::f32::consts::FRAC_PI_2 + 0.01,
+                    std::f32::consts::FRAC_PI_2 - 0.01,
+                );
+
+                let eye = vec3(
+                    radius * pitch.cos() * yaw.sin(),
+                    radius * pitch.sin(),
+                    radius * pitch.cos() * yaw.cos(),
+                );
+
+                let up = vec3(0.0, 1.0, 0.0);
+
+                let view = look_at(&eye, &center, &up);
+                system.set_view(&view);
+            }
+            _ => {}
+        },
 
         Event::MainEventsCleared => {
             let mut movement = vec3(0.0, 0.0, 0.0);
@@ -165,7 +207,7 @@ fn main() {
             let elapsed_as_radians = elapsed * 30.0 * (pi::<f32>() / 180.0);
 
             let x: f32 = 2.0 * elapsed_as_radians.cos();
-            let z: f32 = -7.0 + (2.0 * elapsed_as_radians.sin());
+            let z: f32 = (2.0 * elapsed_as_radians.sin());
 
             let directional_light = DirectionalLight::new([x, 0.0, z, 1.0], [1.0, 1.0, 1.0]);
 

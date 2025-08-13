@@ -1,6 +1,6 @@
 use std::{mem, sync::Arc};
 
-use nalgebra_glm::{TMat4, half_pi, identity, perspective};
+use nalgebra_glm::{TMat4, TVec3, half_pi, identity, inverse, perspective, vec3};
 use vulkano::{
     Version, VulkanLibrary,
     buffer::{
@@ -76,7 +76,12 @@ mod deferred_vert {
 mod deferred_frag {
     vulkano_shaders::shader! {
         ty: "fragment",
-        path: "src/system/shaders/deferred.frag"
+        path: "src/system/shaders/deferred.frag",
+        types_meta: {
+            use bytemuck::{Pod, Zeroable};
+
+            #[derive(Clone, Copy, Zeroable, Pod)]
+        },
     }
 }
 
@@ -161,6 +166,8 @@ pub struct System {
     model_uniform_buffer: CpuBufferPool<deferred_vert::ty::Model_Data>,
     ambient_buffer: Arc<CpuAccessibleBuffer<ambient_frag::ty::Ambient_Data>>,
     directional_buffer: CpuBufferPool<directional_frag::ty::Directional_Light_Data>,
+    frag_location_buffer: Arc<ImageView<AttachmentImage>>,
+    specular_buffer: Arc<ImageView<AttachmentImage>>,
     render_pass: Arc<RenderPass>,
     deferred_pipeline: Arc<GraphicsPipeline>,
     directional_pipeline: Arc<GraphicsPipeline>,
@@ -182,6 +189,7 @@ pub struct System {
 struct VP {
     view: TMat4<f32>,
     projection: TMat4<f32>,
+    camera_pos: TVec3<f32>,
 }
 
 impl VP {
@@ -189,6 +197,7 @@ impl VP {
         VP {
             view: identity(),
             projection: identity(),
+            camera_pos: vec3(0.0, 0.0, 0.0),
         }
     }
 }
@@ -352,6 +361,18 @@ impl System {
                     format: Format::R16G16B16A16_SFLOAT,
                     samples: 1,
                 },
+                frag_location: {
+                    load: Clear,
+                    store: DontCare,
+                    format: Format::R16G16B16A16_SFLOAT,
+                    samples: 1,
+                },
+                specular: {
+                    load: Clear,
+                    store: DontCare,
+                    format: Format::R16G16_SFLOAT,
+                    samples: 1,
+                },
                 depth: {
                     load: Clear,
                     store: DontCare,
@@ -361,14 +382,14 @@ impl System {
             },
             passes: [
                 {
-                    color: [color, normals],
+                    color: [color, normals, frag_location, specular],
                     depth_stencil: {depth},
                     input: []
                 },
                 {
                     color: [final_color],
                     depth_stencil: {depth},
-                    input: [color, normals]
+                    input: [color, normals, frag_location, specular]
                 }
             ]
         )
@@ -496,12 +517,13 @@ impl System {
             depth_range: 0.0..1.0,
         };
 
-        let (framebuffers, color_buffer, normal_buffer) = System::window_size_dependent_setup(
-            &memory_allocator,
-            &images,
-            render_pass.clone(),
-            &mut viewport,
-        );
+        let (framebuffers, color_buffer, normal_buffer, frag_location_buffer, specular_buffer) =
+            System::window_size_dependent_setup(
+                &memory_allocator,
+                &images,
+                render_pass.clone(),
+                &mut viewport,
+            );
 
         let vp_layout = deferred_pipeline.layout().set_layouts().get(0).unwrap();
         let vp_set = PersistentDescriptorSet::new(
@@ -531,6 +553,8 @@ impl System {
             model_uniform_buffer,
             ambient_buffer,
             directional_buffer,
+            frag_location_buffer,
+            specular_buffer,
             render_pass,
             deferred_pipeline,
             directional_pipeline,
@@ -586,6 +610,8 @@ impl System {
             Some([0.0, 0.0, 0.0, 1.0].into()),
             Some([0.0, 0.0, 0.0, 1.0].into()),
             Some([0.0, 0.0, 0.0, 1.0].into()),
+            Some([0.0, 0.0, 0.0, 1.0].into()),
+            Some([0.0, 0.0].into()),
             Some(1.0.into()),
         ];
 
@@ -701,6 +727,21 @@ impl System {
             self.model_uniform_buffer.from_data(uniform_data).unwrap()
         };
 
+        let (intensity, shininess) = model.specular();
+        let specular_buffer = CpuAccessibleBuffer::from_data(
+            &self.memory_allocator,
+            BufferUsage {
+                uniform_buffer: true,
+                ..BufferUsage::empty()
+            },
+            false,
+            deferred_frag::ty::Specular_Data {
+                intensity,
+                shininess,
+            },
+        )
+        .unwrap();
+
         let model_layout = self
             .deferred_pipeline
             .layout()
@@ -710,7 +751,10 @@ impl System {
         let model_set = PersistentDescriptorSet::new(
             &self.descriptor_set_allocator,
             model_layout.clone(),
-            [WriteDescriptorSet::buffer(0, model_subbuffer.clone())],
+            [
+                WriteDescriptorSet::buffer(0, model_subbuffer.clone()),
+                WriteDescriptorSet::buffer(1, specular_buffer.clone()),
+            ],
         )
         .unwrap();
 
@@ -823,6 +867,19 @@ impl System {
             }
         }
 
+        let camera_buffer = CpuAccessibleBuffer::from_data(
+            &self.memory_allocator,
+            BufferUsage {
+                uniform_buffer: true,
+                ..BufferUsage::empty()
+            },
+            false,
+            directional_frag::ty::Camera_Data {
+                position: self.vp.camera_pos.into(),
+            },
+        )
+        .unwrap();
+
         let directional_subbuffer =
             self.generate_directional_buffer(&self.directional_buffer, &directional_light);
 
@@ -838,7 +895,10 @@ impl System {
             [
                 WriteDescriptorSet::image_view(0, self.color_buffer.clone()),
                 WriteDescriptorSet::image_view(1, self.normal_buffer.clone()),
-                WriteDescriptorSet::buffer(2, directional_subbuffer.clone()),
+                WriteDescriptorSet::image_view(2, self.frag_location_buffer.clone()),
+                WriteDescriptorSet::image_view(3, self.specular_buffer.clone()),
+                WriteDescriptorSet::buffer(4, directional_subbuffer.clone()),
+                WriteDescriptorSet::buffer(5, camera_buffer.clone()),
             ],
         )
         .unwrap();
@@ -972,18 +1032,25 @@ impl System {
             Err(e) => panic!("Failed to recreate swapchain: {:?}", e),
         };
 
-        let (new_framebuffers, new_color_buffer, new_normal_buffer) =
-            System::window_size_dependent_setup(
-                &self.memory_allocator,
-                &new_images,
-                self.render_pass.clone(),
-                &mut self.viewport,
-            );
+        let (
+            new_framebuffers,
+            new_color_buffer,
+            new_normal_buffer,
+            new_frag_location_buffer,
+            new_specular_buffer,
+        ) = System::window_size_dependent_setup(
+            &self.memory_allocator,
+            &new_images,
+            self.render_pass.clone(),
+            &mut self.viewport,
+        );
 
         self.swapchain = new_swapchain;
         self.framebuffers = new_framebuffers;
         self.color_buffer = new_color_buffer;
         self.normal_buffer = new_normal_buffer;
+        self.frag_location_buffer = new_frag_location_buffer;
+        self.specular_buffer = new_specular_buffer;
 
         self.vp_buffer = CpuAccessibleBuffer::from_data(
             &self.memory_allocator,
@@ -1024,6 +1091,8 @@ impl System {
         Vec<Arc<Framebuffer>>,
         Arc<ImageView<AttachmentImage>>,
         Arc<ImageView<AttachmentImage>>,
+        Arc<ImageView<AttachmentImage>>,
+        Arc<ImageView<AttachmentImage>>,
     ) {
         let dimensions = images[0].dimensions().width_height();
         viewport.dimensions = [dimensions[0] as f32, dimensions[1] as f32];
@@ -1053,6 +1122,26 @@ impl System {
         )
         .unwrap();
 
+        let frag_location_buffer = ImageView::new_default(
+            AttachmentImage::transient_input_attachment(
+                allocator,
+                dimensions,
+                Format::R16G16B16A16_SFLOAT,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let specular_buffer = ImageView::new_default(
+            AttachmentImage::transient_input_attachment(
+                allocator,
+                dimensions,
+                Format::R16G16_SFLOAT,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
         let framebuffers = images
             .iter()
             .map(|image| {
@@ -1064,6 +1153,8 @@ impl System {
                             view,
                             color_buffer.clone(),
                             normal_buffer.clone(),
+                            frag_location_buffer.clone(),
+                            specular_buffer.clone(),
                             depth_buffer.clone(),
                         ],
                         ..Default::default()
@@ -1073,11 +1164,19 @@ impl System {
             })
             .collect::<Vec<_>>();
 
-        (framebuffers, color_buffer.clone(), normal_buffer.clone())
+        (
+            framebuffers,
+            color_buffer.clone(),
+            normal_buffer.clone(),
+            frag_location_buffer.clone(),
+            specular_buffer.clone(),
+        )
     }
 
     pub fn set_view(&mut self, view: &TMat4<f32>) {
         self.vp.view = view.clone();
+        let look = inverse(&view);
+        self.vp.camera_pos = vec3(look[12], look[13], look[14]);
         self.vp_buffer = CpuAccessibleBuffer::from_data(
             &self.memory_allocator,
             BufferUsage {
