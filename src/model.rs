@@ -5,7 +5,7 @@ use vulkano::{half::vec, pipeline::cache};
 
 use std::cell::Cell;
 
-use crate::obj_loader::{ColoredVertex, Loader, NormalVertex};
+use crate::obj_loader::{ColoredVertex, Loader, LoaderGLTF, NormalVertex};
 
 pub struct Model {
     data: Vec<NormalVertex>,
@@ -49,6 +49,22 @@ impl ModelBuilder {
 
     pub fn build(self) -> Model {
         let loader = Loader::new(self.file_name.as_str(), self.custom_color, self.invert);
+        Model {
+            data: loader.as_normal_vertices(),
+            translation: identity(),
+            rotation: identity(),
+            model: identity(),
+            normals: identity(),
+            uniform_scale: self.scale_factor,
+            requires_update: false,
+            cache: Cell::new(None),
+            specular_intensity: self.specular_intensity,
+            shininess: self.shininess,
+        }
+    }
+
+    pub fn build_gltf(self) -> Model {
+        let loader = LoaderGLTF::new(self.file_name.as_str(), self.custom_color);
         Model {
             data: loader.as_normal_vertices(),
             translation: identity(),

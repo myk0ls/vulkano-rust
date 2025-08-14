@@ -3,9 +3,14 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>
 
 #![allow(dead_code)]
+use easy_gltf::model::{Mode, Triangle};
+use easy_gltf::{Model, Scene};
+
+use crate::model;
+
+use super::NormalVertex;
 use super::face::RawFace;
 use super::vertex::RawVertex;
-use super::NormalVertex;
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -78,6 +83,86 @@ impl Loader {
                 normal: self.norms.get(normals[2]).unwrap().vals,
                 color: self.color,
             });
+        }
+        ret
+    }
+}
+
+pub struct LoaderGLTF {
+    color: [f32; 3],
+    models: Vec<Model>,
+}
+
+impl LoaderGLTF {
+    pub fn new(file_name: &str, custom_color: [f32; 3]) -> LoaderGLTF {
+        let scenes = easy_gltf::load(file_name).unwrap();
+        let models: Vec<Model> = scenes
+            .into_iter()
+            .flat_map(|scene| scene.models.into_iter())
+            .collect();
+        LoaderGLTF {
+            color: custom_color,
+            models,
+        }
+    }
+
+    pub fn as_normal_vertices(&self) -> Vec<NormalVertex> {
+        let mut ret: Vec<NormalVertex> = Vec::new();
+        for model in &self.models {
+            match model.mode() {
+                Mode::Triangles | Mode::TriangleFan | Mode::TriangleStrip => {
+                    let triangles = model.triangles().unwrap();
+                    for triangle in triangles {
+                        ret.push(NormalVertex {
+                            position: [
+                                triangle[0].position.x,
+                                triangle[0].position.y,
+                                triangle[0].position.z,
+                            ],
+                            normal: [
+                                triangle[0].normal.x,
+                                triangle[0].normal.y,
+                                triangle[0].normal.z,
+                            ],
+                            color: self.color,
+                        });
+                        ret.push(NormalVertex {
+                            position: [
+                                triangle[1].position.x,
+                                triangle[1].position.y,
+                                triangle[1].position.z,
+                            ],
+                            normal: [
+                                triangle[1].normal.x,
+                                triangle[1].normal.y,
+                                triangle[1].normal.z,
+                            ],
+                            color: self.color,
+                        });
+                        ret.push(NormalVertex {
+                            position: [
+                                triangle[2].position.x,
+                                triangle[2].position.y,
+                                triangle[2].position.z,
+                            ],
+                            normal: [
+                                triangle[2].normal.x,
+                                triangle[2].normal.y,
+                                triangle[2].normal.z,
+                            ],
+                            color: self.color,
+                        });
+                    }
+                }
+                Mode::Lines | Mode::LineLoop | Mode::LineStrip => {
+                    let lines = model.lines().unwrap();
+                    // Render lines...
+                }
+                Mode::Points => {
+                    let points = model.points().unwrap();
+                    // Render points...
+                }
+            }
         }
         ret
     }

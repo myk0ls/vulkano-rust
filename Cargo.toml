@@ -11,3 +11,4 @@ vulkano-win = "0.32.0"
 winit = "0.27.3"
 nalgebra-glm = "0.17.0"
 rapier3d = { version = "0.27.0", features = [ "simd-stable" ] }
+easy-gltf = "1.1.5"

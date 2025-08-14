@@ -405,7 +405,7 @@ impl System {
             .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
             .fragment_shader(deferred_frag.entry_point("main").unwrap(), ())
             .depth_stencil_state(DepthStencilState::simple_depth_test())
-            .rasterization_state(RasterizationState::new().cull_mode(CullMode::Back))
+            .rasterization_state(RasterizationState::new().cull_mode(CullMode::Front))
             .render_pass(deferred_pass.clone())
             .build(device.clone())
             .unwrap();
@@ -938,10 +938,10 @@ impl System {
             }
         }
 
-        let mut model = Model::new("data/models/sphere.obj")
+        let mut model = Model::new("data/models/sphere.glb")
             .color(directional_light.color)
             .uniform_scale_factor(0.2)
-            .build();
+            .build_gltf();
 
         model.translate(directional_light.get_position());
 

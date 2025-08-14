@@ -44,18 +44,15 @@ fn main() {
         &vec3(0.0, 1.0, 0.0),
     ));
 
-    let mut suzanne = Model::new("data/models/suzanne.obj")
+    let mut suzanne = Model::new("data/models/suzanne.glb")
         //.color([0.5, 0.2, 1.0])
         //.uniform_scale_factor(2.0)
-        .build();
+        .build_gltf();
     suzanne.translate(vec3(0.0, 0.0, 0.0));
     suzanne.rotate(pi(), vec3(0.0, 0.0, 1.0));
 
-    let mut platform = Model::new("data/models/cube.obj").build();
-    platform.translate(vec3(0.0, 3.0, 0.0));
-
-    //let directional_light = DirectionalLight::new([-4.0, -4.0, 0.0, -2.0], [1.0, 0.0, 0.0]);
-    //let directional_light_two = DirectionalLight::new([4.0, 4.0, 0.0, -2.0], [1.0, 0.0, 0.0]);
+    //let mut platform = Model::new("data/models/cube.obj").build();
+    //platform.translate(vec3(0.0, 3.0, 0.0));
 
     let rotation_start = Instant::now();
 
@@ -213,12 +210,10 @@ fn main() {
 
             system.start();
             system.geometry(&mut suzanne);
-            system.geometry(&mut platform);
+            //system.geometry(&mut platform);
             system.ambient();
             system.directional(&directional_light);
-            //system.directional(&directional_light_two);
             system.light_object(&directional_light);
-            //system.light_object(&directional_light_two);
             system.finish(&mut previous_frame_end);
         }
         _ => (),
