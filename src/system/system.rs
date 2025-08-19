@@ -19,7 +19,10 @@ use vulkano::{
         physical::PhysicalDeviceType,
     },
     format::Format,
-    image::{AttachmentImage, ImageAccess, SwapchainImage, swapchain, view::ImageView},
+    image::{
+        AttachmentImage, ImageAccess, ImageDimensions, ImmutableImage, MipmapsCount,
+        SwapchainImage, swapchain, view::ImageView,
+    },
     instance::{self, Instance, InstanceCreateInfo},
     library,
     memory::allocator::StandardMemoryAllocator,
@@ -35,6 +38,7 @@ use vulkano::{
         },
     },
     render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass},
+    sampler::{Filter, Sampler, SamplerAddressMode, SamplerCreateInfo, SamplerMipmapMode},
     swapchain::{
         AcquireError, Surface, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo,
         SwapchainCreationError, SwapchainPresentInfo,
@@ -58,7 +62,7 @@ use crate::{
 };
 
 vulkano::impl_vertex!(DummyVertex, position);
-vulkano::impl_vertex!(NormalVertex, position, normal, color);
+vulkano::impl_vertex!(NormalVertex, position, normal, color, uv);
 vulkano::impl_vertex!(ColoredVertex, position, color);
 
 mod deferred_vert {
@@ -156,18 +160,19 @@ pub struct System {
     instance: Arc<Instance>,
     surface: Arc<Surface>,
     pub device: Arc<Device>,
-    queue: Arc<Queue>,
+    pub queue: Arc<Queue>,
     vp: VP,
     swapchain: Arc<Swapchain>,
-    memory_allocator: Arc<StandardMemoryAllocator>,
+    pub memory_allocator: Arc<StandardMemoryAllocator>,
     descriptor_set_allocator: StandardDescriptorSetAllocator,
-    command_buffer_allocator: StandardCommandBufferAllocator,
+    pub command_buffer_allocator: StandardCommandBufferAllocator,
     vp_buffer: Arc<CpuAccessibleBuffer<deferred_vert::ty::VP_Data>>,
     model_uniform_buffer: CpuBufferPool<deferred_vert::ty::Model_Data>,
     ambient_buffer: Arc<CpuAccessibleBuffer<ambient_frag::ty::Ambient_Data>>,
     directional_buffer: CpuBufferPool<directional_frag::ty::Directional_Light_Data>,
     frag_location_buffer: Arc<ImageView<AttachmentImage>>,
     specular_buffer: Arc<ImageView<AttachmentImage>>,
+    sampler: Arc<Sampler>,
     render_pass: Arc<RenderPass>,
     deferred_pipeline: Arc<GraphicsPipeline>,
     directional_pipeline: Arc<GraphicsPipeline>,
@@ -180,7 +185,7 @@ pub struct System {
     vp_set: Arc<PersistentDescriptorSet>,
     viewport: Viewport,
     render_stage: RenderStage,
-    commands: Option<AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>>,
+    pub commands: Option<AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>>,
     image_index: u32,
     acquire_future: Option<SwapchainAcquireFuture>,
 }
@@ -525,6 +530,19 @@ impl System {
                 &mut viewport,
             );
 
+        let sampler = Sampler::new(
+            device.clone(),
+            SamplerCreateInfo {
+                mag_filter: Filter::Linear,
+                min_filter: Filter::Linear,
+                mipmap_mode: SamplerMipmapMode::Nearest,
+                address_mode: [SamplerAddressMode::Repeat; 3],
+                mip_lod_bias: 0.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
         let vp_layout = deferred_pipeline.layout().set_layouts().get(0).unwrap();
         let vp_set = PersistentDescriptorSet::new(
             &descriptor_set_allocator,
@@ -555,6 +573,7 @@ impl System {
             directional_buffer,
             frag_location_buffer,
             specular_buffer,
+            sampler,
             render_pass,
             deferred_pipeline,
             directional_pipeline,
@@ -742,6 +761,46 @@ impl System {
         )
         .unwrap();
 
+        // let base_color_texture = model.meshes()[0]
+        //     .material
+        //     .pbr
+        //     .base_color_texture
+        //     .as_ref()
+        //     .unwrap()
+        //     .clone();
+
+        // let raw_pixels: Vec<u8> = base_color_texture.as_ref().clone().into_raw();
+
+        // // let dimen = model.meshes()[0]
+        // //     .material
+        // //     .pbr
+        // //     .base_color_texture
+        // //     .as_ref()
+        // //     .unwrap()
+        // //     .dimensions();
+
+        // let image_dimensions = ImageDimensions::Dim2d {
+        //     width: base_color_texture.dimensions().0,
+        //     height: base_color_texture.dimensions().1,
+        //     array_layers: 1,
+        // };
+
+        // let texture = model.meshes()[0]
+        //     .texture
+        //     .get_or_insert_with(|| {
+        //         let image = ImmutableImage::from_iter(
+        //             &self.memory_allocator,
+        //             raw_pixels.iter().cloned(),
+        //             image_dimensions,
+        //             MipmapsCount::One,
+        //             Format::R8G8B8A8_SRGB,
+        //             &mut self.commands.as_mut().unwrap(),
+        //         )
+        //         .unwrap();
+        //         ImageView::new_default(image).unwrap()
+        //     })
+        //     .clone();
+
         let model_layout = self
             .deferred_pipeline
             .layout()
@@ -754,6 +813,11 @@ impl System {
             [
                 WriteDescriptorSet::buffer(0, model_subbuffer.clone()),
                 WriteDescriptorSet::buffer(1, specular_buffer.clone()),
+                WriteDescriptorSet::image_view_sampler(
+                    2,
+                    model.meshes()[0].texture.as_mut().unwrap().clone(),
+                    self.sampler.clone(),
+                ),
             ],
         )
         .unwrap();
@@ -765,7 +829,18 @@ impl System {
                 ..BufferUsage::empty()
             },
             false,
-            model.data().iter().cloned(),
+            model.meshes()[0].vertices.iter().cloned(),
+        )
+        .unwrap();
+
+        let index_buffer = CpuAccessibleBuffer::from_iter(
+            &self.memory_allocator,
+            BufferUsage {
+                index_buffer: true,
+                ..BufferUsage::empty()
+            },
+            false,
+            model.meshes()[0].indices.iter().cloned(),
         )
         .unwrap();
 
@@ -781,7 +856,10 @@ impl System {
                 (self.vp_set.clone(), model_set.clone()),
             )
             .bind_vertex_buffers(0, vertex_buffer.clone())
-            .draw(vertex_buffer.len() as u32, 1, 0, 0)
+            //.draw(vertex_buffer.len() as u32, 1, 0, 0)
+            .bind_index_buffer(index_buffer.clone())
+            //.draw_indexed(index_count, instance_count, first_index, vertex_offset, first_instance)
+            .draw_indexed(index_buffer.len() as u32, 1, 0, 0, 0)
             .unwrap();
     }
 
@@ -941,7 +1019,7 @@ impl System {
         let mut model = Model::new("data/models/sphere.glb")
             .color(directional_light.color)
             .uniform_scale_factor(0.2)
-            .build_gltf();
+            .build();
 
         model.translate(directional_light.get_position());
 
@@ -976,6 +1054,7 @@ impl System {
                 ..BufferUsage::empty()
             },
             false,
+            //model.meshes()[0].vertices.iter().cloned(),
             model.color_data().iter().cloned(),
         )
         .unwrap();

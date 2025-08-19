@@ -84,6 +84,7 @@ pub struct NormalVertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
     pub color: [f32; 3],
+    pub uv: [f32; 2],
 }
 
 impl fmt::Display for DummyVertex {
@@ -121,10 +122,11 @@ impl fmt::Display for NormalVertex {
             "[{:.6}, {:.6}, {:.6}]",
             self.normal[0], self.normal[1], self.normal[2]
         );
+        let uvs = format!("[{:.6}, {:.6}", self.uv[0], self.uv[1]);
         write!(
             f,
-            "NormalVertex {{ position: {}, normal: {}, color: {} }}",
-            pos, norms, color
+            "NormalVertex {{ position: {}, normal: {}, color: {}, uv: {} }}",
+            pos, norms, color, uvs
         )
     }
 }

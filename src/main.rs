@@ -2,7 +2,6 @@ mod model;
 mod obj_loader;
 mod system;
 
-use core::f64;
 use std::{collections::HashSet, time::Instant};
 
 use rapier3d::prelude::*;
@@ -22,8 +21,8 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use crate::{model::Model, system::DirectionalLight};
 
 const MOVE_SPEED: f32 = 0.1;
-const FALL_SPEED: f32 = 0.025;
-const sensitivity: f32 = 0.005;
+//const FALL_SPEED: f32 = 0.025;
+const SENSITIVITY: f32 = 0.005;
 
 fn main() {
     let event_loop = EventLoop::new();
@@ -47,12 +46,20 @@ fn main() {
     let mut suzanne = Model::new("data/models/suzanne.glb")
         //.color([0.5, 0.2, 1.0])
         //.uniform_scale_factor(2.0)
-        .build_gltf();
+        .build();
     suzanne.translate(vec3(0.0, 0.0, 0.0));
     suzanne.rotate(pi(), vec3(0.0, 0.0, 1.0));
 
-    //let mut platform = Model::new("data/models/cube.obj").build();
-    //platform.translate(vec3(0.0, 3.0, 0.0));
+    suzanne.meshes_mut()[0].load_texture_to_gpu(
+        &system.memory_allocator,
+        &system.command_buffer_allocator,
+        system.queue.clone(),
+    );
+
+    let mut platform = Model::new("data/models/platform.glb")
+        .color([0.1, 0.9, 0.0])
+        .build();
+    platform.translate(vec3(0.0, 3.0, 0.0));
 
     let rotation_start = Instant::now();
 
@@ -66,12 +73,14 @@ fn main() {
         } => {
             *control_flow = ControlFlow::Exit;
         }
+
         Event::WindowEvent {
             event: WindowEvent::Resized(_),
             ..
         } => {
             system.recreate_swapchain();
         }
+
         Event::WindowEvent {
             event:
                 WindowEvent::KeyboardInput {
@@ -110,8 +119,8 @@ fn main() {
             ..
         } => {
             if (dx != 0.0 || dy != 0.0) && pressed_mouse_buttons.contains(&MouseButton::Right) {
-                yaw += dx as f32 * sensitivity;
-                pitch += dy as f32 * sensitivity;
+                yaw += dx as f32 * SENSITIVITY;
+                pitch += dy as f32 * SENSITIVITY;
 
                 // pitch.clamp(
                 //     -std::f32::consts::FRAC_2_PI + 0.01,
@@ -204,7 +213,7 @@ fn main() {
             let elapsed_as_radians = elapsed * 30.0 * (pi::<f32>() / 180.0);
 
             let x: f32 = 2.0 * elapsed_as_radians.cos();
-            let z: f32 = (2.0 * elapsed_as_radians.sin());
+            let z: f32 = 2.0 * elapsed_as_radians.sin();
 
             let directional_light = DirectionalLight::new([x, 0.0, z, 1.0], [1.0, 1.0, 1.0]);
 
@@ -213,7 +222,7 @@ fn main() {
             //system.geometry(&mut platform);
             system.ambient();
             system.directional(&directional_light);
-            system.light_object(&directional_light);
+            //system.light_object(&directional_light);
             system.finish(&mut previous_frame_end);
         }
         _ => (),

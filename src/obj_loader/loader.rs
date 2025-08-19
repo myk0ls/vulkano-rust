@@ -3,10 +3,14 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>
 
 #![allow(dead_code)]
-use easy_gltf::model::{Mode, Triangle};
-use easy_gltf::{Model, Scene};
+use easy_gltf::model::{Mode, Triangle, Vertex};
+use easy_gltf::{Material, Model, Scene};
+use rapier3d::na::Norm;
 
-use crate::model;
+use crate::model::Mesh;
+//use crate::model::{self, MeshMaterial};
+
+use itertools::Itertools;
 
 use super::NormalVertex;
 use super::face::RawFace;
@@ -14,6 +18,7 @@ use super::vertex::RawVertex;
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::sync::Arc;
 
 pub struct Loader {
     color: [f32; 3],
@@ -72,16 +77,19 @@ impl Loader {
                 position: self.verts.get(verts[0]).unwrap().vals,
                 normal: self.norms.get(normals[0]).unwrap().vals,
                 color: self.color,
+                uv: [0.0, 0.0],
             });
             ret.push(NormalVertex {
                 position: self.verts.get(verts[1]).unwrap().vals,
                 normal: self.norms.get(normals[1]).unwrap().vals,
                 color: self.color,
+                uv: [0.0, 0.0],
             });
             ret.push(NormalVertex {
                 position: self.verts.get(verts[2]).unwrap().vals,
                 normal: self.norms.get(normals[2]).unwrap().vals,
                 color: self.color,
+                uv: [0.0, 0.0],
             });
         }
         ret
@@ -106,6 +114,35 @@ impl LoaderGLTF {
         }
     }
 
+    pub fn get_meshes(&self) -> Vec<Mesh> {
+        let mut ret: Vec<Mesh> = Vec::new();
+        for model in &self.models {
+            let mesh_data = Mesh {
+                vertices: model
+                    .vertices()
+                    .into_iter()
+                    .map(|vertex| Self::as_normal_vertex(vertex))
+                    //.filter(|v| unique_vertices.insert(v.clone()))
+                    //.unique()
+                    .collect(),
+                indices: model.indices().unwrap().clone(),
+                material: model.material(),
+                texture: None,
+            };
+            ret.push(mesh_data);
+        }
+        ret
+    }
+
+    pub fn as_normal_vertex(vert: &Vertex) -> NormalVertex {
+        NormalVertex {
+            position: [vert.position.x, vert.position.y, vert.position.z],
+            normal: [vert.normal.x, vert.normal.y, vert.normal.z],
+            color: [0.5, 0.5, 0.5],
+            uv: [vert.tex_coords.x, vert.tex_coords.y],
+        }
+    }
+
     pub fn as_normal_vertices(&self) -> Vec<NormalVertex> {
         let mut ret: Vec<NormalVertex> = Vec::new();
         for model in &self.models {
@@ -125,6 +162,7 @@ impl LoaderGLTF {
                                 triangle[0].normal.z,
                             ],
                             color: self.color,
+                            uv: [triangle[0].tex_coords.x, triangle[0].tex_coords.y],
                         });
                         ret.push(NormalVertex {
                             position: [
@@ -138,6 +176,7 @@ impl LoaderGLTF {
                                 triangle[1].normal.z,
                             ],
                             color: self.color,
+                            uv: [triangle[1].tex_coords.x, triangle[1].tex_coords.y],
                         });
                         ret.push(NormalVertex {
                             position: [
@@ -151,6 +190,7 @@ impl LoaderGLTF {
                                 triangle[2].normal.z,
                             ],
                             color: self.color,
+                            uv: [triangle[2].tex_coords.x, triangle[2].tex_coords.y],
                         });
                     }
                 }
