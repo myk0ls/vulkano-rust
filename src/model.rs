@@ -184,70 +184,7 @@ pub struct Mesh {
     pub texture: Option<Arc<ImageView<ImmutableImage>>>,
 }
 
-impl Mesh {
-    pub fn load_texture_to_gpu(
-        &mut self,
-        memory_alocator: &Arc<StandardMemoryAllocator>,
-        cmd_buf: &StandardCommandBufferAllocator,
-        queue: Arc<Queue>,
-    ) {
-        let mut upload_cmd_buf = AutoCommandBufferBuilder::primary(
-            cmd_buf,
-            queue.queue_family_index(),
-            CommandBufferUsage::OneTimeSubmit,
-        )
-        .unwrap();
-
-        let base_texture = self
-            .material
-            .pbr
-            .base_color_texture
-            .as_ref()
-            .unwrap()
-            .clone();
-
-        let raw_pixels: Vec<u8> = self
-            .material
-            .pbr
-            .base_color_texture
-            .as_ref()
-            .unwrap()
-            .as_ref()
-            .clone()
-            .into_raw();
-
-        let image_dimensions = ImageDimensions::Dim2d {
-            width: base_texture.dimensions().0,
-            height: base_texture.dimensions().1,
-            array_layers: 1,
-        };
-
-        let gpu_texture = {
-            let image = ImmutableImage::from_iter(
-                memory_alocator,
-                raw_pixels.iter().cloned(),
-                image_dimensions,
-                MipmapsCount::One,
-                Format::R8G8B8A8_SRGB,
-                &mut upload_cmd_buf,
-            )
-            .unwrap();
-            ImageView::new_default(image).unwrap()
-        };
-
-        let upload_commands = upload_cmd_buf
-            .build()
-            .unwrap()
-            .execute(queue)
-            .unwrap()
-            .then_signal_fence_and_flush()
-            .unwrap()
-            .wait(None)
-            .unwrap();
-
-        self.texture = Some(gpu_texture);
-    }
-}
+impl Mesh {}
 
 #[derive(Clone)]
 pub struct PrepareMaterial {

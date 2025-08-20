@@ -50,16 +50,27 @@ fn main() {
     suzanne.translate(vec3(0.0, 0.0, 0.0));
     suzanne.rotate(pi(), vec3(0.0, 0.0, 1.0));
 
-    suzanne.meshes_mut()[0].load_texture_to_gpu(
-        &system.memory_allocator,
-        &system.command_buffer_allocator,
-        system.queue.clone(),
-    );
+    // suzanne.meshes_mut()[0].load_texture_to_gpu(
+    //     &system.memory_allocator,
+    //     &system.command_buffer_allocator,
+    //     system.queue.clone(),
+    // );
 
-    let mut platform = Model::new("data/models/platform.glb")
+    suzanne
+        .meshes_mut()
+        .iter_mut()
+        .for_each(|mesh| system.upload_mesh_to_gpu(mesh));
+
+    let mut platform = Model::new("data/models/platform_zafira.glb")
         .color([0.1, 0.9, 0.0])
         .build();
     platform.translate(vec3(0.0, 3.0, 0.0));
+    platform.rotate(pi(), vec3(0.0, 1.0, 0.0));
+
+    platform
+        .meshes_mut()
+        .iter_mut()
+        .for_each(|mesh| system.upload_mesh_to_gpu(mesh));
 
     let rotation_start = Instant::now();
 
@@ -219,10 +230,10 @@ fn main() {
 
             system.start();
             system.geometry(&mut suzanne);
-            //system.geometry(&mut platform);
+            system.geometry(&mut platform);
             system.ambient();
             system.directional(&directional_light);
-            //system.light_object(&directional_light);
+            system.light_object(&directional_light);
             system.finish(&mut previous_frame_end);
         }
         _ => (),
