@@ -2,10 +2,7 @@
 // Licensed under the MIT license
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>
 
-mod face;
 mod loader;
-mod vertex;
-pub use self::loader::Loader;
 use bytemuck::{Pod, Zeroable};
 pub use loader::LoaderGLTF;
 

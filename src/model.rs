@@ -2,27 +2,12 @@ use easy_gltf::Material;
 use nalgebra_glm::{
     TMat4, TVec3, identity, inverse_transpose, rotate_normalized_axis, scale, translate, vec3,
 };
-use vulkano::{
-    buffer::CpuAccessibleBuffer,
-    command_buffer::{
-        AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer,
-        PrimaryCommandBufferAbstract, allocator::StandardCommandBufferAllocator,
-    },
-    device::Queue,
-    half::vec,
-    image::{ImageDimensions, ImmutableImage, MipmapsCount, view::ImageView},
-    pipeline::cache,
-    sampler::Sampler,
-    sync::GpuFuture,
-};
-
-use vulkano::format::Format;
-use vulkano::memory::allocator::StandardMemoryAllocator;
+use vulkano::image::{ImageDimensions, ImmutableImage, view::ImageView};
 
 use std::cell::Cell;
 use std::sync::Arc;
 
-use crate::obj_loader::{ColoredVertex, Loader, LoaderGLTF, NormalVertex};
+use crate::gltf_loader::{ColoredVertex, LoaderGLTF, NormalVertex};
 
 pub struct Model {
     meshes: Vec<Mesh>,

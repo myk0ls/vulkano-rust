@@ -58,8 +58,8 @@ use winit::{
 };
 
 use crate::{
+    gltf_loader::{ColoredVertex, DummyVertex, NormalVertex},
     model::{Mesh, Model},
-    obj_loader::{ColoredVertex, DummyVertex, NormalVertex},
     system::DirectionalLight,
 };
 
@@ -762,46 +762,6 @@ impl System {
             },
         )
         .unwrap();
-
-        // let base_color_texture = model.meshes()[0]
-        //     .material
-        //     .pbr
-        //     .base_color_texture
-        //     .as_ref()
-        //     .unwrap()
-        //     .clone();
-
-        // let raw_pixels: Vec<u8> = base_color_texture.as_ref().clone().into_raw();
-
-        // // let dimen = model.meshes()[0]
-        // //     .material
-        // //     .pbr
-        // //     .base_color_texture
-        // //     .as_ref()
-        // //     .unwrap()
-        // //     .dimensions();
-
-        // let image_dimensions = ImageDimensions::Dim2d {
-        //     width: base_color_texture.dimensions().0,
-        //     height: base_color_texture.dimensions().1,
-        //     array_layers: 1,
-        // };
-
-        // let texture = model.meshes()[0]
-        //     .texture
-        //     .get_or_insert_with(|| {
-        //         let image = ImmutableImage::from_iter(
-        //             &self.memory_allocator,
-        //             raw_pixels.iter().cloned(),
-        //             image_dimensions,
-        //             MipmapsCount::One,
-        //             Format::R8G8B8A8_SRGB,
-        //             &mut self.commands.as_mut().unwrap(),
-        //         )
-        //         .unwrap();
-        //         ImageView::new_default(image).unwrap()
-        //     })
-        //     .clone();
 
         let model_layout = self
             .deferred_pipeline

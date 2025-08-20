@@ -1,5 +1,5 @@
+mod gltf_loader;
 mod model;
-mod obj_loader;
 mod system;
 
 use std::{collections::HashSet, time::Instant};
@@ -49,12 +49,6 @@ fn main() {
         .build();
     suzanne.translate(vec3(0.0, 0.0, 0.0));
     suzanne.rotate(pi(), vec3(0.0, 0.0, 1.0));
-
-    // suzanne.meshes_mut()[0].load_texture_to_gpu(
-    //     &system.memory_allocator,
-    //     &system.command_buffer_allocator,
-    //     system.queue.clone(),
-    // );
 
     suzanne
         .meshes_mut()
