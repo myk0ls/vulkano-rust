@@ -1,22 +1,10 @@
-// Copyright (c) 2022 taidaesal
-// Licensed under the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>
-
 #![allow(dead_code)]
-use easy_gltf::model::{Mode, Triangle, Vertex};
-use easy_gltf::{Material, Model, Scene};
-use rapier3d::na::Norm;
+use easy_gltf::Model;
+use easy_gltf::model::{Mode, Vertex};
 
 use crate::model::Mesh;
-//use crate::model::{self, MeshMaterial};
-
-use itertools::Itertools;
 
 use super::NormalVertex;
-
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::sync::Arc;
 
 pub struct LoaderGLTF {
     color: [f32; 3],
@@ -117,11 +105,11 @@ impl LoaderGLTF {
                     }
                 }
                 Mode::Lines | Mode::LineLoop | Mode::LineStrip => {
-                    let lines = model.lines().unwrap();
+                    let _lines = model.lines().unwrap();
                     // Render lines...
                 }
                 Mode::Points => {
-                    let points = model.points().unwrap();
+                    let _points = model.points().unwrap();
                     // Render points...
                 }
             }

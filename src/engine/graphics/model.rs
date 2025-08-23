@@ -7,6 +7,8 @@ use vulkano::image::{ImageDimensions, ImmutableImage, view::ImageView};
 use std::cell::Cell;
 use std::sync::Arc;
 
+use mesh::Mesh;
+
 use crate::gltf_loader::{ColoredVertex, LoaderGLTF, NormalVertex};
 
 pub struct Model {
@@ -160,16 +162,6 @@ impl Model {
         (self.specular_intensity.clone(), self.shininess.clone())
     }
 }
-
-#[derive(Clone)]
-pub struct Mesh {
-    pub vertices: Vec<NormalVertex>,
-    pub indices: Vec<u32>,
-    pub material: Arc<Material>,
-    pub texture: Option<Arc<ImageView<ImmutableImage>>>,
-}
-
-impl Mesh {}
 
 #[derive(Clone)]
 pub struct PrepareMaterial {

@@ -60,7 +60,7 @@ use winit::{
 use crate::{
     gltf_loader::{ColoredVertex, DummyVertex, NormalVertex},
     model::{Mesh, Model},
-    system::DirectionalLight,
+    renderer::DirectionalLight,
 };
 
 vulkano::impl_vertex!(DummyVertex, position);
@@ -70,7 +70,7 @@ vulkano::impl_vertex!(ColoredVertex, position, color);
 mod deferred_vert {
     vulkano_shaders::shader! {
         ty: "vertex",
-        path: "src/system/shaders/deferred.vert",
+        path: "src/engine/graphics/renderer/shaders/deferred.vert",
         types_meta: {
             use bytemuck::{Pod, Zeroable};
 
@@ -82,7 +82,7 @@ mod deferred_vert {
 mod deferred_frag {
     vulkano_shaders::shader! {
         ty: "fragment",
-        path: "src/system/shaders/deferred.frag",
+        path: "src/engine/graphics/renderer/shaders/deferred.frag",
         types_meta: {
             use bytemuck::{Pod, Zeroable};
 
@@ -94,14 +94,14 @@ mod deferred_frag {
 mod directional_vert {
     vulkano_shaders::shader! {
         ty: "vertex",
-        path: "src/system/shaders/directional.vert"
+        path: "src/engine/graphics/renderer/shaders/directional.vert"
     }
 }
 
 mod directional_frag {
     vulkano_shaders::shader! {
         ty: "fragment",
-        path: "src/system/shaders/directional.frag",
+        path: "src/engine/graphics/renderer/shaders/directional.frag",
         types_meta: {
             use bytemuck::{Pod, Zeroable};
 
@@ -113,14 +113,14 @@ mod directional_frag {
 mod ambient_vert {
     vulkano_shaders::shader! {
         ty: "vertex",
-        path: "src/system/shaders/ambient.vert"
+        path: "src/engine/graphics/renderer/shaders/ambient.vert"
     }
 }
 
 mod ambient_frag {
     vulkano_shaders::shader! {
         ty: "fragment",
-        path: "src/system/shaders/ambient.frag",
+        path: "src/engine/graphics/renderer/shaders/ambient.frag",
         types_meta: {
             use bytemuck::{Pod, Zeroable};
 
@@ -132,7 +132,7 @@ mod ambient_frag {
 mod light_obj_vert {
     vulkano_shaders::shader! {
         ty: "vertex",
-        path: "src/system/shaders/light_obj.vert",
+        path: "src/engine/graphics/renderer/shaders/light_obj.vert",
         types_meta: {
             use bytemuck::{Pod, Zeroable};
 
@@ -144,7 +144,7 @@ mod light_obj_vert {
 mod light_obj_frag {
     vulkano_shaders::shader! {
         ty: "fragment",
-        path: "src/system/shaders/light_obj.frag"
+        path: "src/engine/graphics/renderer/shaders/light_obj.frag"
     }
 }
 
@@ -158,7 +158,7 @@ enum RenderStage {
     NeedsRedraw,
 }
 
-pub struct System {
+pub struct Renderer {
     instance: Arc<Instance>,
     surface: Arc<Surface>,
     pub device: Arc<Device>,
@@ -209,8 +209,8 @@ impl VP {
     }
 }
 
-impl System {
-    pub fn new(event_loop: &EventLoop<()>) -> System {
+impl Renderer {
+    pub fn new(event_loop: &EventLoop<()>) -> Renderer {
         let instance = {
             let library = VulkanLibrary::new().unwrap();
             let extensions = vulkano_win::required_extensions(&library);
@@ -525,7 +525,7 @@ impl System {
         };
 
         let (framebuffers, color_buffer, normal_buffer, frag_location_buffer, specular_buffer) =
-            System::window_size_dependent_setup(
+            Renderer::window_size_dependent_setup(
                 &memory_allocator,
                 &images,
                 render_pass.clone(),
@@ -559,7 +559,7 @@ impl System {
         let image_index = 0;
         let acquire_future = None;
 
-        System {
+        Renderer {
             instance,
             surface,
             device,
@@ -1079,7 +1079,7 @@ impl System {
             new_normal_buffer,
             new_frag_location_buffer,
             new_specular_buffer,
-        ) = System::window_size_dependent_setup(
+        ) = Renderer::window_size_dependent_setup(
             &self.memory_allocator,
             &new_images,
             self.render_pass.clone(),
