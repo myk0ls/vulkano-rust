@@ -1,4 +1,5 @@
 use sdl3::event::Event;
+use shipyard::World;
 
 use crate::engine::{
     core::application::Game,
@@ -9,11 +10,15 @@ use nalgebra_glm::{pi, vec3};
 
 pub struct MyGame {
     name: Option<String>,
+    world: World,
 }
 
 impl MyGame {
     pub fn new() -> Self {
-        Self { name: None }
+        Self {
+            name: None,
+            world: World::new(),
+        }
     }
 }
 
@@ -22,7 +27,7 @@ impl Game for MyGame {
         println!("initialized!")
     }
 
-    fn on_update(&mut self, delta_time: f32) {
+    fn on_update(&mut self, _delta_time: f32) {
         //println!("Updating game logic: {delta_time}s");
     }
 

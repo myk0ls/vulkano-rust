@@ -329,23 +329,6 @@ impl Renderer {
                     .0,
             );
 
-            // let window = surface.object().unwrap().downcast_ref::<Window>().unwrap();
-
-            // let window_width = 1600.0;
-            // let window_height = 900.0;
-
-            // window.set_inner_size(LogicalSize::new(window_width, window_height));
-
-            //let primary_monitor = event_loop.primary_monitor().unwrap();
-
-            //let monitor_size = primary_monitor.size();
-            //let monitor_position = primary_monitor.position();
-
-            //let x = monitor_position.x + (monitor_size.width as i32 - window_width as i32) / 2;
-            //let y = monitor_position.y + (monitor_size.height as i32 - window_height as i32) / 2;
-
-            // window.set_outer_position(PhysicalPosition::new(window_width, window_height));
-
             let image_extent: [u32; 2] = window.size().into();
 
             let aspect_ratio = image_extent[0] as f32 / image_extent[1] as f32;
@@ -795,66 +778,68 @@ impl Renderer {
         )
         .unwrap();
 
-        let model_layout = self
-            .deferred_pipeline
-            .layout()
-            .set_layouts()
-            .get(1)
-            .unwrap();
-        let model_set = PersistentDescriptorSet::new(
-            &self.descriptor_set_allocator,
-            model_layout.clone(),
-            [
-                WriteDescriptorSet::buffer(0, model_subbuffer.clone()),
-                WriteDescriptorSet::buffer(1, specular_buffer.clone()),
-                WriteDescriptorSet::image_view_sampler(
-                    2,
-                    model.meshes()[0].texture.as_mut().unwrap().clone(),
-                    self.sampler.clone(),
-                ),
-            ],
-        )
-        .unwrap();
-
-        let vertex_buffer = CpuAccessibleBuffer::from_iter(
-            &self.memory_allocator,
-            BufferUsage {
-                vertex_buffer: true,
-                ..BufferUsage::empty()
-            },
-            false,
-            model.meshes()[0].vertices.iter().cloned(),
-        )
-        .unwrap();
-
-        let index_buffer = CpuAccessibleBuffer::from_iter(
-            &self.memory_allocator,
-            BufferUsage {
-                index_buffer: true,
-                ..BufferUsage::empty()
-            },
-            false,
-            model.meshes()[0].indices.iter().cloned(),
-        )
-        .unwrap();
-
-        self.commands
-            .as_mut()
-            .unwrap()
-            .set_viewport(0, [self.viewport.clone()])
-            .bind_pipeline_graphics(self.deferred_pipeline.clone())
-            .bind_descriptor_sets(
-                PipelineBindPoint::Graphics,
-                self.deferred_pipeline.layout().clone(),
-                0,
-                (self.vp_set.clone(), model_set.clone()),
+        for mesh in model.meshes_mut() {
+            let model_layout = self
+                .deferred_pipeline
+                .layout()
+                .set_layouts()
+                .get(1)
+                .unwrap();
+            let model_set = PersistentDescriptorSet::new(
+                &self.descriptor_set_allocator,
+                model_layout.clone(),
+                [
+                    WriteDescriptorSet::buffer(0, model_subbuffer.clone()),
+                    WriteDescriptorSet::buffer(1, specular_buffer.clone()),
+                    WriteDescriptorSet::image_view_sampler(
+                        2,
+                        mesh.texture.as_mut().unwrap().clone(),
+                        self.sampler.clone(),
+                    ),
+                ],
             )
-            .bind_vertex_buffers(0, vertex_buffer.clone())
-            //.draw(vertex_buffer.len() as u32, 1, 0, 0)
-            .bind_index_buffer(index_buffer.clone())
-            //.draw_indexed(index_count, instance_count, first_index, vertex_offset, first_instance)
-            .draw_indexed(index_buffer.len() as u32, 1, 0, 0, 0)
             .unwrap();
+
+            let vertex_buffer = CpuAccessibleBuffer::from_iter(
+                &self.memory_allocator,
+                BufferUsage {
+                    vertex_buffer: true,
+                    ..BufferUsage::empty()
+                },
+                false,
+                mesh.vertices.iter().cloned(),
+            )
+            .unwrap();
+
+            let index_buffer = CpuAccessibleBuffer::from_iter(
+                &self.memory_allocator,
+                BufferUsage {
+                    index_buffer: true,
+                    ..BufferUsage::empty()
+                },
+                false,
+                mesh.indices.iter().cloned(),
+            )
+            .unwrap();
+
+            self.commands
+                .as_mut()
+                .unwrap()
+                .set_viewport(0, [self.viewport.clone()])
+                .bind_pipeline_graphics(self.deferred_pipeline.clone())
+                .bind_descriptor_sets(
+                    PipelineBindPoint::Graphics,
+                    self.deferred_pipeline.layout().clone(),
+                    0,
+                    (self.vp_set.clone(), model_set.clone()),
+                )
+                .bind_vertex_buffers(0, vertex_buffer.clone())
+                //.draw(vertex_buffer.len() as u32, 1, 0, 0)
+                .bind_index_buffer(index_buffer.clone())
+                //.draw_indexed(index_count, instance_count, first_index, vertex_offset, first_instance)
+                .draw_indexed(index_buffer.len() as u32, 1, 0, 0, 0)
+                .unwrap();
+        }
     }
 
     pub fn set_ambient(&mut self, color: [f32; 3], intensity: f32) {
@@ -1287,29 +1272,52 @@ impl Renderer {
         )
         .unwrap();
 
-        let base_texture = mesh
-            .material
-            .pbr
-            .base_color_texture
-            .as_ref()
-            .unwrap()
-            .clone();
-
-        let raw_pixels: Vec<u8> = mesh
-            .material
-            .pbr
-            .base_color_texture
-            .as_ref()
-            .unwrap()
-            .as_ref()
-            .clone()
-            .into_raw();
-
-        let image_dimensions = ImageDimensions::Dim2d {
-            width: base_texture.dimensions().0,
-            height: base_texture.dimensions().1,
+        let mut raw_pixels: Vec<u8> = vec![];
+        let mut image_dimensions: ImageDimensions = ImageDimensions::Dim2d {
+            width: 1,
+            height: 1,
             array_layers: 1,
         };
+
+        //if texture is present
+        if mesh.material.pbr.base_color_texture.is_some() {
+            let base_texture = mesh
+                .material
+                .pbr
+                .base_color_texture
+                .as_ref()
+                .unwrap()
+                .clone();
+
+            raw_pixels = mesh
+                .material
+                .pbr
+                .base_color_texture
+                .as_ref()
+                .unwrap()
+                .as_ref()
+                .clone()
+                .into_raw();
+
+            image_dimensions = ImageDimensions::Dim2d {
+                width: base_texture.dimensions().0,
+                height: base_texture.dimensions().1,
+                array_layers: 1,
+            };
+        } else {
+            //use the base color
+            let base_color = mesh.material.pbr.base_color_factor.clone();
+
+            // Destructure the Vector4 into its components
+            let (r, g, b, a) = (base_color.x, base_color.y, base_color.z, base_color.w);
+
+            raw_pixels = vec![
+                (r.clamp(0.0, 1.0) * 255.0) as u8,
+                (g.clamp(0.0, 1.0) * 255.0) as u8,
+                (b.clamp(0.0, 1.0) * 255.0) as u8,
+                (a.clamp(0.0, 1.0) * 255.0) as u8,
+            ];
+        }
 
         let gpu_texture = {
             let image = ImmutableImage::from_iter(
@@ -1324,7 +1332,7 @@ impl Renderer {
             ImageView::new_default(image).unwrap()
         };
 
-        let upload_commands = upload_cmd_buf
+        let _upload_commands = upload_cmd_buf
             .build()
             .unwrap()
             .execute(self.queue.clone())
