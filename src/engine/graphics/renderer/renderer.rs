@@ -1,8 +1,9 @@
 use std::{mem, sync::Arc};
 
 use nalgebra_glm::{TMat4, TVec3, half_pi, identity, inverse, perspective, vec3};
+use sdl3::video::Window;
 use vulkano::{
-    Version, VulkanLibrary,
+    Handle, Version, VulkanLibrary, VulkanObject,
     buffer::{
         BufferUsage, CpuAccessibleBuffer, CpuBufferPool, TypedBufferAccess,
         cpu_pool::CpuBufferPoolSubbuffer,
@@ -46,6 +47,8 @@ use vulkano::{
     sync::{self, FlushError, GpuFuture},
 };
 
+use ash::vk;
+
 use vulkano::command_buffer::PrimaryCommandBufferAbstract;
 
 use vulkano::swapchain::acquire_next_image;
@@ -54,13 +57,18 @@ use vulkano_win::{VkSurfaceBuild, required_extensions};
 use winit::{
     dpi::{LogicalSize, PhysicalPosition},
     event_loop::EventLoop,
-    window::{Window, WindowBuilder},
+    window::WindowBuilder,
 };
 
+use vulkano::instance::InstanceExtensions;
+
 use crate::{
-    gltf_loader::{ColoredVertex, DummyVertex, NormalVertex},
-    model::{Mesh, Model},
-    renderer::DirectionalLight,
+    engine::{
+        assets::gltf_loader::{ColoredVertex, DummyVertex, NormalVertex},
+        core::application::{Application, Game},
+        graphics::{mesh::Mesh, model::Model, renderer::DirectionalLight},
+    },
+    game::my_game::MyGame,
 };
 
 vulkano::impl_vertex!(DummyVertex, position);
@@ -210,10 +218,15 @@ impl VP {
 }
 
 impl Renderer {
-    pub fn new(event_loop: &EventLoop<()>) -> Renderer {
+    pub fn new(window: &Window) -> Renderer {
         let instance = {
             let library = VulkanLibrary::new().unwrap();
-            let extensions = vulkano_win::required_extensions(&library);
+            //let extensions = vulkano_win::required_extensions(&library);
+            let sdl_extensions = window.vulkan_instance_extensions().unwrap();
+
+            // Convert Vec<String> -> InstanceExtensions safely
+            let extensions: InstanceExtensions =
+                sdl_extensions.iter().map(|s| s.as_str()).collect();
 
             Instance::new(
                 library,
@@ -226,9 +239,28 @@ impl Renderer {
             .unwrap()
         };
 
-        let surface = WindowBuilder::new()
-            .build_vk_surface(event_loop, instance.clone())
-            .unwrap();
+        let raw_instance: vk::Instance = instance.handle();
+
+        // SDL wants *mut VkInstance, so turn that u64 into a pointer
+        let raw_instance_ptr = raw_instance.as_raw() as *mut vk::Instance;
+
+        // Now call SDL to create the surface
+        let raw_surface_ptr = window.vulkan_create_surface(raw_instance_ptr as _).unwrap();
+
+        let raw_surface = vk::SurfaceKHR::from_raw(raw_surface_ptr as u64);
+
+        let surface = unsafe {
+            Arc::new(Surface::from_handle(
+                Arc::clone(&instance),
+                raw_surface,
+                vulkano::swapchain::SurfaceApi::Win32,
+                None,
+            ))
+        };
+
+        // let surface = WindowBuilder::new()
+        //     .build_vk_surface(event_loop, instance.clone())
+        //     .unwrap();
 
         let device_extensions = DeviceExtensions {
             khr_swapchain: true,
@@ -297,24 +329,24 @@ impl Renderer {
                     .0,
             );
 
-            let window = surface.object().unwrap().downcast_ref::<Window>().unwrap();
+            // let window = surface.object().unwrap().downcast_ref::<Window>().unwrap();
 
-            let window_width = 1600.0;
-            let window_height = 900.0;
+            // let window_width = 1600.0;
+            // let window_height = 900.0;
 
-            window.set_inner_size(LogicalSize::new(window_width, window_height));
+            // window.set_inner_size(LogicalSize::new(window_width, window_height));
 
-            let primary_monitor = event_loop.primary_monitor().unwrap();
+            //let primary_monitor = event_loop.primary_monitor().unwrap();
 
-            let monitor_size = primary_monitor.size();
-            let monitor_position = primary_monitor.position();
+            //let monitor_size = primary_monitor.size();
+            //let monitor_position = primary_monitor.position();
 
-            let x = monitor_position.x + (monitor_size.width as i32 - window_width as i32) / 2;
-            let y = monitor_position.y + (monitor_size.height as i32 - window_height as i32) / 2;
+            //let x = monitor_position.x + (monitor_size.width as i32 - window_width as i32) / 2;
+            //let y = monitor_position.y + (monitor_size.height as i32 - window_height as i32) / 2;
 
-            window.set_outer_position(PhysicalPosition::new(x, y));
+            // window.set_outer_position(PhysicalPosition::new(window_width, window_height));
 
-            let image_extent: [u32; 2] = window.inner_size().into();
+            let image_extent: [u32; 2] = window.size().into();
 
             let aspect_ratio = image_extent[0] as f32 / image_extent[1] as f32;
             vp.projection = perspective(aspect_ratio, half_pi(), 0.01, 100.0);
@@ -1059,7 +1091,7 @@ impl Renderer {
             .unwrap()
             .downcast_ref::<Window>()
             .unwrap();
-        let image_extent: [u32; 2] = window.inner_size().into();
+        let image_extent: [u32; 2] = window.size().into();
 
         let aspect_ratio = image_extent[0] as f32 / image_extent[1] as f32;
         self.vp.projection = perspective(aspect_ratio, half_pi(), 0.01, 100.0);

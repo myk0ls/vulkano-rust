@@ -29,16 +29,13 @@
 mod engine;
 mod game;
 
-use winit::event_loop::{self, EventLoop};
-
 use crate::engine::core::application::Application;
 use crate::game::my_game::MyGame;
 
 fn main() {
-    let event_loop = EventLoop::new().unwrap();
     let game = MyGame::new();
-    let mut app = Application { game, std::time::Instant::now(), };
-    event_loop.run_app(&mut app).unwrap();
+    let app = Application::new(game, "SDL3 + Vulkano", 1600, 900);
+    app.run();
 }
 
 // fn main() {

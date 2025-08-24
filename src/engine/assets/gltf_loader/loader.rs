@@ -2,7 +2,7 @@
 use easy_gltf::Model;
 use easy_gltf::model::{Mode, Vertex};
 
-use crate::model::Mesh;
+use crate::engine::graphics::mesh::Mesh;
 
 use super::NormalVertex;
 

@@ -7,9 +7,9 @@ use vulkano::image::{ImageDimensions, ImmutableImage, view::ImageView};
 use std::cell::Cell;
 use std::sync::Arc;
 
-use mesh::Mesh;
+use crate::engine::graphics::mesh::Mesh;
 
-use crate::gltf_loader::{ColoredVertex, LoaderGLTF, NormalVertex};
+use crate::engine::assets::gltf_loader::{ColoredVertex, LoaderGLTF, NormalVertex};
 
 pub struct Model {
     meshes: Vec<Mesh>,
