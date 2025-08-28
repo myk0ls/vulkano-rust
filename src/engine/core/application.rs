@@ -63,8 +63,8 @@ impl<G: Game> Application<G> {
         self.game.on_init();
         let mut event_pump = self.sdl.event_pump().unwrap();
 
-        //let mut suzanne = Model::new("data/models/suzanne_2_material.glb").build();
-        let mut suzanne = Model::new("data/models/suzanne_base_color.glb").build();
+        let mut suzanne = Model::new("data/models/suzanne_2_material.glb").build();
+        //let mut suzanne = Model::new("data/models/suzanne_base_color.glb").build();
         suzanne.translate(vec3(0.0, 0.0, -3.0));
         suzanne.rotate(pi(), vec3(0.0, 0.0, 1.0));
 

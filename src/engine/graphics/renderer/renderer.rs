@@ -156,6 +156,25 @@ mod light_obj_frag {
     }
 }
 
+mod skybox_vert {
+    vulkano_shaders::shader! {
+        ty: "vertex",
+        path: "src/engine/graphics/renderer/shaders/skybox.vert",
+        types_meta: {
+            use bytemuck::{Pod, Zeroable};
+
+            #[derive(Clone, Copy, Zeroable, Pod)]
+        },
+    }
+}
+
+mod skybox_frag {
+    vulkano_shaders::shader! {
+        ty: "fragment",
+        path: "src/engine/graphics/renderer/shaders/skybox.frag"
+    }
+}
+
 #[derive(Debug, Clone)]
 enum RenderStage {
     Stopped,
@@ -362,6 +381,8 @@ impl Renderer {
         let ambient_frag = ambient_frag::load(device.clone()).unwrap();
         let light_obj_frag = light_obj_frag::load(device.clone()).unwrap();
         let light_obj_vert = light_obj_vert::load(device.clone()).unwrap();
+        let skybox_vert = skybox_vert::load(device.clone()).unwrap();
+        let skybox_frag = skybox_frag::load(device.clone()).unwrap();
 
         let render_pass = vulkano::ordered_passes_renderpass!(device.clone(),
             attachments: {
@@ -484,6 +505,18 @@ impl Renderer {
             .fragment_shader(light_obj_frag.entry_point("main").unwrap(), ())
             .depth_stencil_state(DepthStencilState::simple_depth_test())
             .rasterization_state(RasterizationState::new().cull_mode(CullMode::Back))
+            .render_pass(lighting_pass.clone())
+            .build(device.clone())
+            .unwrap();
+
+        let skybox_pipeline = GraphicsPipeline::start()
+            .vertex_input_state(BuffersDefinition::new().vertex::<DummyVertex>())
+            .vertex_shader(skybox_vert.entry_point("main").unwrap(), ())
+            .input_assembly_state(InputAssemblyState::new())
+            .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
+            .fragment_shader(skybox_frag.entry_point("main").unwrap(), ())
+            .depth_stencil_state(DepthStencilState::simple_depth_test())
+            .rasterization_state(RasterizationState::default())
             .render_pass(lighting_pass.clone())
             .build(device.clone())
             .unwrap();
@@ -974,6 +1007,22 @@ impl Renderer {
             )
             .draw(self.dummy_verts.len() as u32, 1, 0, 0)
             .unwrap();
+    }
+
+    pub fn skybox(&mut self, model: &mut Model) {
+        let inv_vp_buffer = CpuAccessibleBuffer::from_iter(
+            &self.memory_allocator,
+            BufferUsage {
+                uniform_buffer: true,
+                ..BufferUsage::empty()
+            },
+            false,
+            skybox_frag::ty::VP_Data {
+                invProjection: self.vp.projection.try_inverse().unwrap().into(),
+                invView: self.vp.view.try_inverse().unwrap().into(),
+            },
+        )
+        .unwrap();
     }
 
     pub fn light_object(&mut self, directional_light: &DirectionalLight) {
