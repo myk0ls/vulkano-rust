@@ -9,8 +9,9 @@ use vulkano::{
         cpu_pool::CpuBufferPoolSubbuffer,
     },
     command_buffer::{
-        AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer,
-        RenderPassBeginInfo, SubpassContents, allocator::StandardCommandBufferAllocator,
+        AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferToImageInfo,
+        PrimaryAutoCommandBuffer, RenderPassBeginInfo, SubpassContents,
+        allocator::StandardCommandBufferAllocator,
     },
     descriptor_set::{
         PersistentDescriptorSet, WriteDescriptorSet, allocator::StandardDescriptorSetAllocator,
@@ -21,17 +22,18 @@ use vulkano::{
     },
     format::Format,
     image::{
-        AttachmentImage, ImageAccess, ImageDimensions, ImmutableImage, MipmapsCount,
-        SwapchainImage, swapchain, view::ImageView,
+        AttachmentImage, ImageAccess, ImageCreateFlags, ImageDimensions, ImageUsage,
+        ImmutableImage, MipmapsCount, SwapchainImage, swapchain,
+        view::{ImageView, ImageViewCreateInfo},
     },
     instance::{self, Instance, InstanceCreateInfo},
     library,
     memory::allocator::StandardMemoryAllocator,
     pipeline::{
-        GraphicsPipeline, Pipeline, PipelineBindPoint,
+        GraphicsPipeline, Pipeline, PipelineBindPoint, StateMode,
         graphics::{
             color_blend::{AttachmentBlend, BlendFactor, BlendOp, ColorBlendState},
-            depth_stencil::DepthStencilState,
+            depth_stencil::{CompareOp, DepthBoundsState, DepthState, DepthStencilState},
             input_assembly::InputAssemblyState,
             rasterization::{CullMode, RasterizationState},
             vertex_input::BuffersDefinition,
@@ -47,18 +49,13 @@ use vulkano::{
     sync::{self, FlushError, GpuFuture},
 };
 
-use ash::vk;
+use ash::vk::{self, ImageCreateInfo, ImageUsageFlags};
 
 use vulkano::command_buffer::PrimaryCommandBufferAbstract;
 
 use vulkano::swapchain::acquire_next_image;
 
 use vulkano_win::{VkSurfaceBuild, required_extensions};
-use winit::{
-    dpi::{LogicalSize, PhysicalPosition},
-    event_loop::EventLoop,
-    window::WindowBuilder,
-};
 
 use vulkano::instance::InstanceExtensions;
 
@@ -66,7 +63,12 @@ use crate::{
     engine::{
         assets::gltf_loader::{ColoredVertex, DummyVertex, NormalVertex},
         core::application::{Application, Game},
-        graphics::{mesh::Mesh, model::Model, renderer::DirectionalLight},
+        graphics::{
+            mesh::Mesh,
+            model::Model,
+            renderer::DirectionalLight,
+            skybox::{Skybox, SkyboxImages},
+        },
     },
     game::my_game::MyGame,
 };
@@ -171,7 +173,12 @@ mod skybox_vert {
 mod skybox_frag {
     vulkano_shaders::shader! {
         ty: "fragment",
-        path: "src/engine/graphics/renderer/shaders/skybox.frag"
+        path: "src/engine/graphics/renderer/shaders/skybox.frag",
+        types_meta: {
+            use bytemuck::{Pod, Zeroable};
+
+            #[derive(Clone, Copy, Zeroable, Pod)]
+        },
     }
 }
 
@@ -207,6 +214,7 @@ pub struct Renderer {
     directional_pipeline: Arc<GraphicsPipeline>,
     ambient_pipeline: Arc<GraphicsPipeline>,
     light_obj_pipeline: Arc<GraphicsPipeline>,
+    skybox_pipeline: Arc<GraphicsPipeline>,
     dummy_verts: Arc<CpuAccessibleBuffer<[DummyVertex]>>,
     framebuffers: Vec<Arc<Framebuffer>>,
     color_buffer: Arc<ImageView<AttachmentImage>>,
@@ -515,8 +523,16 @@ impl Renderer {
             .input_assembly_state(InputAssemblyState::new())
             .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
             .fragment_shader(skybox_frag.entry_point("main").unwrap(), ())
-            .depth_stencil_state(DepthStencilState::simple_depth_test())
-            .rasterization_state(RasterizationState::default())
+            .depth_stencil_state(DepthStencilState {
+                depth: Some(DepthState {
+                    write_enable: StateMode::Fixed(false),
+                    compare_op: StateMode::Fixed(CompareOp::LessOrEqual),
+                    ..Default::default()
+                }),
+                depth_bounds: None,
+                stencil: None,
+            })
+            .rasterization_state(RasterizationState::new().cull_mode(CullMode::None))
             .render_pass(lighting_pass.clone())
             .build(device.clone())
             .unwrap();
@@ -629,6 +645,7 @@ impl Renderer {
             directional_pipeline,
             ambient_pipeline,
             light_obj_pipeline,
+            skybox_pipeline,
             dummy_verts,
             framebuffers,
             color_buffer,
@@ -1009,8 +1026,26 @@ impl Renderer {
             .unwrap();
     }
 
-    pub fn skybox(&mut self, model: &mut Model) {
-        let inv_vp_buffer = CpuAccessibleBuffer::from_iter(
+    pub fn skybox(&mut self, skybox: &mut Skybox) {
+        match self.render_stage {
+            RenderStage::Ambient => {
+                self.render_stage = RenderStage::Directional;
+            }
+            RenderStage::Directional => {}
+            RenderStage::NeedsRedraw => {
+                self.recreate_swapchain();
+                self.commands = None;
+                self.render_stage = RenderStage::Stopped;
+                return;
+            }
+            _ => {
+                self.commands = None;
+                self.render_stage = RenderStage::Stopped;
+                return;
+            }
+        };
+
+        let inv_vp_buffer = CpuAccessibleBuffer::from_data(
             &self.memory_allocator,
             BufferUsage {
                 uniform_buffer: true,
@@ -1023,6 +1058,36 @@ impl Renderer {
             },
         )
         .unwrap();
+
+        let skybox_layout = self.skybox_pipeline.layout().set_layouts().get(0).unwrap();
+        let skybox_set = PersistentDescriptorSet::new(
+            &self.descriptor_set_allocator,
+            skybox_layout.clone(),
+            [
+                WriteDescriptorSet::buffer(0, inv_vp_buffer.clone()),
+                WriteDescriptorSet::image_view_sampler(
+                    1,
+                    skybox.cubemap.clone(),
+                    self.sampler.clone(),
+                ),
+            ],
+        )
+        .unwrap();
+
+        self.commands
+            .as_mut()
+            .unwrap()
+            .set_viewport(0, [self.viewport.clone()])
+            .bind_pipeline_graphics(self.skybox_pipeline.clone())
+            .bind_vertex_buffers(0, self.dummy_verts.clone())
+            .bind_descriptor_sets(
+                PipelineBindPoint::Graphics,
+                self.skybox_pipeline.layout().clone(),
+                0,
+                skybox_set.clone(),
+            )
+            .draw(self.dummy_verts.len() as u32, 1, 0, 0)
+            .unwrap();
     }
 
     pub fn light_object(&mut self, directional_light: &DirectionalLight) {
@@ -1392,5 +1457,82 @@ impl Renderer {
             .unwrap();
 
         mesh.texture = Some(gpu_texture);
+    }
+
+    pub fn upload_skybox(&self, skybox_images: SkyboxImages) -> Skybox {
+        let mut upload_cmd_buf = AutoCommandBufferBuilder::primary(
+            &self.command_buffer_allocator,
+            self.queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )
+        .unwrap();
+
+        let image_dimensions = ImageDimensions::Dim2d {
+            width: 512,
+            height: 512,
+            array_layers: 6,
+        };
+
+        let all_pixels: Vec<u8> = skybox_images.faces.into_iter().flatten().collect();
+
+        let staging = CpuAccessibleBuffer::from_iter(
+            &self.memory_allocator,
+            BufferUsage {
+                transfer_src: true,
+                ..BufferUsage::empty()
+            },
+            false,
+            all_pixels.clone(),
+        )
+        .unwrap();
+
+        let (cubemap, init) = ImmutableImage::uninitialized(
+            &self.memory_allocator,
+            image_dimensions,
+            Format::R8G8B8A8_SRGB,
+            1,
+            ImageUsage {
+                sampled: true,
+                transfer_dst: true,
+                ..Default::default()
+            },
+            ImageCreateFlags {
+                cube_compatible: true,
+                ..ImageCreateFlags::default()
+            },
+            vulkano::image::ImageLayout::TransferDstOptimal,
+            [self.queue.queue_family_index()],
+        )
+        .unwrap();
+
+        upload_cmd_buf
+            .copy_buffer_to_image(CopyBufferToImageInfo::buffer_image(
+                staging.clone(),
+                init.clone(),
+            ))
+            .unwrap();
+
+        let cubemap_view = ImageView::new(
+            cubemap.clone(),
+            ImageViewCreateInfo {
+                view_type: vulkano::image::ImageViewType::Cube,
+                ..ImageViewCreateInfo::from_image(&cubemap)
+            },
+        )
+        .unwrap();
+
+        let _comms = upload_cmd_buf
+            .build()
+            .unwrap()
+            .execute(self.queue.clone())
+            .unwrap()
+            .then_signal_fence_and_flush()
+            .unwrap()
+            .wait(None)
+            .unwrap();
+
+        Skybox {
+            cubemap: cubemap_view,
+        }
     }
 }

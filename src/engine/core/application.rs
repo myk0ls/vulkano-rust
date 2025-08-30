@@ -1,14 +1,18 @@
 use crate::engine::graphics::model::Model;
 use crate::engine::graphics::renderer::DirectionalLight;
+use crate::engine::graphics::skybox::SkyboxImages;
 use nalgebra_glm::{look_at, pi, vec3};
 use sdl3::Sdl;
 use sdl3::event::{Event, WindowEvent};
 use sdl3::video::Window;
+use std::collections::HashSet;
 use vulkano::instance::Instance;
 use vulkano::sync;
 use vulkano::sync::GpuFuture;
 
 use crate::engine::graphics::renderer::{self, Renderer};
+
+const SENSITIVITY: f32 = 0.005;
 
 pub trait Game {
     fn on_init(&mut self);
@@ -65,7 +69,7 @@ impl<G: Game> Application<G> {
 
         let mut suzanne = Model::new("data/models/suzanne_2_material.glb").build();
         //let mut suzanne = Model::new("data/models/suzanne_base_color.glb").build();
-        suzanne.translate(vec3(0.0, 0.0, -3.0));
+        //suzanne.translate(vec3(0.0, 0.0, -3.0));
         suzanne.rotate(pi(), vec3(0.0, 0.0, 1.0));
 
         suzanne
@@ -73,12 +77,67 @@ impl<G: Game> Application<G> {
             .iter_mut()
             .for_each(|mesh| self.renderer.upload_mesh_to_gpu(mesh));
 
+        let skybox_images = SkyboxImages::new([
+            "data/skybox/vz_clear_right.png",
+            "data/skybox/vz_clear_left.png",
+            "data/skybox/vz_clear_up.png",
+            "data/skybox/vz_clear_down.png",
+            "data/skybox/vz_clear_front.png",
+            "data/skybox/vz_clear_back.png",
+        ]);
+
+        let mut skybox = self.renderer.upload_skybox(skybox_images);
+
+        //let pressed_mouse_buttons: std::collections::HashSet<sdl3::mouse::MouseButton>;
+        let mut pressed_mouse_buttons: HashSet<sdl3::mouse::MouseButton> = HashSet::new();
+        let mut yaw: f32 = 0.0;
+        let mut pitch: f32 = 0.0;
+        let mut radius: f32 = 5.0;
+        let scroll_strength = 0.5;
+        let mut center = vec3(0.0, 0.0, 0.0);
+
         let rotation_start = std::time::Instant::now();
 
         'running: loop {
             for event in event_pump.poll_iter() {
                 match event {
                     Event::Quit { .. } => break 'running,
+
+                    // Track mouse button presses and releases
+                    Event::MouseButtonDown { mouse_btn, .. } => {
+                        pressed_mouse_buttons.insert(mouse_btn);
+                    }
+
+                    Event::MouseButtonUp { mouse_btn, .. } => {
+                        pressed_mouse_buttons.remove(&mouse_btn);
+                    }
+
+                    // Handle mouse motion for camera control
+                    Event::MouseMotion { xrel, yrel, .. } => {
+                        let dx = xrel as f32;
+                        let dy = yrel as f32;
+
+                        if (dx != 0.0 || dy != 0.0)
+                            && pressed_mouse_buttons.contains(&sdl3::mouse::MouseButton::Right)
+                        {
+                            yaw += dx * SENSITIVITY;
+                            pitch += dy * SENSITIVITY;
+
+                            pitch = pitch.clamp(
+                                -std::f32::consts::FRAC_PI_2 + 0.01,
+                                std::f32::consts::FRAC_PI_2 - 0.01,
+                            );
+
+                            let eye = vec3(
+                                radius * pitch.cos() * yaw.sin(),
+                                radius * pitch.sin(),
+                                radius * pitch.cos() * yaw.cos(),
+                            );
+                            let up = vec3(0.0, 1.0, 0.0);
+                            let view = look_at(&eye, &center, &up);
+                            self.renderer.set_view(&view);
+                        }
+                    }
 
                     Event::Window { win_event, .. } => match win_event {
                         WindowEvent::Resized { .. } => {
@@ -117,6 +176,7 @@ impl<G: Game> Application<G> {
             self.renderer.geometry(&mut suzanne);
             self.renderer.ambient();
             self.renderer.directional(&directional_light);
+            self.renderer.skybox(&mut skybox);
             self.renderer.light_object(&directional_light);
             self.renderer.finish(&mut self.previous_frame_end);
 

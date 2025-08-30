@@ -8,11 +8,11 @@ bytemuck = "1.23.1"
 vulkano = "0.32.3"
 vulkano-shaders = "0.32.0"
 vulkano-win = "0.32.0"
-winit = "0.27.3"
 nalgebra-glm = "0.17.0"
-rapier3d = { version = "0.27.0", features = [ "simd-stable" ] }
+rapier3d = { version = "0.27.0", features = ["simd-stable"] }
 easy-gltf = "1.1.5"
 itertools = "0.14.0"
-sdl3 = { version = "=0.14.16", features = [ "build-from-source" ] }
+sdl3 = { version = "=0.14.16", features = ["build-from-source"] }
 ash = "0.37.0"
 shipyard = "0.9.0"
+image = "0.25.6"
