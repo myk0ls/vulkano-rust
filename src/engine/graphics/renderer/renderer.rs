@@ -61,7 +61,10 @@ use vulkano::instance::InstanceExtensions;
 
 use crate::{
     engine::{
-        assets::gltf_loader::{ColoredVertex, DummyVertex, NormalVertex},
+        assets::{
+            self,
+            gltf_loader::{ColoredVertex, DummyVertex, NormalVertex},
+        },
         core::application::{Application, Game},
         graphics::{
             mesh::Mesh,
@@ -69,6 +72,7 @@ use crate::{
             renderer::DirectionalLight,
             skybox::{Skybox, SkyboxImages},
         },
+        scene::components::transform::{self, Transform},
     },
     game::my_game::MyGame,
 };
@@ -786,7 +790,7 @@ impl Renderer {
         self.render_stage = RenderStage::Stopped;
     }
 
-    pub fn geometry(&mut self, model: &mut Model) {
+    pub fn geometry(&mut self, model: Arc<assets::asset_manager::Model>, transform: &Transform) {
         match self.render_stage {
             RenderStage::Deferred => {}
             RenderStage::NeedsRedraw => {
@@ -803,17 +807,19 @@ impl Renderer {
         }
 
         let model_subbuffer = {
-            let (model_mat, normal_mat) = model.model_matrices();
+            //let (model_mat, normal_mat) = model.model_matrices();
 
             let uniform_data = deferred_vert::ty::Model_Data {
-                model: model_mat.into(),
-                normals: normal_mat.into(),
+                //model: model_mat.into(),
+                //normals: normal_mat.into(),
+                model: transform.model_matrix().into(),
+                normals: transform.normal_matrix().into(),
             };
 
             self.model_uniform_buffer.from_data(uniform_data).unwrap()
         };
 
-        let (intensity, shininess) = model.specular();
+        //let (intensity, shininess) = model.specular();
         let specular_buffer = CpuAccessibleBuffer::from_data(
             &self.memory_allocator,
             BufferUsage {
@@ -822,13 +828,13 @@ impl Renderer {
             },
             false,
             deferred_frag::ty::Specular_Data {
-                intensity,
-                shininess,
+                intensity: 0.5,
+                shininess: 32.0,
             },
         )
         .unwrap();
 
-        for mesh in model.meshes_mut() {
+        for mesh in model.meshes.lock().unwrap().iter() {
             let model_layout = self
                 .deferred_pipeline
                 .layout()
@@ -843,7 +849,7 @@ impl Renderer {
                     WriteDescriptorSet::buffer(1, specular_buffer.clone()),
                     WriteDescriptorSet::image_view_sampler(
                         2,
-                        mesh.texture.as_mut().unwrap().clone(),
+                        mesh.texture.as_ref().unwrap().clone(),
                         self.sampler.clone(),
                     ),
                 ],

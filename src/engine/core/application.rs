@@ -1,7 +1,11 @@
+use crate::engine::assets;
+use crate::engine::assets::asset_manager::AssetManager;
 use crate::engine::graphics::model::Model;
 use crate::engine::graphics::renderer::DirectionalLight;
 use crate::engine::graphics::skybox::SkyboxImages;
 use crate::engine::scene::components::camera::Camera;
+use crate::engine::scene::components::object3d::Object3D;
+use crate::engine::scene::components::transform::Transform;
 use nalgebra_glm::{look_at, pi, vec3};
 use sdl3::Sdl;
 use sdl3::event::{Event, WindowEvent};
@@ -9,6 +13,7 @@ use sdl3::keyboard::Keycode;
 use sdl3::video::Window;
 use shipyard::{EntitiesViewMut, IntoIter, View, ViewMut, World};
 use std::collections::HashSet;
+use std::sync::Arc;
 use vulkano::instance::Instance;
 use vulkano::sync;
 use vulkano::sync::GpuFuture;
@@ -72,15 +77,18 @@ impl<G: Game> Application<G> {
         self.game.on_init();
         let mut event_pump = self.sdl.event_pump().unwrap();
 
-        let mut suzanne = Model::new("data/models/suzanne_2_material.glb").build();
+        //let mut suzanne = Model::new("data/models/suzanne_2_material.glb").build();
         //let mut suzanne = Model::new("data/models/suzanne_base_color.glb").build();
         //suzanne.translate(vec3(0.0, 0.0, -3.0));
-        suzanne.rotate(pi(), vec3(0.0, 0.0, 1.0));
 
-        suzanne
-            .meshes_mut()
-            .iter_mut()
-            .for_each(|mesh| self.renderer.upload_mesh_to_gpu(mesh));
+        //suzanne.rotate(pi(), vec3(0.0, 0.0, 1.0));
+
+        // suzanne
+        //     .meshes_mut()
+        //     .iter_mut()
+        //     .for_each(|mesh| self.renderer.upload_mesh_to_gpu(mesh));
+
+        self.upload_samplers_objects3D();
 
         let skybox_images = SkyboxImages::new([
             "data/skybox/vz_clear_right.png",
@@ -171,7 +179,8 @@ impl<G: Game> Application<G> {
             let directional_light = DirectionalLight::new([x, 0.0, z, 1.0], [1.0, 1.0, 1.0]);
 
             self.renderer.start();
-            self.renderer.geometry(&mut suzanne);
+            //self.renderer.geometry(&mut suzanne);
+            self.render_objects3d();
             self.renderer.ambient();
             self.renderer.directional(&directional_light);
             self.renderer.skybox(&mut skybox);
@@ -229,6 +238,36 @@ impl<G: Game> Application<G> {
                 let view = look_at(&camera.position, &target, &up);
                 self.renderer.set_view(&view);
                 break;
+            }
+        });
+    }
+
+    pub fn render_objects3d(&mut self) {
+        let world = self.game.get_world();
+        let mut asset_manager = world.get_unique::<&mut AssetManager>().unwrap();
+        world.run(|objects: View<Object3D>, transforms: View<Transform>| {
+            for (object, transform) in (&objects, &transforms).iter() {
+                if let Some(model) = asset_manager.get_model(&object.model) {
+                    self.renderer.geometry(model, &transform);
+                }
+            }
+        });
+    }
+
+    pub fn upload_samplers_objects3D(&mut self) {
+        let world = self.game.get_world();
+        let asset_manager = world.get_unique::<&mut AssetManager>().unwrap();
+        world.run(|mut objects: ViewMut<Object3D>| {
+            for object in (&mut objects).iter() {
+                if let Some(model) = asset_manager.get_model(&object.model) {
+                    println!("bedzionele turetu but ikeliama");
+                    model
+                        .meshes
+                        .lock()
+                        .unwrap()
+                        .iter_mut()
+                        .for_each(|m| self.renderer.upload_mesh_to_gpu(m));
+                }
             }
         });
     }

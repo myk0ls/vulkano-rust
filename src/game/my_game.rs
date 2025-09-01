@@ -1,4 +1,6 @@
+use crate::engine::assets::asset_manager::AssetManager;
 use crate::engine::input::input_manager::InputManager;
+use crate::engine::scene::components::object3d::Object3D;
 use sdl3::{event::Event, keyboard::Keycode};
 use shipyard::IntoIter;
 use shipyard::World;
@@ -33,11 +35,21 @@ impl Game for MyGame {
     fn on_init(&mut self) {
         println!("initialized!");
 
+        let assets = self.world.add_unique(AssetManager::new());
+        let input_manager = self.world.add_unique(InputManager::new());
+
+        let suzanne = {
+            let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
+            asset_manager.load_model("data/models/suzanne_2_material.glb")
+        };
+
         let player_entity =
             self.world
                 .add_entity((Camera::new(), Transform::new(), Velocity::new()));
 
-        let input_manager_entity = self.world.add_unique(InputManager::new());
+        let monkey_entity = &self
+            .world
+            .add_entity((Transform::new(), Object3D::with_model(suzanne)));
     }
 
     fn on_update(&mut self, _delta_time: f32) {
