@@ -1,10 +1,13 @@
 use crate::engine::graphics::model::Model;
 use crate::engine::graphics::renderer::DirectionalLight;
 use crate::engine::graphics::skybox::SkyboxImages;
+use crate::engine::scene::components::camera::Camera;
 use nalgebra_glm::{look_at, pi, vec3};
 use sdl3::Sdl;
 use sdl3::event::{Event, WindowEvent};
+use sdl3::keyboard::Keycode;
 use sdl3::video::Window;
+use shipyard::{EntitiesViewMut, IntoIter, View, ViewMut, World};
 use std::collections::HashSet;
 use vulkano::instance::Instance;
 use vulkano::sync;
@@ -19,6 +22,8 @@ pub trait Game {
     fn on_update(&mut self, delta_time: f32);
     fn on_render(&mut self);
     fn on_event(&mut self, event: &Event);
+    fn get_world(&self) -> &World;
+    fn get_world_mut(&mut self) -> &mut World;
 }
 
 pub struct Application<G: Game> {
@@ -98,10 +103,17 @@ impl<G: Game> Application<G> {
 
         let rotation_start = std::time::Instant::now();
 
+        self.sdl.mouse().set_relative_mouse_mode(&self.window, true);
+        self.sdl.mouse().show_cursor(false);
+
         'running: loop {
             for event in event_pump.poll_iter() {
                 match event {
-                    Event::Quit { .. } => break 'running,
+                    Event::Quit { .. }
+                    | Event::KeyDown {
+                        keycode: Some(Keycode::F8),
+                        ..
+                    } => break 'running,
 
                     // Track mouse button presses and releases
                     Event::MouseButtonDown { mouse_btn, .. } => {
@@ -118,24 +130,10 @@ impl<G: Game> Application<G> {
                         let dy = yrel as f32;
 
                         if (dx != 0.0 || dy != 0.0)
-                            && pressed_mouse_buttons.contains(&sdl3::mouse::MouseButton::Right)
+                        // && pressed_mouse_buttons.contains(&sdl3::mouse::MouseButton::Right)
                         {
-                            yaw += dx * SENSITIVITY;
-                            pitch += dy * SENSITIVITY;
-
-                            pitch = pitch.clamp(
-                                -std::f32::consts::FRAC_PI_2 + 0.01,
-                                std::f32::consts::FRAC_PI_2 - 0.01,
-                            );
-
-                            let eye = vec3(
-                                radius * pitch.cos() * yaw.sin(),
-                                radius * pitch.sin(),
-                                radius * pitch.cos() * yaw.cos(),
-                            );
-                            let up = vec3(0.0, 1.0, 0.0);
-                            let view = look_at(&eye, &center, &up);
-                            self.renderer.set_view(&view);
+                            self.update_camera_input(dx, dy);
+                            //self.update_camera_view();
                         }
                     }
 
@@ -180,7 +178,58 @@ impl<G: Game> Application<G> {
             self.renderer.light_object(&directional_light);
             self.renderer.finish(&mut self.previous_frame_end);
 
+            self.update_camera_view();
+
             // You’d later swap buffers here once you hook up Vulkano
         }
+    }
+
+    pub fn update_camera_input(&mut self, dx: f32, dy: f32) {
+        let world = self.game.get_world_mut();
+        world.run(|mut cameras: ViewMut<Camera>| {
+            for camera in (&mut cameras).iter().filter(|c| c.active) {
+                camera.yaw += dx * SENSITIVITY;
+                camera.pitch += dy * SENSITIVITY;
+
+                camera.pitch = camera.pitch.clamp(
+                    -std::f32::consts::FRAC_PI_2 + 0.01,
+                    std::f32::consts::FRAC_PI_2 - 0.01,
+                );
+            }
+        });
+    }
+
+    // pub fn update_camera_view(&mut self) {
+    //     let world = self.game.get_world();
+    //     world.run(|cameras: View<Camera>| {
+    //         for camera in cameras.iter().filter(|c| c.active) {
+    //             let center = vec3(0.0, 0.0, 0.0);
+
+    //             let eye = vec3(
+    //                 camera.radius * camera.pitch.cos() * camera.yaw.sin(),
+    //                 camera.radius * camera.pitch.sin(),
+    //                 camera.radius * camera.pitch.cos() * camera.yaw.cos(),
+    //             );
+
+    //             let up = vec3(0.0, 1.0, 0.0);
+    //             let view = look_at(&eye, &center, &up);
+    //             self.renderer.set_view(&view);
+    //         }
+    //     });
+    // }
+    pub fn update_camera_view(&mut self) {
+        let world = self.game.get_world();
+        world.run(|cameras: View<Camera>| {
+            for camera in cameras.iter().filter(|c| c.active) {
+                // FPS camera: look from position in the direction we're facing
+                let forward = camera.get_forward_vector();
+                let target = camera.position + forward; // Look ahead from our position
+                let up = vec3(0.0, 1.0, 0.0);
+
+                let view = look_at(&camera.position, &target, &up);
+                self.renderer.set_view(&view);
+                break;
+            }
+        });
     }
 }
