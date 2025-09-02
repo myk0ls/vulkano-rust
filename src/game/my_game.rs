@@ -1,10 +1,12 @@
 use crate::engine::assets::asset_manager::AssetManager;
 use crate::engine::input::input_manager::InputManager;
+use crate::engine::scene::components::delta_time::DeltaTime;
 use crate::engine::scene::components::object3d::Object3D;
+use nalgebra_glm::quarter_pi;
 use sdl3::{event::Event, keyboard::Keycode};
 use shipyard::IntoIter;
 use shipyard::World;
-use shipyard::{Unique, ViewMut};
+use shipyard::{Unique, View, ViewMut};
 use shipyard::{UniqueView, UniqueViewMut};
 
 use crate::engine::{
@@ -35,9 +37,6 @@ impl Game for MyGame {
     fn on_init(&mut self) {
         println!("initialized!");
 
-        let assets = self.world.add_unique(AssetManager::new());
-        let input_manager = self.world.add_unique(InputManager::new());
-
         let suzanne = {
             let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
             asset_manager.load_model("data/models/suzanne_2_material.glb")
@@ -49,13 +48,24 @@ impl Game for MyGame {
 
         let monkey_entity = &self
             .world
-            .add_entity((Transform::new(), Object3D::with_model(suzanne)));
+            .add_entity((Transform::new(), Object3D::with_model(suzanne.clone())));
+
+        let monkey_entity2 = &self.world.add_entity((
+            Transform::with_pos(vec3(0.0, 0.0, 2.0)),
+            Object3D::with_model(suzanne.clone()),
+        ));
+
+        let monkey_entity3 = &self.world.add_entity((
+            Transform::with_pos(vec3(0.0, 0.0, 4.0)),
+            Object3D::with_model(suzanne),
+        ));
     }
 
     fn on_update(&mut self, _delta_time: f32) {
         //println!("Updating game logic: {delta_time}s");
 
         self.world.run(camera_movement);
+        self.world.run(move_suzanne);
     }
 
     fn on_render(&mut self) {
@@ -65,24 +75,6 @@ impl Game for MyGame {
     fn on_event(&mut self, event: &Event) {
         let mut input_manager = self.world.get_unique::<&mut InputManager>().unwrap();
 
-        match event {
-            Event::KeyDown { keycode, .. } => {
-                input_manager.pressed_keys.insert(keycode.unwrap());
-            }
-            Event::KeyUp { keycode, .. } => {
-                input_manager.pressed_keys.remove(&keycode.unwrap());
-            }
-            Event::MouseButtonDown { mouse_btn, .. } => {
-                input_manager
-                    .pressed_mouse_buttons
-                    .insert(mouse_btn.to_owned());
-            }
-            Event::MouseButtonUp { mouse_btn, .. } => {
-                input_manager.pressed_mouse_buttons.remove(&mouse_btn);
-            }
-
-            _ => {}
-        }
         input_manager
             .pressed_keys
             .iter()
@@ -122,5 +114,19 @@ pub fn camera_movement(mut cameras: ViewMut<Camera>, input_manager: UniqueView<I
             movement = movement.normalize();
             camera.position += movement * MOVE_SPEED;
         }
+    }
+}
+
+pub fn move_suzanne(
+    object3ds: View<Object3D>,
+    mut transforms: ViewMut<Transform>,
+    dt: UniqueView<DeltaTime>,
+) {
+    let rotation_speed = std::f32::consts::FRAC_PI_2; // 90°/sec
+    let angle = rotation_speed * dt.0;
+
+    for (object, mut transform) in (&object3ds, &mut transforms).iter() {
+        transform.rotate(angle, vec3(0.0, 0.0, 1.0));
+        //println!("Monkey position: {:?}", transform.position);
     }
 }

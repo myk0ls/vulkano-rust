@@ -3,7 +3,9 @@ use crate::engine::assets::asset_manager::AssetManager;
 use crate::engine::graphics::model::Model;
 use crate::engine::graphics::renderer::DirectionalLight;
 use crate::engine::graphics::skybox::SkyboxImages;
+use crate::engine::input::input_manager::InputManager;
 use crate::engine::scene::components::camera::Camera;
+use crate::engine::scene::components::delta_time::DeltaTime;
 use crate::engine::scene::components::object3d::Object3D;
 use crate::engine::scene::components::transform::Transform;
 use nalgebra_glm::{look_at, pi, vec3};
@@ -74,21 +76,14 @@ impl<G: Game> Application<G> {
     }
 
     pub fn run(mut self) {
+        self.game.get_world_mut().add_unique(AssetManager::new());
+        self.game.get_world_mut().add_unique(InputManager::new());
+
         self.game.on_init();
         let mut event_pump = self.sdl.event_pump().unwrap();
 
-        //let mut suzanne = Model::new("data/models/suzanne_2_material.glb").build();
-        //let mut suzanne = Model::new("data/models/suzanne_base_color.glb").build();
-        //suzanne.translate(vec3(0.0, 0.0, -3.0));
-
-        //suzanne.rotate(pi(), vec3(0.0, 0.0, 1.0));
-
-        // suzanne
-        //     .meshes_mut()
-        //     .iter_mut()
-        //     .for_each(|mesh| self.renderer.upload_mesh_to_gpu(mesh));
-
-        self.upload_samplers_objects3D();
+        //uploads all the object3d samplers before the real operation
+        self.upload_samplers_objects3d();
 
         let skybox_images = SkyboxImages::new([
             "data/skybox/vz_clear_right.png",
@@ -100,14 +95,6 @@ impl<G: Game> Application<G> {
         ]);
 
         let mut skybox = self.renderer.upload_skybox(skybox_images);
-
-        //let pressed_mouse_buttons: std::collections::HashSet<sdl3::mouse::MouseButton>;
-        let mut pressed_mouse_buttons: HashSet<sdl3::mouse::MouseButton> = HashSet::new();
-        let mut yaw: f32 = 0.0;
-        let mut pitch: f32 = 0.0;
-        let mut radius: f32 = 5.0;
-        let scroll_strength = 0.5;
-        let mut center = vec3(0.0, 0.0, 0.0);
 
         let rotation_start = std::time::Instant::now();
 
@@ -123,13 +110,43 @@ impl<G: Game> Application<G> {
                         ..
                     } => break 'running,
 
-                    // Track mouse button presses and releases
-                    Event::MouseButtonDown { mouse_btn, .. } => {
-                        pressed_mouse_buttons.insert(mouse_btn);
-                    }
+                    Event::KeyDown { keycode, .. } => {
+                        let mut input_manager = self
+                            .game
+                            .get_world_mut()
+                            .get_unique::<&mut InputManager>()
+                            .unwrap();
 
+                        input_manager.pressed_keys.insert(keycode.unwrap());
+                    }
+                    Event::KeyUp { keycode, .. } => {
+                        let mut input_manager = self
+                            .game
+                            .get_world_mut()
+                            .get_unique::<&mut InputManager>()
+                            .unwrap();
+
+                        input_manager.pressed_keys.remove(&keycode.unwrap());
+                    }
+                    Event::MouseButtonDown { mouse_btn, .. } => {
+                        let mut input_manager = self
+                            .game
+                            .get_world_mut()
+                            .get_unique::<&mut InputManager>()
+                            .unwrap();
+
+                        input_manager
+                            .pressed_mouse_buttons
+                            .insert(mouse_btn.to_owned());
+                    }
                     Event::MouseButtonUp { mouse_btn, .. } => {
-                        pressed_mouse_buttons.remove(&mouse_btn);
+                        let mut input_manager = self
+                            .game
+                            .get_world_mut()
+                            .get_unique::<&mut InputManager>()
+                            .unwrap();
+
+                        input_manager.pressed_mouse_buttons.remove(&mouse_btn);
                     }
 
                     // Handle mouse motion for camera control
@@ -159,6 +176,9 @@ impl<G: Game> Application<G> {
             // Time delta
             let dt = self.last_frame.elapsed().as_secs_f32();
             self.last_frame = std::time::Instant::now();
+
+            //adds deltatime component
+            self.game.get_world().add_unique(DeltaTime(dt));
 
             self.game.on_update(dt);
             self.game.on_render();
@@ -208,24 +228,6 @@ impl<G: Game> Application<G> {
         });
     }
 
-    // pub fn update_camera_view(&mut self) {
-    //     let world = self.game.get_world();
-    //     world.run(|cameras: View<Camera>| {
-    //         for camera in cameras.iter().filter(|c| c.active) {
-    //             let center = vec3(0.0, 0.0, 0.0);
-
-    //             let eye = vec3(
-    //                 camera.radius * camera.pitch.cos() * camera.yaw.sin(),
-    //                 camera.radius * camera.pitch.sin(),
-    //                 camera.radius * camera.pitch.cos() * camera.yaw.cos(),
-    //             );
-
-    //             let up = vec3(0.0, 1.0, 0.0);
-    //             let view = look_at(&eye, &center, &up);
-    //             self.renderer.set_view(&view);
-    //         }
-    //     });
-    // }
     pub fn update_camera_view(&mut self) {
         let world = self.game.get_world();
         world.run(|cameras: View<Camera>| {
@@ -245,26 +247,26 @@ impl<G: Game> Application<G> {
     pub fn render_objects3d(&mut self) {
         let world = self.game.get_world();
         let mut asset_manager = world.get_unique::<&mut AssetManager>().unwrap();
+
         world.run(|objects: View<Object3D>, transforms: View<Transform>| {
             for (object, transform) in (&objects, &transforms).iter() {
-                if let Some(model) = asset_manager.get_model(&object.model) {
+                if let Some(model) = asset_manager.get_model_mut(&object.model) {
                     self.renderer.geometry(model, &transform);
                 }
             }
         });
     }
 
-    pub fn upload_samplers_objects3D(&mut self) {
+    pub fn upload_samplers_objects3d(&mut self) {
         let world = self.game.get_world();
-        let asset_manager = world.get_unique::<&mut AssetManager>().unwrap();
+        let mut asset_manager = world.get_unique::<&mut AssetManager>().unwrap();
+
         world.run(|mut objects: ViewMut<Object3D>| {
             for object in (&mut objects).iter() {
-                if let Some(model) = asset_manager.get_model(&object.model) {
+                if let Some(model) = asset_manager.get_model_mut(&object.model) {
                     println!("bedzionele turetu but ikeliama");
                     model
                         .meshes
-                        .lock()
-                        .unwrap()
                         .iter_mut()
                         .for_each(|m| self.renderer.upload_mesh_to_gpu(m));
                 }

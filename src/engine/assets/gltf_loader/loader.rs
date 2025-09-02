@@ -38,6 +38,9 @@ impl LoaderGLTF {
                 indices: model.indices().unwrap().clone(),
                 material: model.material(),
                 texture: None,
+                vertex_buffer: None,
+                index_buffer: None,
+                persist_desc_set: None,
             };
             ret.push(mesh_data);
         }

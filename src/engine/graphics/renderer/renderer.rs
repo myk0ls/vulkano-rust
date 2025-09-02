@@ -790,7 +790,7 @@ impl Renderer {
         self.render_stage = RenderStage::Stopped;
     }
 
-    pub fn geometry(&mut self, model: Arc<assets::asset_manager::Model>, transform: &Transform) {
+    pub fn geometry(&mut self, model: &mut assets::asset_manager::Model, transform: &Transform) {
         match self.render_stage {
             RenderStage::Deferred => {}
             RenderStage::NeedsRedraw => {
@@ -834,7 +834,7 @@ impl Renderer {
         )
         .unwrap();
 
-        for mesh in model.meshes.lock().unwrap().iter() {
+        for mesh in model.meshes.iter() {
             let model_layout = self
                 .deferred_pipeline
                 .layout()
@@ -1463,6 +1463,8 @@ impl Renderer {
             .unwrap();
 
         mesh.texture = Some(gpu_texture);
+
+        //vertex,index,persistendescset
     }
 
     pub fn upload_skybox(&self, skybox_images: SkyboxImages) -> Skybox {

@@ -11,7 +11,7 @@ use crate::engine::graphics::mesh::Mesh;
 use std::sync::{Arc, Mutex};
 
 pub struct Model {
-    pub meshes: Mutex<Vec<Mesh>>,
+    pub meshes: Vec<Mesh>,
 }
 
 impl Model {
@@ -27,7 +27,7 @@ pub struct AssetHandle {
 
 #[derive(Unique, Component)]
 pub struct AssetManager {
-    models: HashMap<String, Arc<Model>>,
+    models: HashMap<String, Model>,
 }
 
 impl AssetManager {
@@ -41,11 +41,10 @@ impl AssetManager {
         if !self.models.contains_key(filepath) {
             let loader = LoaderGLTF::new(filepath, [0.0, 0.0, 0.0]);
             let new_model = Model {
-                meshes: Mutex::new(loader.get_meshes()),
+                meshes: loader.get_meshes(),
             };
 
-            self.models
-                .insert(filepath.to_string(), Arc::new(new_model));
+            self.models.insert(filepath.to_string(), new_model);
         }
 
         AssetHandle {
@@ -53,7 +52,11 @@ impl AssetManager {
         }
     }
 
-    pub fn get_model(&self, handle: &AssetHandle) -> Option<Arc<Model>> {
-        self.models.get(&handle.id).cloned()
+    pub fn get_model(&self, handle: &AssetHandle) -> Option<&Model> {
+        self.models.get(&handle.id)
+    }
+
+    pub fn get_model_mut(&mut self, handle: &AssetHandle) -> Option<&mut Model> {
+        self.models.get_mut(&handle.id)
     }
 }
