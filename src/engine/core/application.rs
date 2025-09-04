@@ -204,7 +204,7 @@ impl<G: Game> Application<G> {
             self.renderer.ambient();
             self.renderer.directional(&directional_light);
             self.renderer.skybox(&mut skybox);
-            self.renderer.light_object(&directional_light);
+            //self.renderer.light_object(&directional_light);
             self.renderer.finish(&mut self.previous_frame_end);
 
             self.update_camera_view();

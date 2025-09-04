@@ -49,6 +49,8 @@ use vulkano::{
     sync::{self, FlushError, GpuFuture},
 };
 
+use vulkano::buffer::BufferContents;
+
 use ash::vk::{self, ImageCreateInfo, ImageUsageFlags};
 
 use vulkano::command_buffer::PrimaryCommandBufferAbstract;
@@ -207,7 +209,7 @@ pub struct Renderer {
     descriptor_set_allocator: StandardDescriptorSetAllocator,
     pub command_buffer_allocator: StandardCommandBufferAllocator,
     vp_buffer: Arc<CpuAccessibleBuffer<deferred_vert::ty::VP_Data>>,
-    model_uniform_buffer: CpuBufferPool<deferred_vert::ty::Model_Data>,
+    //model_uniform_buffer: CpuBufferPool<deferred_vert::ty::Model_Data>,
     ambient_buffer: Arc<CpuAccessibleBuffer<ambient_frag::ty::Ambient_Data>>,
     directional_buffer: CpuBufferPool<directional_frag::ty::Directional_Light_Data>,
     frag_location_buffer: Arc<ImageView<AttachmentImage>>,
@@ -555,8 +557,8 @@ impl Renderer {
         )
         .unwrap();
 
-        let model_uniform_buffer: CpuBufferPool<deferred_vert::ty::Model_Data> =
-            CpuBufferPool::uniform_buffer(memory_allocator.clone());
+        // let model_uniform_buffer: CpuBufferPool<deferred_vert::ty::Model_Data> =
+        //     CpuBufferPool::uniform_buffer(memory_allocator.clone());
 
         let ambient_buffer = CpuAccessibleBuffer::from_data(
             &memory_allocator,
@@ -638,7 +640,7 @@ impl Renderer {
             descriptor_set_allocator,
             command_buffer_allocator,
             vp_buffer,
-            model_uniform_buffer,
+            //model_uniform_buffer,
             ambient_buffer,
             directional_buffer,
             frag_location_buffer,
@@ -806,94 +808,47 @@ impl Renderer {
             }
         }
 
-        let model_subbuffer = {
-            //let (model_mat, normal_mat) = model.model_matrices();
+        // let model_subbuffer = {
+        //     //let (model_mat, normal_mat) = model.model_matrices();
 
-            let uniform_data = deferred_vert::ty::Model_Data {
-                //model: model_mat.into(),
-                //normals: normal_mat.into(),
-                model: transform.model_matrix().into(),
-                normals: transform.normal_matrix().into(),
-            };
+        //     let uniform_data = deferred_vert::ty::Model_Data {
+        //         //model: model_mat.into(),
+        //         //normals: normal_mat.into(),
+        //         model: transform.model_matrix().into(),
+        //         normals: transform.normal_matrix().into(),
+        //     };
 
-            self.model_uniform_buffer.from_data(uniform_data).unwrap()
+        //     self.model_uniform_buffer.from_data(uniform_data).unwrap()
+        // };
+
+        let push_constants = deferred_vert::ty::PushConstants {
+            model: transform.model_matrix().into(),
+            normals: transform.normal_matrix().into(),
         };
 
-        //let (intensity, shininess) = model.specular();
-        let specular_buffer = CpuAccessibleBuffer::from_data(
-            &self.memory_allocator,
-            BufferUsage {
-                uniform_buffer: true,
-                ..BufferUsage::empty()
-            },
-            false,
-            deferred_frag::ty::Specular_Data {
-                intensity: 0.5,
-                shininess: 32.0,
-            },
-        )
-        .unwrap();
+        //let transform_matrices = BufferContents {};
 
         for mesh in model.meshes.iter() {
-            let model_layout = self
-                .deferred_pipeline
-                .layout()
-                .set_layouts()
-                .get(1)
-                .unwrap();
-            let model_set = PersistentDescriptorSet::new(
-                &self.descriptor_set_allocator,
-                model_layout.clone(),
-                [
-                    WriteDescriptorSet::buffer(0, model_subbuffer.clone()),
-                    WriteDescriptorSet::buffer(1, specular_buffer.clone()),
-                    WriteDescriptorSet::image_view_sampler(
-                        2,
-                        mesh.texture.as_ref().unwrap().clone(),
-                        self.sampler.clone(),
-                    ),
-                ],
-            )
-            .unwrap();
-
-            let vertex_buffer = CpuAccessibleBuffer::from_iter(
-                &self.memory_allocator,
-                BufferUsage {
-                    vertex_buffer: true,
-                    ..BufferUsage::empty()
-                },
-                false,
-                mesh.vertices.iter().cloned(),
-            )
-            .unwrap();
-
-            let index_buffer = CpuAccessibleBuffer::from_iter(
-                &self.memory_allocator,
-                BufferUsage {
-                    index_buffer: true,
-                    ..BufferUsage::empty()
-                },
-                false,
-                mesh.indices.iter().cloned(),
-            )
-            .unwrap();
-
             self.commands
                 .as_mut()
                 .unwrap()
                 .set_viewport(0, [self.viewport.clone()])
                 .bind_pipeline_graphics(self.deferred_pipeline.clone())
+                .push_constants(self.deferred_pipeline.layout().clone(), 0, push_constants)
                 .bind_descriptor_sets(
                     PipelineBindPoint::Graphics,
                     self.deferred_pipeline.layout().clone(),
                     0,
-                    (self.vp_set.clone(), model_set.clone()),
+                    (
+                        self.vp_set.clone(),
+                        mesh.persist_desc_set.as_ref().unwrap().clone(),
+                    ),
                 )
-                .bind_vertex_buffers(0, vertex_buffer.clone())
+                .bind_vertex_buffers(0, mesh.vertex_buffer.as_ref().unwrap().clone())
                 //.draw(vertex_buffer.len() as u32, 1, 0, 0)
-                .bind_index_buffer(index_buffer.clone())
+                .bind_index_buffer(mesh.index_buffer.as_ref().unwrap().clone())
                 //.draw_indexed(index_count, instance_count, first_index, vertex_offset, first_instance)
-                .draw_indexed(index_buffer.len() as u32, 1, 0, 0, 0)
+                .draw_indexed(mesh.index_buffer.as_ref().unwrap().len() as u32, 1, 0, 0, 0)
                 .unwrap();
         }
     }
@@ -1122,15 +1077,20 @@ impl Renderer {
 
         model.translate(directional_light.get_position());
 
-        let model_subbuffer = {
-            let (model_mat, normal_mat) = model.model_matrices();
+        // let model_subbuffer = {
+        //     let (model_mat, normal_mat) = model.model_matrices();
 
-            let uniform_data = deferred_vert::ty::Model_Data {
-                model: model_mat.into(),
-                normals: normal_mat.into(),
-            };
+        //     let uniform_data = deferred_vert::ty::Model_Data {
+        //         model: model_mat.into(),
+        //         normals: normal_mat.into(),
+        //     };
 
-            self.model_uniform_buffer.from_data(uniform_data).unwrap()
+        //     self.model_uniform_buffer.from_data(uniform_data).unwrap()
+        // };
+        let (model_mat, normal_mat) = model.model_matrices();
+        let push_constants = light_obj_vert::ty::PushConstants {
+            model: model_mat.into(),
+            normals: normal_mat.into(),
         };
 
         let model_layout = self
@@ -1142,7 +1102,8 @@ impl Renderer {
         let model_set = PersistentDescriptorSet::new(
             &self.descriptor_set_allocator,
             model_layout.clone(),
-            [WriteDescriptorSet::buffer(0, model_subbuffer.clone())],
+            //[WriteDescriptorSet::buffer(0, model_subbuffer.clone())],
+            [],
         )
         .unwrap();
 
@@ -1162,6 +1123,7 @@ impl Renderer {
             .as_mut()
             .unwrap()
             .bind_pipeline_graphics(self.light_obj_pipeline.clone())
+            .push_constants(self.light_obj_pipeline.layout().clone(), 0, push_constants)
             .bind_descriptor_sets(
                 PipelineBindPoint::Graphics,
                 self.light_obj_pipeline.layout().clone(),
@@ -1465,6 +1427,67 @@ impl Renderer {
         mesh.texture = Some(gpu_texture);
 
         //vertex,index,persistendescset
+
+        let vertex_buffer = CpuAccessibleBuffer::from_iter(
+            &self.memory_allocator,
+            BufferUsage {
+                vertex_buffer: true,
+                ..BufferUsage::empty()
+            },
+            false,
+            mesh.vertices.iter().cloned(),
+        )
+        .unwrap();
+
+        let index_buffer = CpuAccessibleBuffer::from_iter(
+            &self.memory_allocator,
+            BufferUsage {
+                index_buffer: true,
+                ..BufferUsage::empty()
+            },
+            false,
+            mesh.indices.iter().cloned(),
+        )
+        .unwrap();
+
+        mesh.vertex_buffer = Some(vertex_buffer);
+        mesh.index_buffer = Some(index_buffer);
+
+        let specular_buffer = CpuAccessibleBuffer::from_data(
+            &self.memory_allocator,
+            BufferUsage {
+                uniform_buffer: true,
+                ..BufferUsage::empty()
+            },
+            false,
+            deferred_frag::ty::Specular_Data {
+                intensity: 0.5,
+                shininess: 32.0,
+            },
+        )
+        .unwrap();
+
+        let model_layout = self
+            .deferred_pipeline
+            .layout()
+            .set_layouts()
+            .get(1)
+            .unwrap();
+        let model_set = PersistentDescriptorSet::new(
+            &self.descriptor_set_allocator,
+            model_layout.clone(),
+            [
+                WriteDescriptorSet::buffer(1, specular_buffer.clone()),
+                WriteDescriptorSet::image_view_sampler(
+                    2,
+                    mesh.texture.as_ref().unwrap().clone(),
+                    self.sampler.clone(),
+                ),
+            ],
+        )
+        .unwrap();
+
+        mesh.persist_desc_set = Some(model_set);
     }
 
     pub fn upload_skybox(&self, skybox_images: SkyboxImages) -> Skybox {

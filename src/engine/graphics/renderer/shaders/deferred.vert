@@ -15,7 +15,12 @@ layout(set = 0, binding = 0) uniform VP_Data {
     mat4 projection;
 } vp_uniforms;
 
-layout(set = 1, binding = 0) uniform Model_Data {
+// layout(set = 1, binding = 0) uniform Model_Data {
+//     mat4 model;
+//     mat4 normals;
+// } model;
+
+layout(push_constant) uniform PushConstants {
     mat4 model;
     mat4 normals;
 } model;
