@@ -808,25 +808,10 @@ impl Renderer {
             }
         }
 
-        // let model_subbuffer = {
-        //     //let (model_mat, normal_mat) = model.model_matrices();
-
-        //     let uniform_data = deferred_vert::ty::Model_Data {
-        //         //model: model_mat.into(),
-        //         //normals: normal_mat.into(),
-        //         model: transform.model_matrix().into(),
-        //         normals: transform.normal_matrix().into(),
-        //     };
-
-        //     self.model_uniform_buffer.from_data(uniform_data).unwrap()
-        // };
-
         let push_constants = deferred_vert::ty::PushConstants {
             model: transform.model_matrix().into(),
             normals: transform.normal_matrix().into(),
         };
-
-        //let transform_matrices = BufferContents {};
 
         for mesh in model.meshes.iter() {
             self.commands
