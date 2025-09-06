@@ -17,7 +17,7 @@ use vulkano::{
         PersistentDescriptorSet, WriteDescriptorSet, allocator::StandardDescriptorSetAllocator,
     },
     device::{
-        Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo,
+        Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags,
         physical::PhysicalDeviceType,
     },
     format::Format,
@@ -87,11 +87,6 @@ mod deferred_vert {
     vulkano_shaders::shader! {
         ty: "vertex",
         path: "src/engine/graphics/renderer/shaders/deferred.vert",
-        types_meta: {
-            use bytemuck::{Pod, Zeroable};
-
-            #[derive(Clone, Copy, Zeroable, Pod)]
-        },
     }
 }
 
@@ -99,11 +94,6 @@ mod deferred_frag {
     vulkano_shaders::shader! {
         ty: "fragment",
         path: "src/engine/graphics/renderer/shaders/deferred.frag",
-        types_meta: {
-            use bytemuck::{Pod, Zeroable};
-
-            #[derive(Clone, Copy, Zeroable, Pod)]
-        },
     }
 }
 
@@ -118,11 +108,6 @@ mod directional_frag {
     vulkano_shaders::shader! {
         ty: "fragment",
         path: "src/engine/graphics/renderer/shaders/directional.frag",
-        types_meta: {
-            use bytemuck::{Pod, Zeroable};
-
-            #[derive(Clone, Copy, Zeroable, Pod)]
-        },
     }
 }
 
@@ -137,11 +122,6 @@ mod ambient_frag {
     vulkano_shaders::shader! {
         ty: "fragment",
         path: "src/engine/graphics/renderer/shaders/ambient.frag",
-        types_meta: {
-            use bytemuck::{Pod, Zeroable};
-
-            #[derive(Clone, Copy, Zeroable, Pod)]
-        },
     }
 }
 
@@ -149,11 +129,6 @@ mod light_obj_vert {
     vulkano_shaders::shader! {
         ty: "vertex",
         path: "src/engine/graphics/renderer/shaders/light_obj.vert",
-        types_meta: {
-            use bytemuck::{Pod, Zeroable};
-
-            #[derive(Clone, Copy, Zeroable, Pod)]
-        },
     }
 }
 
@@ -168,11 +143,6 @@ mod skybox_vert {
     vulkano_shaders::shader! {
         ty: "vertex",
         path: "src/engine/graphics/renderer/shaders/skybox.vert",
-        types_meta: {
-            use bytemuck::{Pod, Zeroable};
-
-            #[derive(Clone, Copy, Zeroable, Pod)]
-        },
     }
 }
 
@@ -180,11 +150,6 @@ mod skybox_frag {
     vulkano_shaders::shader! {
         ty: "fragment",
         path: "src/engine/graphics/renderer/shaders/skybox.frag",
-        types_meta: {
-            use bytemuck::{Pod, Zeroable};
-
-            #[derive(Clone, Copy, Zeroable, Pod)]
-        },
     }
 }
 
@@ -208,10 +173,10 @@ pub struct Renderer {
     pub memory_allocator: Arc<StandardMemoryAllocator>,
     descriptor_set_allocator: StandardDescriptorSetAllocator,
     pub command_buffer_allocator: StandardCommandBufferAllocator,
-    vp_buffer: Arc<CpuAccessibleBuffer<deferred_vert::ty::VP_Data>>,
+    vp_buffer: Arc<CpuAccessibleBuffer<deferred_vert::VP_Data>>,
     //model_uniform_buffer: CpuBufferPool<deferred_vert::ty::Model_Data>,
-    ambient_buffer: Arc<CpuAccessibleBuffer<ambient_frag::ty::Ambient_Data>>,
-    directional_buffer: CpuBufferPool<directional_frag::ty::Directional_Light_Data>,
+    ambient_buffer: Arc<CpuAccessibleBuffer<ambient_frag::Ambient_Data>>,
+    directional_buffer: CpuBufferPool<directional_frag::Directional_Light_Data>,
     frag_location_buffer: Arc<ImageView<AttachmentImage>>,
     specular_buffer: Arc<ImageView<AttachmentImage>>,
     sampler: Arc<Sampler>,
@@ -300,6 +265,8 @@ impl Renderer {
             ..DeviceExtensions::empty()
         };
 
+        //let device_features = BindlessContext::required_features(&instance);
+
         let (physical_device, queue_family_index) = instance
             .enumerate_physical_devices()
             .unwrap()
@@ -310,7 +277,7 @@ impl Renderer {
                     .enumerate()
                     .position(|(i, q)| {
                         // pick first queue_familiy_index that handles graphics and can draw on the surface created by winit
-                        q.queue_flags.graphics
+                        q.queue_flags.intersects(QueueFlags::GRAPHICS)
                             && p.surface_support(i as u32, &surface).unwrap_or(false)
                     })
                     .map(|i| (p, i as u32))
