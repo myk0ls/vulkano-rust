@@ -1,7 +1,10 @@
-use std::{mem, sync::Arc};
+use std::{mem, slice, sync::Arc};
 
 use nalgebra_glm::{TMat4, TVec3, half_pi, identity, inverse, perspective, vec3};
 use sdl3::video::Window;
+use vulkano::buffer::allocator::{SubbufferAllocator, SubbufferAllocatorCreateInfo};
+use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
+use vulkano::pipeline::PipelineShaderStageCreateInfo;
 use vulkano::{
     Handle, Version, VulkanLibrary, VulkanObject,
     buffer::{
@@ -14,7 +17,8 @@ use vulkano::{
         allocator::StandardCommandBufferAllocator,
     },
     descriptor_set::{
-        PersistentDescriptorSet, WriteDescriptorSet, allocator::StandardDescriptorSetAllocator,
+        PersistentDescriptorSet, WriteDescriptorSet,
+        allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo},
     },
     device::{
         Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags,
@@ -30,15 +34,20 @@ use vulkano::{
     library,
     memory::allocator::StandardMemoryAllocator,
     pipeline::{
-        GraphicsPipeline, Pipeline, PipelineBindPoint, StateMode,
+        GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineLayout, StateMode,
         graphics::{
-            color_blend::{AttachmentBlend, BlendFactor, BlendOp, ColorBlendState},
+            GraphicsPipelineCreateInfo,
+            color_blend::{
+                AttachmentBlend, BlendFactor, BlendOp, ColorBlendAttachmentState, ColorBlendState,
+            },
             depth_stencil::{CompareOp, DepthBoundsState, DepthState, DepthStencilState},
             input_assembly::InputAssemblyState,
+            multisample::MultisampleState,
             rasterization::{CullMode, RasterizationState},
-            vertex_input::BuffersDefinition,
+            vertex_input::{BuffersDefinition, Vertex, VertexDefinition},
             viewport::{Viewport, ViewportState},
         },
+        layout::PipelineDescriptorSetLayoutCreateInfo,
     },
     render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass},
     sampler::{Filter, Sampler, SamplerAddressMode, SamplerCreateInfo, SamplerMipmapMode},
@@ -49,17 +58,19 @@ use vulkano::{
     sync::{self, FlushError, GpuFuture},
 };
 
-use vulkano::buffer::BufferContents;
+use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, Subbuffer};
 
 use ash::vk::{self, ImageCreateInfo, ImageUsageFlags};
 
-use vulkano::command_buffer::PrimaryCommandBufferAbstract;
+use vulkano::command_buffer::{PrimaryCommandBufferAbstract, SubpassBeginInfo, SubpassEndInfo};
 
 use vulkano::swapchain::acquire_next_image;
 
 use vulkano_win::{VkSurfaceBuild, required_extensions};
 
 use vulkano::instance::InstanceExtensions;
+
+use smallvec::smallvec;
 
 use crate::{
     engine::{
@@ -172,11 +183,11 @@ pub struct Renderer {
     swapchain: Arc<Swapchain>,
     pub memory_allocator: Arc<StandardMemoryAllocator>,
     descriptor_set_allocator: StandardDescriptorSetAllocator,
-    pub command_buffer_allocator: StandardCommandBufferAllocator,
+    pub command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     vp_buffer: Arc<CpuAccessibleBuffer<deferred_vert::VP_Data>>,
     //model_uniform_buffer: CpuBufferPool<deferred_vert::ty::Model_Data>,
     ambient_buffer: Arc<CpuAccessibleBuffer<ambient_frag::Ambient_Data>>,
-    directional_buffer: CpuBufferPool<directional_frag::Directional_Light_Data>,
+    directional_subbuffer: Subbuffer<directional_frag::Directional_Light_Data>,
     frag_location_buffer: Arc<ImageView<AttachmentImage>>,
     specular_buffer: Arc<ImageView<AttachmentImage>>,
     sampler: Arc<Sampler>,
@@ -319,7 +330,7 @@ impl Renderer {
                 .unwrap();
 
             let usage = caps.supported_usage_flags;
-            let alpha = caps.supported_composite_alpha.iter().next().unwrap();
+            let alpha = caps.supported_composite_alpha.into_iter().next().unwrap();
 
             let image_format = Some(
                 device
@@ -339,7 +350,7 @@ impl Renderer {
                 surface.clone(),
                 SwapchainCreateInfo {
                     min_image_count: caps.min_image_count,
-                    image_format,
+                    image_format: image_format.unwrap(),
                     image_extent,
                     image_usage: usage,
                     composite_alpha: alpha,
@@ -350,9 +361,12 @@ impl Renderer {
         };
 
         let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
-        let descriptor_set_allocator = StandardDescriptorSetAllocator::new(device.clone());
-        let command_buffer_allocator =
-            StandardCommandBufferAllocator::new(device.clone(), Default::default());
+        let descriptor_set_allocator =
+            StandardDescriptorSetAllocator::new(device.clone(), Default::default());
+        let command_buffer_allocator = Arc::new(StandardCommandBufferAllocator::new(
+            device.clone(),
+            Default::default(),
+        ));
 
         let deferred_vert = deferred_vert::load(device.clone()).unwrap();
         let deferred_frag = deferred_frag::load(device.clone()).unwrap();
@@ -368,40 +382,40 @@ impl Renderer {
         let render_pass = vulkano::ordered_passes_renderpass!(device.clone(),
             attachments: {
                 final_color: {
-                    load: Clear,
-                    store: Store,
                     format: swapchain.image_format(),
                     samples: 1,
+                    load_op: Clear,
+                    store_op: Store,
                 },
                 color: {
-                    load: Clear,
-                    store: DontCare,
                     format: Format::A2B10G10R10_UNORM_PACK32,
                     samples: 1,
+                    load_op: Clear,
+                    store_op: DontCare,
                 },
                 normals: {
-                    load: Clear,
-                    store: DontCare,
                     format: Format::R16G16B16A16_SFLOAT,
                     samples: 1,
+                    load_op: Clear,
+                    store_op: DontCare,
                 },
                 frag_location: {
-                    load: Clear,
-                    store: DontCare,
                     format: Format::R16G16B16A16_SFLOAT,
                     samples: 1,
+                    load_op: Clear,
+                    store_op: DontCare,
                 },
                 specular: {
-                    load: Clear,
-                    store: DontCare,
                     format: Format::R16G16_SFLOAT,
                     samples: 1,
+                    load_op: Clear,
+                    store_op: DontCare,
                 },
                 depth: {
-                    load: Clear,
-                    store: DontCare,
                     format: Format::D16_UNORM,
                     samples: 1,
+                    load_op: Clear,
+                    store_op: DontCare,
                 }
             },
             passes: [
@@ -419,105 +433,360 @@ impl Renderer {
         )
         .unwrap();
 
+        let mut viewport = Viewport {
+            offset: [0.0, 0.0],
+            extent: [1600.0, 900.0],
+            depth_range: 0.0..=1.0,
+        };
+
         let deferred_pass = Subpass::from(render_pass.clone(), 0).unwrap();
         let lighting_pass = Subpass::from(render_pass.clone(), 1).unwrap();
 
-        let deferred_pipeline = GraphicsPipeline::start()
-            .vertex_input_state(BuffersDefinition::new().vertex::<NormalVertex>())
-            .vertex_shader(deferred_vert.entry_point("main").unwrap(), ())
-            .input_assembly_state(InputAssemblyState::new())
-            .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
-            .fragment_shader(deferred_frag.entry_point("main").unwrap(), ())
-            .depth_stencil_state(DepthStencilState::simple_depth_test())
-            .rasterization_state(RasterizationState::new().cull_mode(CullMode::Front))
-            .render_pass(deferred_pass.clone())
-            .build(device.clone())
-            .unwrap();
+        let deferred_pipeline = {
+            let vs = deferred_vert.entry_point("main").unwrap();
+            let fs = deferred_frag.entry_point("main").unwrap();
 
-        let directional_pipeline = GraphicsPipeline::start()
-            .vertex_input_state(BuffersDefinition::new().vertex::<DummyVertex>())
-            .vertex_shader(directional_vert.entry_point("main").unwrap(), ())
-            .input_assembly_state(InputAssemblyState::new())
-            .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
-            .fragment_shader(directional_frag.entry_point("main").unwrap(), ())
-            .color_blend_state(
-                ColorBlendState::new(lighting_pass.num_color_attachments()).blend(
-                    AttachmentBlend {
-                        color_op: BlendOp::Add,
-                        color_source: BlendFactor::One,
-                        color_destination: BlendFactor::One,
-                        alpha_op: BlendOp::Max,
-                        alpha_source: BlendFactor::One,
-                        alpha_destination: BlendFactor::One,
-                    },
-                ),
+            let vertex_input_state = NormalVertex::per_vertex().definition(&vs).unwrap();
+
+            let stages = [
+                PipelineShaderStageCreateInfo::new(vs),
+                PipelineShaderStageCreateInfo::new(fs),
+            ];
+
+            let layout = PipelineLayout::new(
+                device.clone(),
+                PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
+                    .into_pipeline_layout_create_info(device.clone())
+                    .unwrap(),
             )
-            .render_pass(lighting_pass.clone())
-            .build(device.clone())
             .unwrap();
 
-        let ambient_pipeline = GraphicsPipeline::start()
-            .vertex_input_state(BuffersDefinition::new().vertex::<DummyVertex>())
-            .vertex_shader(ambient_vert.entry_point("main").unwrap(), ())
-            .input_assembly_state(InputAssemblyState::new())
-            .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
-            .fragment_shader(ambient_frag.entry_point("main").unwrap(), ())
-            .color_blend_state(
-                ColorBlendState::new(lighting_pass.num_color_attachments()).blend(
-                    AttachmentBlend {
-                        color_op: BlendOp::Add,
-                        color_source: BlendFactor::One,
-                        color_destination: BlendFactor::One,
-                        alpha_op: BlendOp::Max,
-                        alpha_source: BlendFactor::One,
-                        alpha_destination: BlendFactor::One,
-                    },
-                ),
+            GraphicsPipeline::new(
+                device.clone(),
+                None,
+                GraphicsPipelineCreateInfo {
+                    stages: stages.into_iter().collect(),
+                    vertex_input_state: Some(vertex_input_state),
+                    input_assembly_state: Some(InputAssemblyState::default()),
+                    viewport_state: Some(ViewportState {
+                        viewports: [viewport].into_iter().collect(),
+                        ..Default::default()
+                    }),
+                    rasterization_state: Some(RasterizationState {
+                        cull_mode: CullMode::Front,
+                        ..Default::default()
+                    }),
+                    depth_stencil_state: Some(DepthStencilState {
+                        depth: Some(DepthState::simple()),
+                        ..Default::default()
+                    }),
+                    multisample_state: Some(MultisampleState::default()),
+                    color_blend_state: Some(ColorBlendState::with_attachment_states(
+                        deferred_pass.num_color_attachments(),
+                        ColorBlendAttachmentState::default(),
+                    )),
+                    subpass: Some(deferred_pass.into()),
+                    ..GraphicsPipelineCreateInfo::layout(layout)
+                },
             )
-            .render_pass(lighting_pass.clone())
-            .build(device.clone())
+            .unwrap()
+        };
+
+        // let _directional_pipeline = GraphicsPipeline::start()
+        //     .vertex_input_state(BuffersDefinition::new().vertex::<DummyVertex>())
+        //     .vertex_shader(directional_vert.entry_point("main").unwrap(), ())
+        //     .input_assembly_state(InputAssemblyState::new())
+        //     .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
+        //     .fragment_shader(directional_frag.entry_point("main").unwrap(), ())
+        //     .color_blend_state(
+        //         ColorBlendState::new(lighting_pass.num_color_attachments()).blend(
+        //             AttachmentBlend {
+        //                 color_op: BlendOp::Add,
+        //                 color_source: BlendFactor::One,
+        //                 color_destination: BlendFactor::One,
+        //                 alpha_op: BlendOp::Max,
+        //                 alpha_source: BlendFactor::One,
+        //                 alpha_destination: BlendFactor::One,
+        //             },
+        //         ),
+        //     )
+        //     .render_pass(lighting_pass.clone())
+        //     .build(device.clone())
+        //     .unwrap();
+
+        let directional_pipeline = {
+            let vs = directional_vert.entry_point("main").unwrap();
+            let fs = directional_frag.entry_point("main").unwrap();
+
+            let vertex_input_state = DummyVertex::per_vertex().definition(&vs).unwrap();
+
+            let stages = [
+                PipelineShaderStageCreateInfo::new(vs),
+                PipelineShaderStageCreateInfo::new(fs),
+            ];
+
+            let layout = PipelineLayout::new(
+                device.clone(),
+                PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
+                    .into_pipeline_layout_create_info(device.clone())
+                    .unwrap(),
+            )
             .unwrap();
 
-        let light_obj_pipeline = GraphicsPipeline::start()
-            .vertex_input_state(BuffersDefinition::new().vertex::<ColoredVertex>())
-            .vertex_shader(light_obj_vert.entry_point("main").unwrap(), ())
-            .input_assembly_state(InputAssemblyState::new())
-            .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
-            .fragment_shader(light_obj_frag.entry_point("main").unwrap(), ())
-            .depth_stencil_state(DepthStencilState::simple_depth_test())
-            .rasterization_state(RasterizationState::new().cull_mode(CullMode::Back))
-            .render_pass(lighting_pass.clone())
-            .build(device.clone())
+            GraphicsPipeline::new(
+                device.clone(),
+                None,
+                GraphicsPipelineCreateInfo {
+                    stages: stages.into_iter().collect(),
+                    vertex_input_state: Some(vertex_input_state),
+                    input_assembly_state: Some(InputAssemblyState::default()),
+                    viewport_state: Some(ViewportState {
+                        viewports: [viewport].into_iter().collect(),
+                        ..Default::default()
+                    }),
+                    color_blend_state: Some(ColorBlendState::with_attachment_states(
+                        lighting_pass.num_color_attachments(),
+                        ColorBlendAttachmentState {
+                            blend: Some(AttachmentBlend {
+                                src_color_blend_factor: BlendFactor::One,
+                                dst_color_blend_factor: BlendFactor::One,
+                                color_blend_op: BlendOp::Add,
+                                src_alpha_blend_factor: BlendFactor::One,
+                                dst_alpha_blend_factor: BlendFactor::One,
+                                alpha_blend_op: BlendOp::Max,
+                            }),
+                            ..Default::default()
+                        },
+                    )),
+                    subpass: Some(lighting_pass.into()),
+                    ..GraphicsPipelineCreateInfo::layout(layout)
+                },
+            )
+            .unwrap()
+        };
+
+        // let _ambient_pipeline = GraphicsPipeline::start()
+        //     .vertex_input_state(BuffersDefinition::new().vertex::<DummyVertex>())
+        //     .vertex_shader(ambient_vert.entry_point("main").unwrap(), ())
+        //     .input_assembly_state(InputAssemblyState::new())
+        //     .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
+        //     .fragment_shader(ambient_frag.entry_point("main").unwrap(), ())
+        //     .color_blend_state(
+        //         ColorBlendState::new(lighting_pass.num_color_attachments()).blend(
+        //             AttachmentBlend {
+        //                 color_op: BlendOp::Add,
+        //                 color_source: BlendFactor::One,
+        //                 color_destination: BlendFactor::One,
+        //                 alpha_op: BlendOp::Max,
+        //                 alpha_source: BlendFactor::One,
+        //                 alpha_destination: BlendFactor::One,
+        //             },
+        //         ),
+        //     )
+        //     .render_pass(lighting_pass.clone())
+        //     .build(device.clone())
+        //     .unwrap();
+
+        let ambient_pipeline = {
+            let vs = ambient_vert.entry_point("main").unwrap();
+            let fs = ambient_frag.entry_point("main").unwrap();
+
+            let vertex_input_state = DummyVertex::per_vertex().definition(&vs).unwrap();
+
+            let stages = [
+                PipelineShaderStageCreateInfo::new(vs),
+                PipelineShaderStageCreateInfo::new(fs),
+            ];
+
+            let layout = PipelineLayout::new(
+                device.clone(),
+                PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
+                    .into_pipeline_layout_create_info(device.clone())
+                    .unwrap(),
+            )
             .unwrap();
 
-        let skybox_pipeline = GraphicsPipeline::start()
-            .vertex_input_state(BuffersDefinition::new().vertex::<DummyVertex>())
-            .vertex_shader(skybox_vert.entry_point("main").unwrap(), ())
-            .input_assembly_state(InputAssemblyState::new())
-            .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
-            .fragment_shader(skybox_frag.entry_point("main").unwrap(), ())
-            .depth_stencil_state(DepthStencilState {
-                depth: Some(DepthState {
-                    write_enable: StateMode::Fixed(false),
-                    compare_op: StateMode::Fixed(CompareOp::LessOrEqual),
-                    ..Default::default()
-                }),
-                depth_bounds: None,
-                stencil: None,
-            })
-            .rasterization_state(RasterizationState::new().cull_mode(CullMode::None))
-            .render_pass(lighting_pass.clone())
-            .build(device.clone())
+            GraphicsPipeline::new(
+                device.clone(),
+                None,
+                GraphicsPipelineCreateInfo {
+                    stages: stages.into_iter().collect(),
+                    vertex_input_state: Some(vertex_input_state),
+                    input_assembly_state: Some(InputAssemblyState::default()),
+                    viewport_state: Some(ViewportState {
+                        viewports: [viewport].into_iter().collect(),
+                        ..Default::default()
+                    }),
+                    color_blend_state: Some(ColorBlendState::with_attachment_states(
+                        lighting_pass.num_color_attachments(),
+                        ColorBlendAttachmentState {
+                            blend: Some(AttachmentBlend {
+                                src_color_blend_factor: BlendFactor::One,
+                                dst_color_blend_factor: BlendFactor::One,
+                                color_blend_op: BlendOp::Add,
+                                src_alpha_blend_factor: BlendFactor::One,
+                                dst_alpha_blend_factor: BlendFactor::One,
+                                alpha_blend_op: BlendOp::Max,
+                            }),
+                            ..Default::default()
+                        },
+                    )),
+                    subpass: Some(lighting_pass.into()),
+                    ..GraphicsPipelineCreateInfo::layout(layout)
+                },
+            )
+            .unwrap()
+        };
+
+        // let _light_obj_pipeline = GraphicsPipeline::start()
+        //     .vertex_input_state(BuffersDefinition::new().vertex::<ColoredVertex>())
+        //     .vertex_shader(light_obj_vert.entry_point("main").unwrap(), ())
+        //     .input_assembly_state(InputAssemblyState::new())
+        //     .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
+        //     .fragment_shader(light_obj_frag.entry_point("main").unwrap(), ())
+        //     .depth_stencil_state(DepthStencilState::simple_depth_test())
+        //     .rasterization_state(RasterizationState::new().cull_mode(CullMode::Back))
+        //     .render_pass(lighting_pass.clone())
+        //     .build(device.clone())
+        //     .unwrap();
+
+        let light_obj_pipeline = {
+            let vs = light_obj_vert.entry_point("main").unwrap();
+            let fs = light_obj_frag.entry_point("main").unwrap();
+
+            let vertex_input_state = ColoredVertex::per_vertex().definition(&vs).unwrap();
+
+            let stages = [
+                PipelineShaderStageCreateInfo::new(vs),
+                PipelineShaderStageCreateInfo::new(fs),
+            ];
+
+            let layout = PipelineLayout::new(
+                device.clone(),
+                PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
+                    .into_pipeline_layout_create_info(device.clone())
+                    .unwrap(),
+            )
             .unwrap();
 
-        let vp_buffer = CpuAccessibleBuffer::from_data(
-            &memory_allocator,
-            BufferUsage {
-                uniform_buffer: true,
-                ..BufferUsage::empty()
+            GraphicsPipeline::new(
+                device.clone(),
+                None,
+                GraphicsPipelineCreateInfo {
+                    stages: stages.into_iter().collect(),
+                    vertex_input_state: Some(vertex_input_state),
+                    input_assembly_state: Some(InputAssemblyState::default()),
+                    viewport_state: Some(ViewportState {
+                        viewports: [viewport].into_iter().collect(),
+                        ..Default::default()
+                    }),
+                    rasterization_state: Some(RasterizationState {
+                        cull_mode: CullMode::Back,
+                        ..Default::default()
+                    }),
+                    depth_stencil_state: Some(DepthStencilState {
+                        depth: Some(DepthState::simple()),
+                        ..Default::default()
+                    }),
+                    multisample_state: Some(MultisampleState::default()),
+                    color_blend_state: Some(ColorBlendState::with_attachment_states(
+                        lighting_pass.num_color_attachments(),
+                        ColorBlendAttachmentState::default(),
+                    )),
+                    subpass: Some(lighting_pass.into()),
+                    ..GraphicsPipelineCreateInfo::layout(layout)
+                },
+            )
+            .unwrap()
+        };
+
+        // let _skybox_pipeline = GraphicsPipeline::start()
+        //     .vertex_input_state(BuffersDefinition::new().vertex::<DummyVertex>())
+        //     .vertex_shader(skybox_vert.entry_point("main").unwrap(), ())
+        //     .input_assembly_state(InputAssemblyState::new())
+        //     .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
+        //     .fragment_shader(skybox_frag.entry_point("main").unwrap(), ())
+        //     .depth_stencil_state(DepthStencilState {
+        //         depth: Some(DepthState {
+        //             write_enable: StateMode::Fixed(false),
+        //             compare_op: StateMode::Fixed(CompareOp::LessOrEqual),
+        //             ..Default::default()
+        //         }),
+        //         depth_bounds: None,
+        //         stencil: None,
+        //     })
+        //     .rasterization_state(RasterizationState::new().cull_mode(CullMode::None))
+        //     .render_pass(lighting_pass.clone())
+        //     .build(device.clone())
+        //     .unwrap();
+
+        let skybox_pipeline = {
+            let vs = skybox_vert.entry_point("main").unwrap();
+            let fs = skybox_frag.entry_point("main").unwrap();
+
+            let vertex_input_state = DummyVertex::per_vertex().definition(&vs).unwrap();
+
+            let stages = [
+                PipelineShaderStageCreateInfo::new(vs),
+                PipelineShaderStageCreateInfo::new(fs),
+            ];
+
+            let layout = PipelineLayout::new(
+                device.clone(),
+                PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
+                    .into_pipeline_layout_create_info(device.clone())
+                    .unwrap(),
+            )
+            .unwrap();
+
+            GraphicsPipeline::new(
+                device.clone(),
+                None,
+                GraphicsPipelineCreateInfo {
+                    stages: stages.into_iter().collect(),
+                    vertex_input_state: Some(vertex_input_state),
+                    input_assembly_state: Some(InputAssemblyState::default()),
+                    viewport_state: Some(ViewportState {
+                        viewports: [viewport].into_iter().collect(),
+                        ..Default::default()
+                    }),
+                    rasterization_state: Some(RasterizationState {
+                        cull_mode: CullMode::None,
+                        ..Default::default()
+                    }),
+                    depth_stencil_state: Some(DepthStencilState {
+                        depth: Some(DepthState {
+                            write_enable: StateMode::Fixed(false),
+                            compare_op: StateMode::Fixed(CompareOp::LessOrEqual),
+                        }),
+                        depth_bounds: None,
+                        stencil: None,
+                        ..Default::default()
+                    }),
+                    multisample_state: Some(MultisampleState::default()),
+                    color_blend_state: Some(ColorBlendState::with_attachment_states(
+                        lighting_pass.num_color_attachments(),
+                        ColorBlendAttachmentState::default(),
+                    )),
+                    subpass: Some(lighting_pass.into()),
+                    ..GraphicsPipelineCreateInfo::layout(layout)
+                },
+            )
+            .unwrap()
+        };
+
+        let vp_buffer = Buffer::from_data(
+            memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::UNIFORM_BUFFER,
+                ..Default::default()
             },
-            false,
-            deferred_vert::ty::VP_Data {
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            deferred_vert::VP_Data {
                 view: vp.view.into(),
                 projection: vp.projection.into(),
             },
@@ -527,39 +796,52 @@ impl Renderer {
         // let model_uniform_buffer: CpuBufferPool<deferred_vert::ty::Model_Data> =
         //     CpuBufferPool::uniform_buffer(memory_allocator.clone());
 
-        let ambient_buffer = CpuAccessibleBuffer::from_data(
-            &memory_allocator,
-            BufferUsage {
-                uniform_buffer: true,
-                ..BufferUsage::empty()
+        let ambient_buffer = Buffer::from_data(
+            memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::UNIFORM_BUFFER,
+                ..Default::default()
             },
-            false,
-            ambient_frag::ty::Ambient_Data {
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            ambient_frag::Ambient_Data {
                 color: [1.0, 1.0, 1.0],
                 intensity: 0.1,
             },
         )
         .unwrap();
 
-        let directional_buffer: CpuBufferPool<directional_frag::ty::Directional_Light_Data> =
-            CpuBufferPool::uniform_buffer(memory_allocator.clone());
+        // let directional_buffer: CpuBufferPool<directional_frag::Directional_Light_Data> =
+        //     CpuBufferPool::uniform_buffer(memory_allocator.clone());
 
-        let dummy_verts = CpuAccessibleBuffer::from_iter(
-            &memory_allocator,
-            BufferUsage {
-                vertex_buffer: true,
-                ..BufferUsage::empty()
+        let directional_allocator = SubbufferAllocator::new(
+            memory_allocator.clone(),
+            SubbufferAllocatorCreateInfo {
+                buffer_usage: BufferUsage::UNIFORM_BUFFER,
+                ..Default::default()
             },
-            false,
+        );
+
+        let directional_subbuffer: Subbuffer<directional_frag::Directional_Light_Data> =
+            directional_allocator.allocate_sized().unwrap();
+
+        let dummy_verts = Buffer::from_iter(
+            memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::UNIFORM_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
             DummyVertex::list().iter().cloned(),
         )
         .unwrap();
-
-        let mut viewport = Viewport {
-            origin: [0.0, 0.0],
-            dimensions: [0.0, 0.0],
-            depth_range: 0.0..1.0,
-        };
 
         let (framebuffers, color_buffer, normal_buffer, frag_location_buffer, specular_buffer) =
             Renderer::window_size_dependent_setup(
@@ -609,7 +891,7 @@ impl Renderer {
             vp_buffer,
             //model_uniform_buffer,
             ambient_buffer,
-            directional_buffer,
+            directional_subbuffer,
             frag_location_buffer,
             specular_buffer,
             sampler,
@@ -675,7 +957,7 @@ impl Renderer {
         ];
 
         let mut commands = AutoCommandBufferBuilder::primary(
-            &self.command_buffer_allocator,
+            self.command_buffer_allocator.clone(),
             self.queue.queue_family_index(),
             CommandBufferUsage::OneTimeSubmit,
         )
@@ -689,7 +971,10 @@ impl Renderer {
                         self.framebuffers[image_index as usize].clone(),
                     )
                 },
-                SubpassContents::Inline,
+                SubpassBeginInfo {
+                    contents: SubpassContents::Inline,
+                    ..Default::default()
+                },
             )
             .unwrap();
 
@@ -716,7 +1001,7 @@ impl Renderer {
         }
 
         let mut commands = self.commands.take().unwrap();
-        commands.end_render_pass().unwrap();
+        commands.end_render_pass(SubpassEndInfo::default()).unwrap();
         let command_buffer = commands.build().unwrap();
 
         let af = self.acquire_future.take().unwrap();
@@ -775,7 +1060,7 @@ impl Renderer {
             }
         }
 
-        let push_constants = deferred_vert::ty::PushConstants {
+        let push_constants = deferred_vert::PushConstants {
             model: transform.model_matrix().into(),
             normals: transform.normal_matrix().into(),
         };
@@ -784,9 +1069,12 @@ impl Renderer {
             self.commands
                 .as_mut()
                 .unwrap()
-                .set_viewport(0, [self.viewport.clone()])
+                .set_viewport(0, [self.viewport.clone()].into_iter().collect())
+                .unwrap()
                 .bind_pipeline_graphics(self.deferred_pipeline.clone())
+                .unwrap()
                 .push_constants(self.deferred_pipeline.layout().clone(), 0, push_constants)
+                .unwrap()
                 .bind_descriptor_sets(
                     PipelineBindPoint::Graphics,
                     self.deferred_pipeline.layout().clone(),
@@ -796,24 +1084,38 @@ impl Renderer {
                         mesh.persist_desc_set.as_ref().unwrap().clone(),
                     ),
                 )
+                .unwrap()
                 .bind_vertex_buffers(0, mesh.vertex_buffer.as_ref().unwrap().clone())
-                //.draw(vertex_buffer.len() as u32, 1, 0, 0)
+                .unwrap()
                 .bind_index_buffer(mesh.index_buffer.as_ref().unwrap().clone())
-                //.draw_indexed(index_count, instance_count, first_index, vertex_offset, first_instance)
-                .draw_indexed(mesh.index_buffer.as_ref().unwrap().len() as u32, 1, 0, 0, 0)
                 .unwrap();
+
+            unsafe {
+                self.commands
+                    .as_mut()
+                    .unwrap()
+                    .draw_indexed(mesh.index_buffer.as_ref().unwrap().len() as u32, 1, 0, 0, 0)
+                    .unwrap();
+            }
         }
     }
 
     pub fn set_ambient(&mut self, color: [f32; 3], intensity: f32) {
-        self.ambient_buffer = CpuAccessibleBuffer::from_data(
-            &self.memory_allocator,
-            BufferUsage {
-                uniform_buffer: true,
-                ..BufferUsage::empty()
+        self.ambient_buffer = Buffer::from_data(
+            self.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::UNIFORM_BUFFER,
+                ..Default::default()
             },
-            false,
-            ambient_frag::ty::Ambient_Data { color, intensity },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            ambient_frag::Ambient_Data {
+                color: color,
+                intensity: intensity,
+            },
         )
         .unwrap();
     }
@@ -1040,7 +1342,7 @@ impl Renderer {
         //     self.model_uniform_buffer.from_data(uniform_data).unwrap()
         // };
         let (model_mat, normal_mat) = model.model_matrices();
-        let push_constants = light_obj_vert::ty::PushConstants {
+        let push_constants = light_obj_vert::PushConstants {
             model: model_mat.into(),
             normals: normal_mat.into(),
         };
@@ -1300,7 +1602,7 @@ impl Renderer {
     pub fn upload_mesh_to_gpu(&self, mesh: &mut Mesh) {
         //create a commandbuffer for upload
         let mut upload_cmd_buf = AutoCommandBufferBuilder::primary(
-            &self.command_buffer_allocator,
+            self.command_buffer_allocator.clone(),
             self.queue.queue_family_index(),
             CommandBufferUsage::OneTimeSubmit,
         )
@@ -1444,7 +1746,7 @@ impl Renderer {
 
     pub fn upload_skybox(&self, skybox_images: SkyboxImages) -> Skybox {
         let mut upload_cmd_buf = AutoCommandBufferBuilder::primary(
-            &self.command_buffer_allocator,
+            self.command_buffer_allocator.clone(),
             self.queue.queue_family_index(),
             CommandBufferUsage::OneTimeSubmit,
         )
