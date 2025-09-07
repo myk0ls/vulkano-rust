@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use vulkano::image::{ImmutableImage, view::ImageView};
+use vulkano::image::view::ImageView;
 
 pub struct SkyboxImages {
     pub faces: [Vec<u8>; 6],
@@ -14,5 +14,5 @@ impl SkyboxImages {
 
 #[derive(Clone)]
 pub struct Skybox {
-    pub cubemap: Arc<ImageView<ImmutableImage>>,
+    pub cubemap: Arc<ImageView>,
 }

@@ -2,7 +2,7 @@ use easy_gltf::Material;
 use nalgebra_glm::{
     TMat4, TVec3, identity, inverse_transpose, rotate_normalized_axis, scale, translate, vec3,
 };
-use vulkano::image::{ImageDimensions, ImmutableImage, view::ImageView};
+use vulkano::image::view::ImageView;
 
 use std::cell::Cell;
 use std::sync::Arc;
@@ -163,9 +163,9 @@ impl Model {
     }
 }
 
-#[derive(Clone)]
-pub struct PrepareMaterial {
-    pub raw_pixels: Vec<u8>,
-    pub dimensions: ImageDimensions,
-    pub texture: Arc<ImageView<ImmutableImage>>,
-}
+// #[derive(Clone)]
+// pub struct PrepareMaterial {
+//     pub raw_pixels: Vec<u8>,
+//     pub dimensions: ImageDimensions,
+//     pub texture: Arc<ImageView<ImmutableImage>>,
+// }

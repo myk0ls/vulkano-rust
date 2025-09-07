@@ -71,9 +71,9 @@ impl DummyVertex {
 #[repr(C)]
 #[derive(Default, Clone, Copy, Vertex, BufferContents)]
 pub struct ColoredVertex {
-    #[format(R32G32_SFLOAT)]
+    #[format(R32G32B32_SFLOAT)]
     pub position: [f32; 3],
-    #[format(R32G32_SFLOAT)]
+    #[format(R32G32B32_SFLOAT)]
     pub color: [f32; 3],
 }
 
@@ -82,11 +82,11 @@ pub struct ColoredVertex {
 #[repr(C)]
 #[derive(Default, Clone, Copy, BufferContents, Vertex)]
 pub struct NormalVertex {
-    #[format(R32G32_SFLOAT)]
+    #[format(R32G32B32_SFLOAT)]
     pub position: [f32; 3],
-    #[format(R32G32_SFLOAT)]
+    #[format(R32G32B32_SFLOAT)]
     pub normal: [f32; 3],
-    #[format(R32G32_SFLOAT)]
+    #[format(R32G32B32_SFLOAT)]
     pub color: [f32; 3],
     #[format(R32G32_SFLOAT)]
     pub uv: [f32; 2],
