@@ -64,8 +64,6 @@ use ash::vk::{self, ImageUsageFlags};
 
 use vulkano::command_buffer::{PrimaryCommandBufferAbstract, SubpassBeginInfo, SubpassEndInfo};
 
-use vulkano_win::{VkSurfaceBuild, required_extensions};
-
 use vulkano::instance::InstanceExtensions;
 
 use crate::{
