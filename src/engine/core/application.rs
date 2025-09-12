@@ -1,26 +1,23 @@
-use crate::engine::assets;
 use crate::engine::assets::asset_manager::AssetManager;
-use crate::engine::graphics::model::Model;
 use crate::engine::graphics::renderer::DirectionalLight;
 use crate::engine::graphics::skybox::SkyboxImages;
 use crate::engine::input::input_manager::InputManager;
+use crate::engine::physics::physics_engine::{PhysicsEngine, RigidBodyComponent};
 use crate::engine::scene::components::camera::Camera;
 use crate::engine::scene::components::delta_time::DeltaTime;
 use crate::engine::scene::components::object3d::Object3D;
 use crate::engine::scene::components::transform::Transform;
-use nalgebra_glm::{look_at, pi, vec3};
+use nalgebra_glm::{TVec4, look_at, pi, vec3};
+use rapier3d::na::{Isometry, Translation3, UnitQuaternion};
 use sdl3::Sdl;
 use sdl3::event::{Event, WindowEvent};
 use sdl3::keyboard::Keycode;
 use sdl3::video::Window;
 use shipyard::{EntitiesViewMut, IntoIter, View, ViewMut, World};
-use std::collections::HashSet;
-use std::sync::Arc;
-use vulkano::instance::Instance;
 use vulkano::sync;
 use vulkano::sync::GpuFuture;
 
-use crate::engine::graphics::renderer::{self, Renderer};
+use crate::engine::graphics::renderer::Renderer;
 
 const SENSITIVITY: f32 = 0.005;
 
@@ -39,6 +36,7 @@ pub struct Application<G: Game> {
     pub sdl: Sdl,
     pub window: Window,
     pub renderer: Renderer,
+    pub physics: PhysicsEngine,
     pub previous_frame_end: Option<Box<dyn vulkano::sync::GpuFuture>>,
 }
 
@@ -62,7 +60,9 @@ impl<G: Game> Application<G> {
             &vec3(0.0, 1.0, 0.0),
         ));
 
-        let mut previous_frame_end =
+        let mut physics = PhysicsEngine::new();
+
+        let mut _previous_frame_end =
             Some(Box::new(sync::now(renderer.device.clone())) as Box<dyn GpuFuture>);
 
         Self {
@@ -71,7 +71,8 @@ impl<G: Game> Application<G> {
             sdl,
             window,
             renderer,
-            previous_frame_end,
+            physics,
+            previous_frame_end: _previous_frame_end,
         }
     }
 
@@ -154,7 +155,7 @@ impl<G: Game> Application<G> {
                         let dx = xrel as f32;
                         let dy = yrel as f32;
 
-                        if (dx != 0.0 || dy != 0.0)
+                        if dx != 0.0 || dy != 0.0
                         // && pressed_mouse_buttons.contains(&sdl3::mouse::MouseButton::Right)
                         {
                             self.update_camera_input(dx, dy);
@@ -272,5 +273,57 @@ impl<G: Game> Application<G> {
                 }
             }
         });
+    }
+
+    pub fn physics_bodies_creation_system(&mut self) {
+        let world = self.game.get_world_mut();
+
+        world.run(
+            |entities: EntitiesViewMut,
+             mut transforms: ViewMut<Transform>,
+             mut rigid_bodies: ViewMut<RigidBodyComponent>| {},
+        );
+    }
+
+    // pub fn create_physics_bodies(
+    //     entities: EntitiesViewMut,
+    //     mut transforms: ViewMut<Transform>,
+    //     mut rigid_bodies: ViewMut<RigidBodyComponent>,
+
+    // )
+
+    pub fn physics_sync_in(&mut self) {
+        let mut world = self.game.get_world_mut();
+
+        world.run(
+            |transforms: View<Transform>, rigid_bodies: ViewMut<RigidBodyComponent>| {
+                for (transform, rb_comp) in (&transforms, &rigid_bodies).iter() {
+                    if let Some(rb) = self.physics.rigid_body_set.get_mut(rb_comp.handle) {
+                        let translation =
+                            Translation3::from(transform.position.column(3).iter().into());
+                        let rotation =
+                            UnitQuaternion::from_rotation_matrix(transform.rotation.into());
+                        rb.set_position(Isometry::from_parts(translation, rotation), true);
+                    }
+                }
+            },
+        );
+    }
+
+    pub fn physics_step(&mut self) {
+        self.physics.physics_pipeline.step(
+            &self.physics.gravity,
+            &self.physics.integration_parameters,
+            &mut self.physics.island_manager,
+            &mut self.physics.broad_phase,
+            &mut self.physics.narrow_phase,
+            &mut self.physics.rigid_body_set,
+            &mut self.physics.collider_set,
+            &mut self.physics.impulse_joint_set,
+            &mut self.physics.multibody_joint_set,
+            &mut self.physics.ccd_solver,
+            &self.physics.physics_hooks,
+            &self.physics.event_handler,
+        );
     }
 }

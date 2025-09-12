@@ -40,6 +40,12 @@ impl Game for MyGame {
         let suzanne = {
             let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
             asset_manager.load_model("data/models/suzanne_2_material.glb")
+            //asset_manager.load_model("data/models/suzanne.glb")
+        };
+
+        let platform = {
+            let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
+            asset_manager.load_model("data/models/platform.glb")
         };
 
         let player_entity =
@@ -60,6 +66,11 @@ impl Game for MyGame {
             Object3D::with_model(suzanne.clone()),
         ));
 
+        let platform_ent = &self.world.add_entity((
+            Transform::with_pos(vec3(0.0, 3.0, 0.0)),
+            Object3D::with_model(platform.clone()),
+        ));
+
         // for n in 5..100 {
         //     &self.world.add_entity((
         //         Transform::with_pos(vec3(0.0, 0.0, n as f32)),
@@ -72,7 +83,7 @@ impl Game for MyGame {
         //println!("Updating game logic: {delta_time}s");
 
         self.world.run(camera_movement);
-        self.world.run(move_suzanne);
+        //self.world.run(move_suzanne);
     }
 
     fn on_render(&mut self) {
