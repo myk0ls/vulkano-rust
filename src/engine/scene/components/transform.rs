@@ -48,4 +48,11 @@ impl Transform {
     pub fn rotate(&mut self, radians: f32, v: TVec3<f32>) {
         self.rotation = rotate_normalized_axis(&self.rotation, radians, &v);
     }
+
+    pub fn get_position_vector(&self) -> [f32; 3] {
+        let x = self.position[(0, 3)];
+        let y = self.position[(1, 3)];
+        let z = self.position[(2, 3)];
+        [x, y, z]
+    }
 }

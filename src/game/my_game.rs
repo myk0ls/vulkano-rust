@@ -1,8 +1,15 @@
 use crate::engine::assets::asset_manager::AssetManager;
 use crate::engine::input::input_manager::InputManager;
+use crate::engine::physics::physics_engine::ColliderComponent;
+use crate::engine::physics::physics_engine::RigidBodyComponent;
 use crate::engine::scene::components::delta_time::DeltaTime;
 use crate::engine::scene::components::object3d::Object3D;
 use nalgebra_glm::quarter_pi;
+use rapier3d::prelude::ColliderHandle;
+use rapier3d::prelude::RigidBodyHandle;
+use rapier3d::prelude::RigidBodyType;
+use rapier3d::prelude::SharedShape;
+use rapier3d::prelude::*;
 use sdl3::{event::Event, keyboard::Keycode};
 use shipyard::IntoIter;
 use shipyard::World;
@@ -52,23 +59,40 @@ impl Game for MyGame {
             self.world
                 .add_entity((Camera::new(), Transform::new(), Velocity::new()));
 
-        let monkey_entity = &self
-            .world
-            .add_entity((Transform::new(), Object3D::with_model(suzanne.clone())));
-
-        let monkey_entity2 = &self.world.add_entity((
-            Transform::with_pos(vec3(0.0, 0.0, 2.0)),
+        let monkey_entity = &self.world.add_entity((
+            Transform::with_pos(vec3(0.0, 0.0, 0.0)),
             Object3D::with_model(suzanne.clone()),
+            RigidBodyComponent {
+                handle: RigidBodyHandle::invalid(),
+                body_type: RigidBodyType::Fixed,
+            },
+            ColliderComponent {
+                handle: ColliderHandle::invalid(),
+                body_type: SharedShape::cuboid(0.5, 0.5, 0.5),
+            },
         ));
 
-        let monkey_entity3 = &self.world.add_entity((
-            Transform::with_pos(vec3(0.0, 0.0, 4.0)),
-            Object3D::with_model(suzanne.clone()),
-        ));
+        // let monkey_entity2 = &self.world.add_entity((
+        //     Transform::with_pos(vec3(0.0, 0.0, 2.0)),
+        //     Object3D::with_model(suzanne.clone()),
+        // ));
+
+        // let monkey_entity3 = &self.world.add_entity((
+        //     Transform::with_pos(vec3(0.0, 0.0, 4.0)),
+        //     Object3D::with_model(suzanne.clone()),
+        // ));
 
         let platform_ent = &self.world.add_entity((
-            Transform::with_pos(vec3(0.0, 3.0, 0.0)),
+            Transform::with_pos(vec3(0.0, 0.0, 0.0)),
             Object3D::with_model(platform.clone()),
+            RigidBodyComponent {
+                handle: RigidBodyHandle::invalid(),
+                body_type: RigidBodyType::Fixed,
+            },
+            ColliderComponent {
+                handle: ColliderHandle::invalid(),
+                body_type: SharedShape::cuboid(100.0, 0.05, 100.0),
+            },
         ));
 
         // for n in 5..100 {

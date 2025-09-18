@@ -2,18 +2,21 @@ use crate::engine::assets::asset_manager::AssetManager;
 use crate::engine::graphics::renderer::DirectionalLight;
 use crate::engine::graphics::skybox::SkyboxImages;
 use crate::engine::input::input_manager::InputManager;
-use crate::engine::physics::physics_engine::{PhysicsEngine, RigidBodyComponent};
+use crate::engine::physics::physics_engine::{
+    ColliderComponent, PhysicsEngine, RigidBodyComponent,
+};
 use crate::engine::scene::components::camera::Camera;
 use crate::engine::scene::components::delta_time::DeltaTime;
 use crate::engine::scene::components::object3d::Object3D;
 use crate::engine::scene::components::transform::Transform;
-use nalgebra_glm::{TVec4, look_at, pi, vec3};
-use rapier3d::na::{Isometry, Translation3, UnitQuaternion};
+use nalgebra_glm::{TVec3, TVec4, look_at, pi, vec3};
+use rapier3d::na::{Isometry, Matrix3, Rotation3, Translation3, UnitQuaternion, Vector3};
+use rapier3d::prelude::*;
 use sdl3::Sdl;
 use sdl3::event::{Event, WindowEvent};
 use sdl3::keyboard::Keycode;
 use sdl3::video::Window;
-use shipyard::{EntitiesViewMut, IntoIter, View, ViewMut, World};
+use shipyard::{EntitiesView, EntitiesViewMut, IntoIter, View, ViewMut, World};
 use vulkano::sync;
 use vulkano::sync::GpuFuture;
 
@@ -98,6 +101,8 @@ impl<G: Game> Application<G> {
         let mut skybox = self.renderer.upload_skybox(skybox_images);
 
         let rotation_start = std::time::Instant::now();
+
+        self.physics_bodies_creation_system();
 
         self.sdl.mouse().set_relative_mouse_mode(&self.window, true);
         self.sdl.mouse().show_cursor(false);
@@ -199,6 +204,10 @@ impl<G: Game> Application<G> {
 
             let directional_light = DirectionalLight::new([x, 0.0, z, 1.0], [1.0, 1.0, 1.0]);
 
+            self.physics_sync_in();
+            self.physics_step();
+            self.physics_sync_out();
+
             self.renderer.start();
             //self.renderer.geometry(&mut suzanne);
             self.render_objects3d();
@@ -279,18 +288,59 @@ impl<G: Game> Application<G> {
         let world = self.game.get_world_mut();
 
         world.run(
-            |entities: EntitiesViewMut,
-             mut transforms: ViewMut<Transform>,
-             mut rigid_bodies: ViewMut<RigidBodyComponent>| {},
+            |entities: EntitiesView,
+             mut transforms: View<Transform>,
+             mut rigid_bodies: ViewMut<RigidBodyComponent>,
+             mut colliders: ViewMut<ColliderComponent>| {
+                for (transform, rb_comp, col_comp) in
+                    (&transforms, &mut rigid_bodies, &mut colliders)
+                        .iter()
+                        .filter(|(_, rb, _)| rb.handle == RigidBodyHandle::invalid())
+                {
+                    let translation =
+                        Translation3::from(Vector3::from(transform.get_position_vector()));
+
+                    // If you don't care about rotation yet:
+                    let rotation = UnitQuaternion::identity();
+
+                    // Build isometry
+                    let iso = Isometry::from_parts(translation, rotation);
+
+                    let rapier_body = match rb_comp.body_type {
+                        RigidBodyType::Dynamic => RigidBodyBuilder::dynamic(),
+                        RigidBodyType::Fixed => RigidBodyBuilder::fixed(),
+                        RigidBodyType::KinematicPositionBased => {
+                            RigidBodyBuilder::kinematic_position_based()
+                        }
+                        RigidBodyType::KinematicVelocityBased => {
+                            RigidBodyBuilder::kinematic_velocity_based()
+                        }
+                    }
+                    //.translation(Vector3::from(transform.get_position_vector()))
+                    //.rotation(UnitQuaternion::identity())
+                    .position(iso)
+                    .build();
+
+                    let rb_handle = self.physics.rigid_body_set.insert(rapier_body);
+
+                    rb_comp.handle = rb_handle;
+
+                    if col_comp.handle == ColliderHandle::invalid() {
+                        let rapier_collider =
+                            ColliderBuilder::new(col_comp.body_type.clone()).build();
+
+                        let col_handle = self.physics.collider_set.insert_with_parent(
+                            rapier_collider,
+                            rb_handle,
+                            &mut self.physics.rigid_body_set,
+                        );
+
+                        col_comp.handle = col_handle;
+                    }
+                }
+            },
         );
     }
-
-    // pub fn create_physics_bodies(
-    //     entities: EntitiesViewMut,
-    //     mut transforms: ViewMut<Transform>,
-    //     mut rigid_bodies: ViewMut<RigidBodyComponent>,
-
-    // )
 
     pub fn physics_sync_in(&mut self) {
         let mut world = self.game.get_world_mut();
@@ -299,10 +349,14 @@ impl<G: Game> Application<G> {
             |transforms: View<Transform>, rigid_bodies: ViewMut<RigidBodyComponent>| {
                 for (transform, rb_comp) in (&transforms, &rigid_bodies).iter() {
                     if let Some(rb) = self.physics.rigid_body_set.get_mut(rb_comp.handle) {
-                        let translation =
-                            Translation3::from(transform.position.column(3).iter().into());
-                        let rotation =
-                            UnitQuaternion::from_rotation_matrix(transform.rotation.into());
+                        let translation = Translation3::from(transform.get_position_vector());
+                        let rotation_matrix_3x3 =
+                            nalgebra_glm::mat4_to_mat3::<f32>(&transform.rotation);
+                        let raw_matrix: [[f32; 3]; 3] = rotation_matrix_3x3.into();
+                        let matrix: Matrix3<f32> = Matrix3::from(raw_matrix);
+
+                        let rotation_matrix = Rotation3::from_matrix(&matrix);
+                        let rotation = UnitQuaternion::from_rotation_matrix(&rotation_matrix);
                         rb.set_position(Isometry::from_parts(translation, rotation), true);
                     }
                 }
@@ -324,6 +378,39 @@ impl<G: Game> Application<G> {
             &mut self.physics.ccd_solver,
             &self.physics.physics_hooks,
             &self.physics.event_handler,
+        );
+    }
+
+    pub fn physics_sync_out(&mut self) {
+        let mut world = self.game.get_world_mut();
+
+        world.run(
+            |mut transforms: ViewMut<Transform>, mut rigid_bodies: ViewMut<RigidBodyComponent>| {
+                for (transform, rb_comp) in (&mut transforms, &mut rigid_bodies).iter() {
+                    if let Some(rb) = self.physics.rigid_body_set.get_mut(rb_comp.handle) {
+                        let pos = rb.position();
+
+                        let translation: [f32; 3] = pos.translation.vector.into();
+                        let tvec = TVec3::new(translation[0], translation[1], translation[2]);
+                        transform.translate(tvec);
+
+                        // --- Rotation ---
+                        let rot = pos.rotation;
+                        let (axis, angle) = rot
+                            .axis_angle()
+                            .unwrap_or((nalgebra::Vector3::y_axis(), 0.0));
+
+                        // nalgebra::Vector3 -> nalgebra_glm::TVec3
+                        let axis_glm = nalgebra_glm::vec3(axis.x, axis.y, axis.z);
+
+                        // Reset rotation before applying (important!)
+                        transform.rotation = nalgebra_glm::identity();
+
+                        // Apply Rapier’s rotation
+                        transform.rotate(angle, axis_glm);
+                    }
+                }
+            },
         );
     }
 }

@@ -47,4 +47,8 @@ impl Camera {
         let right = self.get_right_vector();
         right.cross(&forward).normalize()
     }
+
+    pub fn set_position(&mut self, pos: TVec3<f32>) {
+        self.position = pos;
+    }
 }
