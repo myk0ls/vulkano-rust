@@ -66,6 +66,7 @@ use vulkano::command_buffer::{PrimaryCommandBufferAbstract, SubpassBeginInfo, Su
 
 use vulkano::instance::InstanceExtensions;
 
+use crate::engine::graphics::renderer::PointLight;
 use crate::{
     engine::{
         assets::{
@@ -154,6 +155,20 @@ mod skybox_frag {
     }
 }
 
+mod pointlight_vert {
+    vulkano_shaders::shader! {
+        ty: "vertex",
+        path: "src/engine/graphics/renderer/shaders/pointlight.vert",
+    }
+}
+
+mod pointlight_frag {
+    vulkano_shaders::shader! {
+        ty: "fragment",
+        path: "src/engine/graphics/renderer/shaders/pointlight.frag",
+    }
+}
+
 #[derive(Debug, Clone)]
 enum RenderStage {
     Stopped,
@@ -185,6 +200,7 @@ pub struct Renderer {
     render_pass: Arc<RenderPass>,
     deferred_pipeline: Arc<GraphicsPipeline>,
     directional_pipeline: Arc<GraphicsPipeline>,
+    pointlight_pipeline: Arc<GraphicsPipeline>,
     ambient_pipeline: Arc<GraphicsPipeline>,
     light_obj_pipeline: Arc<GraphicsPipeline>,
     skybox_pipeline: Arc<GraphicsPipeline>,
@@ -334,7 +350,7 @@ impl Renderer {
             let image_extent: [u32; 2] = window.size().into();
 
             let aspect_ratio = image_extent[0] as f32 / image_extent[1] as f32;
-            vp.projection = perspective(aspect_ratio, half_pi(), 0.01, 100.0);
+            vp.projection = perspective(aspect_ratio, half_pi(), 0.01, 1000.0);
 
             Swapchain::new(
                 device.clone(),
@@ -371,6 +387,8 @@ impl Renderer {
         let light_obj_vert = light_obj_vert::load(device.clone()).unwrap();
         let skybox_vert = skybox_vert::load(device.clone()).unwrap();
         let skybox_frag = skybox_frag::load(device.clone()).unwrap();
+        let pointlight_vert = pointlight_vert::load(device.clone()).unwrap();
+        let pointlight_frag = pointlight_frag::load(device.clone()).unwrap();
 
         let render_pass = vulkano::ordered_passes_renderpass!(device.clone(),
             attachments: {
@@ -467,7 +485,7 @@ impl Renderer {
                     }),
                     //dynamic_state: [DynamicState::ViewportWithCount].into_iter().collect(),
                     rasterization_state: Some(RasterizationState {
-                        cull_mode: CullMode::Front,
+                        cull_mode: CullMode::Back,
                         ..Default::default()
                     }),
                     depth_stencil_state: Some(DepthStencilState {
@@ -489,6 +507,64 @@ impl Renderer {
         let directional_pipeline = {
             let vs = directional_vert.entry_point("main").unwrap();
             let fs = directional_frag.entry_point("main").unwrap();
+
+            let vertex_input_state = DummyVertex::per_vertex().definition(&vs).unwrap();
+
+            let stages = [
+                PipelineShaderStageCreateInfo::new(vs),
+                PipelineShaderStageCreateInfo::new(fs),
+            ];
+
+            let layout = PipelineLayout::new(
+                device.clone(),
+                PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
+                    .into_pipeline_layout_create_info(device.clone())
+                    .unwrap(),
+            )
+            .unwrap();
+
+            GraphicsPipeline::new(
+                device.clone(),
+                None,
+                GraphicsPipelineCreateInfo {
+                    stages: stages.into_iter().collect(),
+                    vertex_input_state: Some(vertex_input_state),
+                    input_assembly_state: Some(InputAssemblyState::default()),
+                    viewport_state: Some(ViewportState {
+                        viewports: [viewport.clone()].into_iter().collect(),
+                        ..Default::default()
+                    }),
+                    //dynamic_state: [DynamicState::ViewportWithCount].into_iter().collect(),
+                    rasterization_state: Some(RasterizationState::default()),
+                    multisample_state: Some(MultisampleState::default()),
+                    depth_stencil_state: Some(DepthStencilState {
+                        depth: None,
+                        ..Default::default()
+                    }),
+                    color_blend_state: Some(ColorBlendState::with_attachment_states(
+                        lighting_pass.clone().num_color_attachments(),
+                        ColorBlendAttachmentState {
+                            blend: Some(AttachmentBlend {
+                                src_color_blend_factor: BlendFactor::One,
+                                dst_color_blend_factor: BlendFactor::One,
+                                color_blend_op: BlendOp::Add,
+                                src_alpha_blend_factor: BlendFactor::One,
+                                dst_alpha_blend_factor: BlendFactor::One,
+                                alpha_blend_op: BlendOp::Max,
+                            }),
+                            ..Default::default()
+                        },
+                    )),
+                    subpass: Some(lighting_pass.clone().into()),
+                    ..GraphicsPipelineCreateInfo::layout(layout)
+                },
+            )
+            .unwrap()
+        };
+
+        let pointlight_pipeline = {
+            let vs = pointlight_vert.entry_point("main").unwrap();
+            let fs = pointlight_frag.entry_point("main").unwrap();
 
             let vertex_input_state = DummyVertex::per_vertex().definition(&vs).unwrap();
 
@@ -836,6 +912,7 @@ impl Renderer {
             render_pass,
             deferred_pipeline,
             directional_pipeline,
+            pointlight_pipeline,
             ambient_pipeline,
             light_obj_pipeline,
             skybox_pipeline,
@@ -1211,6 +1288,112 @@ impl Renderer {
         }
     }
 
+    pub fn pointlight(&mut self, light: &PointLight) {
+        match self.render_stage {
+            RenderStage::Ambient => {
+                self.render_stage = RenderStage::Directional;
+            }
+            RenderStage::Directional => {}
+            RenderStage::NeedsRedraw => {
+                self.recreate_swapchain();
+                self.commands = None;
+                self.render_stage = RenderStage::Stopped;
+                return;
+            }
+            _ => {
+                self.commands = None;
+                self.render_stage = RenderStage::Stopped;
+                return;
+            }
+        }
+
+        let camera_buffer = Buffer::from_data(
+            self.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::UNIFORM_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            pointlight_frag::Camera_Data {
+                position: self.vp.camera_pos.into(),
+            },
+        )
+        .unwrap();
+
+        // let directional_subbuffer =
+        //     self.generate_directional_buffer(&self.directional_allocator, &directional_light);
+
+        let point_buffer = Buffer::from_data(
+            self.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::UNIFORM_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            pointlight_frag::PointLight_Data {
+                position: light.position.into(),
+                color: light.color.into(),
+                intensity: light.intensity.into(),
+                radius: light.radius.into(),
+            },
+        )
+        .unwrap();
+
+        let pointlight_layout = self
+            .directional_pipeline
+            .layout()
+            .set_layouts()
+            .get(0)
+            .unwrap();
+        let pointlight_set = DescriptorSet::new(
+            self.descriptor_set_allocator.clone(),
+            pointlight_layout.clone(),
+            [
+                WriteDescriptorSet::image_view(0, self.color_buffer.clone()),
+                WriteDescriptorSet::image_view(1, self.normal_buffer.clone()),
+                WriteDescriptorSet::image_view(2, self.frag_location_buffer.clone()),
+                WriteDescriptorSet::image_view(3, self.specular_buffer.clone()),
+                WriteDescriptorSet::buffer(4, point_buffer.clone()),
+                WriteDescriptorSet::buffer(5, camera_buffer.clone()),
+            ],
+            [],
+        )
+        .unwrap();
+
+        self.commands
+            .as_mut()
+            .unwrap()
+            //.set_viewport(0, [self.viewport.clone()].into_iter().collect())
+            //.unwrap()
+            .bind_pipeline_graphics(self.pointlight_pipeline.clone())
+            .unwrap()
+            .bind_vertex_buffers(0, self.dummy_verts.clone())
+            .unwrap()
+            .bind_descriptor_sets(
+                PipelineBindPoint::Graphics,
+                self.pointlight_pipeline.layout().clone(),
+                0,
+                pointlight_set.clone(),
+            )
+            .unwrap();
+
+        unsafe {
+            self.commands
+                .as_mut()
+                .unwrap()
+                .draw(self.dummy_verts.len() as u32, 1, 0, 0)
+                .unwrap();
+        }
+    }
+
     pub fn skybox(&mut self, skybox: &mut Skybox) {
         match self.render_stage {
             RenderStage::Ambient => {
@@ -1404,7 +1587,7 @@ impl Renderer {
         let image_extent: [u32; 2] = window.size().into();
 
         let aspect_ratio = image_extent[0] as f32 / image_extent[1] as f32;
-        self.vp.projection = perspective(aspect_ratio, half_pi(), 0.01, 100.0);
+        self.vp.projection = perspective(aspect_ratio, half_pi(), 0.01, 1000.0);
 
         let (new_swapchain, new_images) = match self.swapchain.recreate(SwapchainCreateInfo {
             image_extent,

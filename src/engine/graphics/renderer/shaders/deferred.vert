@@ -26,10 +26,13 @@ layout(push_constant) uniform PushConstants {
 } model;
 
 void main() {
-    vec4 frag_pos = vp_uniforms.projection * vp_uniforms.view * model.model * vec4(position, 1.0);
-    gl_Position = frag_pos;
+    //vec4 frag_pos = vp_uniforms.projection * vp_uniforms.view * model.model * vec4(position, 1.0); this clipspace
+    vec4 frag_pos = model.model * vec4(position, 1.0);
+    //gl_Position = frag_pos; this from clipspace
+    gl_Position = vp_uniforms.projection * vp_uniforms.view * frag_pos;
     out_color = color;
-    out_normal = mat3(model.normals) * normal;
+    //out_normal = mat3(model.normals) * normal;
+    out_normal = normalize(mat3(transpose(inverse(model.model))) * normal); // world-space normal
     out_location = frag_pos;
     tex_coords = uv;
 }

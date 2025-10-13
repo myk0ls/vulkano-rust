@@ -1,5 +1,5 @@
 use crate::engine::assets::asset_manager::AssetManager;
-use crate::engine::graphics::renderer::DirectionalLight;
+use crate::engine::graphics::renderer::{DirectionalLight, PointLight};
 use crate::engine::graphics::skybox::SkyboxImages;
 use crate::engine::input::input_manager::InputManager;
 use crate::engine::physics::physics_engine::{
@@ -202,7 +202,10 @@ impl<G: Game> Application<G> {
             let x: f32 = 2.0 * elapsed_as_radians.cos();
             let z: f32 = 2.0 * elapsed_as_radians.sin();
 
-            let directional_light = DirectionalLight::new([x, 0.0, z, 1.0], [1.0, 1.0, 1.0]);
+            //let directional_light = DirectionalLight::new([x, 0.0, z, 1.0], [1.0, 1.0, 1.0]);
+            let directional_light = DirectionalLight::new([0.0, 1.0, 0.0, 1.0], [1.0, 1.0, 1.0]);
+
+            let point_light = PointLight::new([0.0, 1.5, 0.0, 1.0], [1.0, 1.0, 1.0], 2.0, 5.0);
 
             self.physics_sync_in();
             self.physics_step();
@@ -213,6 +216,7 @@ impl<G: Game> Application<G> {
             self.render_objects3d();
             self.renderer.ambient();
             self.renderer.directional(&directional_light);
+            self.renderer.pointlight(&point_light);
             self.renderer.skybox(&mut skybox);
             //self.renderer.light_object(&directional_light);
             self.renderer.finish(&mut self.previous_frame_end);
@@ -240,7 +244,7 @@ impl<G: Game> Application<G> {
 
     pub fn update_camera_view(&mut self) {
         let world = self.game.get_world();
-        world.run(|cameras: View<Camera>| {
+        world.run(|cameras: View<Camera>, transforms: View<Transform>| {
             for camera in cameras.iter().filter(|c| c.active) {
                 // FPS camera: look from position in the direction we're facing
                 let forward = camera.get_forward_vector();

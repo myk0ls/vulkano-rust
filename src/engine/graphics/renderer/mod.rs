@@ -19,3 +19,22 @@ impl DirectionalLight {
         vec3(self.position[0], self.position[1], self.position[2])
     }
 }
+
+#[derive(Default, Debug, Clone)]
+pub struct PointLight {
+    position: [f32; 4],
+    color: [f32; 3],
+    intensity: f32,
+    radius: f32,
+}
+
+impl PointLight {
+    pub fn new(position: [f32; 4], color: [f32; 3], intensity: f32, radius: f32) -> PointLight {
+        PointLight {
+            position,
+            color,
+            intensity,
+            radius,
+        }
+    }
+}

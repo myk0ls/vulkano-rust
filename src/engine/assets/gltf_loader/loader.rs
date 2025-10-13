@@ -47,9 +47,10 @@ impl LoaderGLTF {
         ret
     }
 
+    /// *inverting by the y axis because vulkan is upside down
     pub fn as_normal_vertex(vert: &Vertex) -> NormalVertex {
         NormalVertex {
-            position: [vert.position.x, vert.position.y, vert.position.z],
+            position: [vert.position.x, -vert.position.y, vert.position.z],
             normal: [vert.normal.x, vert.normal.y, vert.normal.z],
             color: [0.5, 0.5, 0.5],
             uv: [vert.tex_coords.x, vert.tex_coords.y],

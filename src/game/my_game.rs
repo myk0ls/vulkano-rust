@@ -1,3 +1,4 @@
+use crate::engine::assets::asset_manager;
 use crate::engine::assets::asset_manager::AssetManager;
 use crate::engine::input::input_manager::InputManager;
 use crate::engine::physics::physics_engine::ColliderComponent;
@@ -24,7 +25,7 @@ use crate::engine::{
 
 use nalgebra_glm::{pi, vec3};
 
-const MOVE_SPEED: f32 = 9.0;
+const MOVE_SPEED: f32 = 4.5;
 
 pub struct MyGame {
     name: Option<String>,
@@ -55,45 +56,64 @@ impl Game for MyGame {
             asset_manager.load_model("data/models/platform.glb")
         };
 
+        let soldier = {
+            let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
+            asset_manager.load_model("data/models/Soldier.glb")
+        };
+
+        let sponza = {
+            let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
+            asset_manager.load_model("data/models/sponza_atrium_3.glb")
+        };
+
         let player_entity =
             self.world
                 .add_entity((Camera::new(), Transform::new(), Velocity::new()));
 
-        let monkey_entity = &self.world.add_entity((
-            Transform::with_pos(vec3(0.0, 0.0, 0.0)),
-            Object3D::with_model(suzanne.clone()),
-            RigidBodyComponent {
-                handle: RigidBodyHandle::invalid(),
-                body_type: RigidBodyType::Fixed,
-            },
-            ColliderComponent {
-                handle: ColliderHandle::invalid(),
-                body_type: SharedShape::cuboid(0.5, 0.5, 0.5),
-            },
-        ));
+        // let monkey_entity = &self.world.add_entity((
+        //     Transform::with_pos(vec3(0.0, 0.0, 0.0)),
+        //     Object3D::with_model(suzanne.clone()),
+        //     RigidBodyComponent {
+        //         handle: RigidBodyHandle::invalid(),
+        //         body_type: RigidBodyType::Fixed,
+        //     },
+        //     ColliderComponent {
+        //         handle: ColliderHandle::invalid(),
+        //         body_type: SharedShape::cuboid(0.5, 0.5, 0.5),
+        //     },
+        // ));
 
         // let monkey_entity2 = &self.world.add_entity((
         //     Transform::with_pos(vec3(0.0, 0.0, 2.0)),
         //     Object3D::with_model(suzanne.clone()),
         // ));
 
+        let soldier_entity = &self.world.add_entity((
+            Transform::with_pos(vec3(0.0, 0.0, 0.0)),
+            Object3D::with_model(soldier.clone()),
+        ));
+
+        let sponza_scene = &self.world.add_entity((
+            Transform::with_pos(vec3(0.0, 0.0, 0.0)),
+            Object3D::with_model(sponza.clone()),
+        ));
         // let monkey_entity3 = &self.world.add_entity((
         //     Transform::with_pos(vec3(0.0, 0.0, 4.0)),
         //     Object3D::with_model(suzanne.clone()),
         // ));
 
-        let platform_ent = &self.world.add_entity((
-            Transform::with_pos(vec3(0.0, 0.0, 0.0)),
-            Object3D::with_model(platform.clone()),
-            RigidBodyComponent {
-                handle: RigidBodyHandle::invalid(),
-                body_type: RigidBodyType::Fixed,
-            },
-            ColliderComponent {
-                handle: ColliderHandle::invalid(),
-                body_type: SharedShape::cuboid(100.0, 0.05, 100.0),
-            },
-        ));
+        // let platform_ent = &self.world.add_entity((
+        //     Transform::with_pos(vec3(0.0, 0.0, 0.0)),
+        //     Object3D::with_model(platform.clone()),
+        //     RigidBodyComponent {
+        //         handle: RigidBodyHandle::invalid(),
+        //         body_type: RigidBodyType::Fixed,
+        //     },
+        //     ColliderComponent {
+        //         handle: ColliderHandle::invalid(),
+        //         body_type: SharedShape::cuboid(100.0, 0.05, 100.0),
+        //     },
+        // ));
 
         // for n in 5..100 {
         //     &self.world.add_entity((

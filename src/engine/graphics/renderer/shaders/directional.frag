@@ -21,7 +21,8 @@ void main() {
     float specular_intensity = subpassLoad(u_specular).x;
     float specular_shininess = subpassLoad(u_specular).y;
     vec3 view_dir = -normalize(camera.position - subpassLoad(u_frag_location).xyz);
-    vec3 light_direction = normalize(directional.position.xyz + normal);
+    //vec3 light_direction = normalize(directional.position.xyz + normal);
+    vec3 light_direction = normalize(directional.position.xyz);
     vec3 reflect_dir = reflect(-light_direction, normal);
     float spec = pow(max(dot(view_dir, reflect_dir), 0.0), specular_shininess);
     vec3 specular = specular_intensity * spec * directional.color;
