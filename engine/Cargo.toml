@@ -1,0 +1,17 @@
+[package]
+name = "vulkano-engine"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bytemuck = { workspace = true }
+vulkano = { workspace = true }
+vulkano-shaders = { workspace = true }
+nalgebra-glm = { workspace = true }
+rapier3d = { workspace = true }
+easy-gltf = { workspace = true }
+itertools = { workspace = true }
+sdl3 = { workspace = true }
+ash = { workspace = true }
+shipyard = { workspace = true }
+image = { workspace = true }

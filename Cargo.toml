@@ -1,9 +1,11 @@
-[package]
-name = "vulkano-tut"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+resolver = "2"
+members = [
+    "engine",
+    "game",
+]
 
-[dependencies]
+[workspace.dependencies]
 bytemuck = "1.23.1"
 vulkano = "0.35.2"
 vulkano-shaders = "0.35.0"

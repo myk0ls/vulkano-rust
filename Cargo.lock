@@ -1798,6 +1798,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "vulkano-engine"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "bytemuck",
+ "easy-gltf",
+ "image",
+ "itertools 0.14.0",
+ "nalgebra-glm",
+ "rapier3d",
+ "sdl3",
+ "shipyard",
+ "vulkano",
+ "vulkano-shaders",
+]
+
+[[package]]
+name = "vulkano-game"
+version = "0.1.0"
+dependencies = [
+ "nalgebra-glm",
+ "rapier3d",
+ "sdl3",
+ "shipyard",
+ "vulkano-engine",
+]
+
+[[package]]
 name = "vulkano-macros"
 version = "0.35.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1822,23 +1850,6 @@ dependencies = [
  "shaderc",
  "syn",
  "vulkano",
-]
-
-[[package]]
-name = "vulkano-tut"
-version = "0.1.0"
-dependencies = [
- "ash",
- "bytemuck",
- "easy-gltf",
- "image",
- "itertools 0.14.0",
- "nalgebra-glm",
- "rapier3d",
- "sdl3",
- "shipyard",
- "vulkano",
- "vulkano-shaders",
 ]
 
 [[package]]
