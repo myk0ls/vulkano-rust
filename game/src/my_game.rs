@@ -70,49 +70,35 @@ impl Game for MyGame {
             self.world
                 .add_entity((Camera::new(), Transform::new(), Velocity::new()));
 
-        // let monkey_entity = &self.world.add_entity((
+        let monkey_entity = &self.world.add_entity((
+            Transform::with_pos(vec3(0.0, -200.0, 0.0)),
+            Object3D::with_model(suzanne.clone()),
+            RigidBodyComponent::new(RigidBodyType::Dynamic),
+            ColliderComponent::new(SharedShape::cuboid(0.5, 0.5, 0.5)),
+        ));
+
+        let platform_ent = &self.world.add_entity((
+            Transform::with_pos(vec3(0.0, 0.0, 0.0)),
+            Object3D::with_model(platform.clone()),
+            RigidBodyComponent::new(RigidBodyType::Fixed),
+            ColliderComponent::new(SharedShape::cuboid(100.0, 0.05, 100.0)),
+        ));
+
+        //main scene
+        // let soldier_entity = &self.world.add_entity((
         //     Transform::with_pos(vec3(0.0, 0.0, 0.0)),
-        //     Object3D::with_model(suzanne.clone()),
-        //     RigidBodyComponent {
-        //         handle: RigidBodyHandle::invalid(),
-        //         body_type: RigidBodyType::Fixed,
-        //     },
-        //     ColliderComponent {
-        //         handle: ColliderHandle::invalid(),
-        //         body_type: SharedShape::cuboid(0.5, 0.5, 0.5),
-        //     },
+        //     Object3D::with_model(soldier.clone()),
         // ));
 
-        // let monkey_entity2 = &self.world.add_entity((
-        //     Transform::with_pos(vec3(0.0, 0.0, 2.0)),
-        //     Object3D::with_model(suzanne.clone()),
+        // let sponza_scene = &self.world.add_entity((
+        //     Transform::with_pos(vec3(0.0, 0.0, 0.0)),
+        //     Object3D::with_model(sponza.clone()),
         // ));
+        //
 
-        let soldier_entity = &self.world.add_entity((
-            Transform::with_pos(vec3(0.0, 0.0, 0.0)),
-            Object3D::with_model(soldier.clone()),
-        ));
-
-        let sponza_scene = &self.world.add_entity((
-            Transform::with_pos(vec3(0.0, 0.0, 0.0)),
-            Object3D::with_model(sponza.clone()),
-        ));
         // let monkey_entity3 = &self.world.add_entity((
         //     Transform::with_pos(vec3(0.0, 0.0, 4.0)),
         //     Object3D::with_model(suzanne.clone()),
-        // ));
-
-        // let platform_ent = &self.world.add_entity((
-        //     Transform::with_pos(vec3(0.0, 0.0, 0.0)),
-        //     Object3D::with_model(platform.clone()),
-        //     RigidBodyComponent {
-        //         handle: RigidBodyHandle::invalid(),
-        //         body_type: RigidBodyType::Fixed,
-        //     },
-        //     ColliderComponent {
-        //         handle: ColliderHandle::invalid(),
-        //         body_type: SharedShape::cuboid(100.0, 0.05, 100.0),
-        //     },
         // ));
 
         // for n in 5..100 {

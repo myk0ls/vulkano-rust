@@ -51,28 +51,29 @@ use vulkano::{
     },
     render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass},
     swapchain::{
-        Surface, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo, SwapchainPresentInfo,
+        PresentMode, Surface, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo,
+        SwapchainPresentInfo,
     },
     sync::{self, GpuFuture},
 };
 
 use vulkano::{Validated, VulkanError, swapchain::acquire_next_image};
 
-use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, Subbuffer};
+use vulkano::buffer::{Buffer, BufferCreateInfo, Subbuffer};
 
-use ash::vk::{self, ImageUsageFlags};
+use ash::vk;
 
 use vulkano::command_buffer::{PrimaryCommandBufferAbstract, SubpassBeginInfo, SubpassEndInfo};
 
 use vulkano::instance::InstanceExtensions;
 
+use crate::assets::asset_manager;
 use crate::graphics::renderer::PointLight;
 use crate::{
     assets::{
         self,
         gltf_loader::{ColoredVertex, DummyVertex, NormalVertex},
     },
-    core::application::{Application, Game},
     graphics::{
         mesh::Mesh,
         model::Model,
@@ -277,6 +278,7 @@ impl Renderer {
 
         let device_extensions = DeviceExtensions {
             khr_swapchain: true,
+            ext_descriptor_indexing: true,
             ..DeviceExtensions::empty()
         };
 
@@ -358,6 +360,8 @@ impl Renderer {
                     image_extent,
                     image_usage: usage,
                     composite_alpha: alpha,
+                    //Fifo locks to refresh rate, Immediate mode for immediate rendering, mailbox low latency, no tear
+                    present_mode: PresentMode::Immediate,
                     ..Default::default()
                 },
             )

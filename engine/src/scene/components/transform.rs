@@ -55,4 +55,18 @@ impl Transform {
         let z = self.position[(2, 3)];
         [x, y, z]
     }
+
+    pub fn get_rotation_vector(&self) -> [f32; 3] {
+        let x = self.rotation[(0, 3)];
+        let y = self.rotation[(1, 3)];
+        let z = self.rotation[(2, 3)];
+        [x, y, z]
+    }
+
+    pub fn get_scale_vector(&self) -> [f32; 3] {
+        let x = self.position[(0, 0)];
+        let y = self.position[(1, 1)];
+        let z = self.position[(2, 2)];
+        [x, y, z]
+    }
 }

@@ -15,3 +15,4 @@ sdl3 = { workspace = true }
 ash = { workspace = true }
 shipyard = { workspace = true }
 image = { workspace = true }
+gltf = "1.4.1"
