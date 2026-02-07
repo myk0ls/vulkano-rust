@@ -1,3 +1,4 @@
+use nalgebra_glm::TVec3;
 use rapier3d::prelude::*;
 use shipyard::{Component, EntitiesView, EntitiesViewMut, IntoIter, Unique, View, ViewMut, World};
 
@@ -130,6 +131,7 @@ pub fn physics_bodies_creation_system(world: &mut World) {
                     let rigid_body = RigidBodyBuilder::new(body.body_type)
                         .translation(Vector::new(pos[0], -pos[1], pos[2]))
                         .rotation(Vector::new(rot[0], rot[1], rot[2]))
+                        .linear_damping(5.0) // Add damping to slow down falling (0.0 = no damping, 1.0 = lots)
                         .build();
 
                     let handle = rigid_body_set.insert(rigid_body);
@@ -170,11 +172,27 @@ pub fn physics_bodies_creation_system(world: &mut World) {
     )
 }
 
-pub fn physics_sync_in(world: &mut World, physics: &mut PhysicsEngine) {
+pub fn physics_sync_in(world: &mut World) {
+    let mut physics = world.get_unique::<&mut PhysicsEngine>().unwrap();
+
     world.run(
-        |mut transforms: View<Transform>,
-         mut bodies: ViewMut<RigidBodyComponent>,
-         mut colliders: ViewMut<ColliderComponent>| {},
+        |transforms: View<Transform>, bodies: View<RigidBodyComponent>| {
+            // Update physics bodies from Transform components
+            // Convert rendering Y (down is positive) to physics Y (up is positive)
+            for (transform, body) in (&transforms, &bodies).iter() {
+                if let Some(handle) = body.handle
+                    && body.body_type != RigidBodyType::Fixed
+                    && body.body_type != RigidBodyType::Dynamic
+                {
+                    if let Some(rigid_body) = physics.rigid_body_set.get_mut(handle) {
+                        let pos = transform.get_position_vector();
+
+                        // Flip Y axis: rendering -Y up -> physics +Y up
+                        rigid_body.set_translation(Vector::new(pos[0], -pos[1], pos[2]), true);
+                    }
+                }
+            }
+        },
     );
 }
 
@@ -189,4 +207,21 @@ pub fn physics_step(world: &mut World) {
     rigid_bodies.for_each(|body| println!("rigdbody transliacija: {}", body.1.translation()));
 }
 
-pub fn physics_sync_out(world: &mut World, physics: &mut PhysicsEngine) {}
+pub fn physics_sync_out(world: &mut World) {
+    let mut physics = world.get_unique::<&mut PhysicsEngine>().unwrap();
+
+    world.run(
+        |mut transforms: ViewMut<Transform>, bodies: View<RigidBodyComponent>| {
+            for (transform, body) in (&mut transforms, &bodies).iter() {
+                if let Some(handle) = body.handle {
+                    if let Some(rigid_body) = physics.rigid_body_set.get(handle) {
+                        let pos = rigid_body.translation();
+
+                        // Flip Y axis back: physics +Y up -> rendering -Y up
+                        transform.set_position(pos.x, -pos.y, pos.z);
+                    }
+                }
+            }
+        },
+    );
+}

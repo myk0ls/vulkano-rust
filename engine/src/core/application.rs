@@ -213,7 +213,9 @@ impl<G: Game> Application<G> {
             // self.physics_step();
             // self.physics_sync_out();
 
+            crate::physics::physics_engine::physics_sync_in(self.game.get_world_mut());
             crate::physics::physics_engine::physics_step(self.game.get_world_mut());
+            crate::physics::physics_engine::physics_sync_out(self.game.get_world_mut());
 
             self.renderer.start();
             //self.renderer.geometry(&mut suzanne);

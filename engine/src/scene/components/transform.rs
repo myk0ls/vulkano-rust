@@ -45,6 +45,12 @@ impl Transform {
         self.position = translate(&self.position, &v);
     }
 
+    pub fn set_position(&mut self, x: f32, y: f32, z: f32) {
+        self.position[(0, 3)] = x;
+        self.position[(1, 3)] = y;
+        self.position[(2, 3)] = z;
+    }
+
     pub fn rotate(&mut self, radians: f32, v: TVec3<f32>) {
         self.rotation = rotate_normalized_axis(&self.rotation, radians, &v);
     }

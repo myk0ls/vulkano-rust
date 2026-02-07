@@ -71,10 +71,11 @@ impl Game for MyGame {
                 .add_entity((Camera::new(), Transform::new(), Velocity::new()));
 
         let monkey_entity = &self.world.add_entity((
-            Transform::with_pos(vec3(0.0, -200.0, 0.0)),
+            Transform::with_pos(vec3(0.0, -50.0, 0.0)),
             Object3D::with_model(suzanne.clone()),
             RigidBodyComponent::new(RigidBodyType::Dynamic),
-            ColliderComponent::new(SharedShape::cuboid(0.5, 0.5, 0.5)),
+            // ColliderComponent::new(SharedShape::cuboid(0.5, 0.5, 0.5)),
+            ColliderComponent::new(SharedShape::ball(0.5)),
         ));
 
         let platform_ent = &self.world.add_entity((
