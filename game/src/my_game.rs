@@ -10,6 +10,7 @@ use shipyard::{View, ViewMut};
 use vulkano_engine::assets::asset_manager::AssetManager;
 use vulkano_engine::input::input_manager::InputManager;
 use vulkano_engine::physics::physics_engine::ColliderComponent;
+use vulkano_engine::physics::physics_engine::KinematicCharacterComponent;
 use vulkano_engine::physics::physics_engine::RigidBodyComponent;
 use vulkano_engine::scene::components::delta_time::DeltaTime;
 use vulkano_engine::scene::components::object3d::Object3D;
@@ -66,11 +67,12 @@ impl Game for MyGame {
         };
 
         let player_entity = self.world.add_entity((
-            Camera::new(),
+            Camera::new(vec3(0.0, -5.0, 0.0)),
             Transform::with_pos(vec3(0.0, -3.0, 0.0)),
             Velocity::new(),
-            RigidBodyComponent::new(RigidBodyType::KinematicVelocityBased),
-            ColliderComponent::new(SharedShape::capsule_y(1.0, 5.0)),
+            KinematicCharacterComponent::new(),
+            RigidBodyComponent::new(RigidBodyType::KinematicPositionBased),
+            ColliderComponent::new(SharedShape::capsule_y(1.0, 0.5)),
             Object3D::with_model(soldier.clone()),
             Player::new(),
         ));

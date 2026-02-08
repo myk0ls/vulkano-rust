@@ -15,7 +15,7 @@ pub struct Camera {
 }
 
 impl Camera {
-    pub fn new() -> Camera {
+    pub fn new(pos: TVec3<f32>) -> Camera {
         Camera {
             fov: 80.0,
             near: 0.1,
@@ -23,7 +23,7 @@ impl Camera {
             yaw: 0.0,
             pitch: 0.0,
             radius: 5.0,
-            position: vec3(0.0, 0.0, 0.0),
+            position: pos,
             active: true,
         }
     }
