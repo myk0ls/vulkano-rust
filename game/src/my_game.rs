@@ -1,15 +1,12 @@
-use nalgebra_glm::quarter_pi;
-use rapier3d::prelude::ColliderHandle;
-use rapier3d::prelude::RigidBodyHandle;
+use crate::player;
 use rapier3d::prelude::RigidBodyType;
 use rapier3d::prelude::SharedShape;
 use rapier3d::prelude::*;
 use sdl3::{event::Event, keyboard::Keycode};
 use shipyard::IntoIter;
+use shipyard::UniqueView;
 use shipyard::World;
-use shipyard::{Unique, View, ViewMut};
-use shipyard::{UniqueView, UniqueViewMut};
-use vulkano_engine::assets::asset_manager;
+use shipyard::{View, ViewMut};
 use vulkano_engine::assets::asset_manager::AssetManager;
 use vulkano_engine::input::input_manager::InputManager;
 use vulkano_engine::physics::physics_engine::ColliderComponent;
@@ -24,6 +21,8 @@ use vulkano_engine::{
 };
 
 use nalgebra_glm::{pi, vec3};
+
+use crate::player::Player;
 
 const MOVE_SPEED: f32 = 4.5;
 
@@ -66,9 +65,15 @@ impl Game for MyGame {
             asset_manager.load_model("data/models/sponza_atrium_3.glb")
         };
 
-        let player_entity =
-            self.world
-                .add_entity((Camera::new(), Transform::new(), Velocity::new()));
+        let player_entity = self.world.add_entity((
+            Camera::new(),
+            Transform::with_pos(vec3(0.0, -3.0, 0.0)),
+            Velocity::new(),
+            RigidBodyComponent::new(RigidBodyType::KinematicVelocityBased),
+            ColliderComponent::new(SharedShape::capsule_y(1.0, 5.0)),
+            Object3D::with_model(soldier.clone()),
+            Player::new(),
+        ));
 
         let monkey_entity = &self.world.add_entity((
             Transform::with_pos(vec3(0.0, -50.0, 0.0)),
@@ -115,6 +120,8 @@ impl Game for MyGame {
 
         self.world.run(camera_movement);
         //self.world.run(move_suzanne);
+
+        player::run_player_systems(&mut self.world);
     }
 
     fn on_render(&mut self) {

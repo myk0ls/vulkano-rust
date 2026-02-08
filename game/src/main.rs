@@ -1,4 +1,5 @@
 mod my_game;
+mod player;
 use my_game::MyGame;
 use vulkano_engine::core::application::Application;
 

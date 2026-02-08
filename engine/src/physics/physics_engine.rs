@@ -1,5 +1,5 @@
 use nalgebra_glm::TVec3;
-use rapier3d::prelude::*;
+use rapier3d::{control::KinematicCharacterController, prelude::*};
 use shipyard::{Component, EntitiesView, EntitiesViewMut, IntoIter, Unique, View, ViewMut, World};
 
 use crate::prelude::transform::Transform;
@@ -111,6 +111,21 @@ impl ColliderComponent {
     }
 }
 
+#[derive(Component)]
+pub struct KinematicCharacterComponent {
+    pub handle: Option<ColliderHandle>,
+    pub controller: KinematicCharacterController,
+}
+
+impl KinematicCharacterComponent {
+    pub fn new() -> Self {
+        Self {
+            handle: None,
+            controller: KinematicCharacterController::default(),
+        }
+    }
+}
+
 pub fn physics_bodies_creation_system(world: &mut World) {
     let mut physics = world.get_unique::<&mut PhysicsEngine>().unwrap();
 
@@ -146,12 +161,11 @@ pub fn physics_bodies_creation_system(world: &mut World) {
                 if collider.handle.is_none() {
                     if let Some(body_handle) = body.handle {
                         // Create collider attached to the rigid body
-                        let collider_builder = ColliderBuilder::new(collider.shape.clone());
-                        // let handle = physics.collider_set.insert_with_parent(
-                        //     collider_builder,
-                        //     body_handle,
-                        //     physics.rigid_body_set.mut,
-                        // );
+                        let collider_builder = ColliderBuilder::new(collider.shape.clone())
+                            .collision_groups(InteractionGroups::new(
+                                Group::GROUP_1,
+                                Group::GROUP_1 | Group::GROUP_2,
+                                InteractionTestMode::And));
 
                         let handle = physics.collider_set.insert(collider_builder);
 
@@ -181,14 +195,16 @@ pub fn physics_sync_in(world: &mut World) {
             // Convert rendering Y (down is positive) to physics Y (up is positive)
             for (transform, body) in (&transforms, &bodies).iter() {
                 if let Some(handle) = body.handle
-                    && body.body_type != RigidBodyType::Fixed
-                    && body.body_type != RigidBodyType::Dynamic
+                    && body.body_type == RigidBodyType::KinematicPositionBased
+                    && body.body_type == RigidBodyType::KinematicVelocityBased
                 {
                     if let Some(rigid_body) = physics.rigid_body_set.get_mut(handle) {
                         let pos = transform.get_position_vector();
 
                         // Flip Y axis: rendering -Y up -> physics +Y up
                         rigid_body.set_translation(Vector::new(pos[0], -pos[1], pos[2]), true);
+
+                        //KinematicCharacterController::new(rigid_body, 0.05);
                     }
                 }
             }
@@ -213,7 +229,9 @@ pub fn physics_sync_out(world: &mut World) {
     world.run(
         |mut transforms: ViewMut<Transform>, bodies: View<RigidBodyComponent>| {
             for (transform, body) in (&mut transforms, &bodies).iter() {
-                if let Some(handle) = body.handle {
+                if let Some(handle) = body.handle
+                    && body.body_type == RigidBodyType::Dynamic
+                {
                     if let Some(rigid_body) = physics.rigid_body_set.get(handle) {
                         let pos = rigid_body.translation();
 
