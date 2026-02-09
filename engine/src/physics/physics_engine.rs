@@ -1,9 +1,9 @@
+use crate::prelude::transform::Transform;
 use nalgebra::Isometry3;
+use rapier3d::control::CharacterCollision;
 use rapier3d::control::{CharacterAutostep, CharacterLength};
 use rapier3d::{control::KinematicCharacterController, prelude::*};
 use shipyard::{Component, IntoIter, Unique, View, ViewMut, World};
-
-use crate::prelude::transform::Transform;
 
 #[derive(Component, Unique)]
 pub struct PhysicsEngine {
@@ -42,7 +42,7 @@ impl PhysicsEngine {
         }
     }
 
-    pub fn query_pipeline(&self) -> QueryPipeline {
+    pub fn query_pipeline(&self) -> QueryPipeline<'_> {
         self.broad_phase.as_query_pipeline(
             self.narrow_phase.query_dispatcher(),
             &self.rigid_body_set,
@@ -124,8 +124,10 @@ impl ColliderComponent {
 pub struct KinematicCharacterComponent {
     pub handle: Option<ColliderHandle>,
     pub controller: KinematicCharacterController,
+    pub cached_shape: Option<SharedShape>,
     pub desired_movement: Vector,
     pub vertical_velocity: f32,
+    pub collisions: Vec<CharacterCollision>,
 }
 
 impl KinematicCharacterComponent {
@@ -146,12 +148,14 @@ impl KinematicCharacterComponent {
         Self {
             handle: None,
             controller,
+            cached_shape: None,
             desired_movement: Vec3 {
                 x: 0.0,
                 y: 0.0,
                 z: 0.0,
             },
             vertical_velocity: 0.0,
+            collisions: Vec::new(),
         }
     }
 }
@@ -244,14 +248,15 @@ pub fn physics_kinematic(world: &mut World) {
     let mut physics = world.get_unique::<&mut PhysicsEngine>().unwrap();
 
     world.run(
-        |kinematic_character: ViewMut<KinematicCharacterComponent>,
+        |mut kinematic_character: ViewMut<KinematicCharacterComponent>,
          bodies: View<RigidBodyComponent>| {
             let dt = physics.integration_parameters.dt;
 
-            for (kinematic_character, body) in (&kinematic_character, &bodies).iter() {
+            for (mut kinematic_character, body) in (&mut kinematic_character, &bodies).iter() {
                 let body_handle = body.handle.unwrap();
                 let rigid_body = physics.rigid_body_set.get(body_handle).unwrap();
                 let collider = physics.collider_set.get(rigid_body.colliders()[0]).unwrap();
+                kinematic_character.cached_shape = Some(collider.shared_shape().clone());
 
                 let mut collisions = vec![];
 
@@ -279,11 +284,52 @@ pub fn physics_kinematic(world: &mut World) {
                     )
                 };
 
+                kinematic_character.collisions = collisions;
+
                 // Mutable borrow: apply the result
                 if let Some(rigid_body) = physics.rigid_body_set.get_mut(body_handle) {
                     rigid_body.set_linvel(simulated_movement.translation / dt, true);
                     //rigid_body.set_translation(simulated_movement.translation / dt, true);
                 }
+            }
+        },
+    );
+}
+
+pub fn physics_kinematic_impulses(world: &mut World) {
+    let mut physics = world.get_unique::<&mut PhysicsEngine>().unwrap();
+    let physics = &mut *physics;
+
+    world.run(
+        |mut kinematic_characters: ViewMut<KinematicCharacterComponent>,
+         bodies: View<RigidBodyComponent>| {
+            let dt = physics.integration_parameters.dt;
+
+            for (mut kinematic_character, body) in (&mut kinematic_characters, &bodies).iter() {
+                if kinematic_character.collisions.is_empty() {
+                    continue;
+                }
+
+                let body_handle = body.handle.unwrap();
+
+                let dispatcher = physics.narrow_phase.query_dispatcher();
+
+                kinematic_character
+                    .controller
+                    .solve_character_collision_impulses(
+                        dt,
+                        &mut physics.broad_phase.as_query_pipeline_mut(
+                            dispatcher,
+                            &mut physics.rigid_body_set,
+                            &mut physics.collider_set,
+                            QueryFilter::default().exclude_rigid_body(body_handle),
+                        ),
+                        kinematic_character.cached_shape.as_ref().unwrap().as_ref(),
+                        80.0,
+                        &kinematic_character.collisions,
+                    );
+
+                kinematic_character.collisions.clear();
             }
         },
     );

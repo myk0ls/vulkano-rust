@@ -73,7 +73,7 @@ impl Game for MyGame {
             KinematicCharacterComponent::new(),
             RigidBodyComponent::new(RigidBodyType::KinematicVelocityBased),
             ColliderComponent::new(SharedShape::capsule_y(1.0, 0.5)),
-            Object3D::with_model(soldier.clone()),
+            //Object3D::with_model(soldier.clone()),
             Player::new(),
         ));
 

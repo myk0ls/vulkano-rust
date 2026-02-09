@@ -201,6 +201,7 @@ impl<G: Game> Application<G> {
             //crate::physics::physics_engine::character_controller_system(self.game.get_world_mut());
             //crate::physics::physics_engine::physics_sync_in(self.game.get_world_mut());
             crate::physics::physics_engine::physics_kinematic(self.game.get_world_mut());
+            crate::physics::physics_engine::physics_kinematic_impulses(self.game.get_world_mut());
             crate::physics::physics_engine::physics_step(self.game.get_world_mut());
             crate::physics::physics_engine::physics_sync_out(self.game.get_world_mut());
 
