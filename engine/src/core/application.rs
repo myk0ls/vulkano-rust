@@ -198,8 +198,9 @@ impl<G: Game> Application<G> {
 
             let point_light = PointLight::new([0.0, 1.5, 0.0, 1.0], [1.0, 1.0, 1.0], 2.0, 5.0);
 
-            crate::physics::physics_engine::character_controller_system(self.game.get_world_mut());
-            crate::physics::physics_engine::physics_sync_in(self.game.get_world_mut());
+            //crate::physics::physics_engine::character_controller_system(self.game.get_world_mut());
+            //crate::physics::physics_engine::physics_sync_in(self.game.get_world_mut());
+            crate::physics::physics_engine::physics_kinematic(self.game.get_world_mut());
             crate::physics::physics_engine::physics_step(self.game.get_world_mut());
             crate::physics::physics_engine::physics_sync_out(self.game.get_world_mut());
 
@@ -235,13 +236,16 @@ impl<G: Game> Application<G> {
     pub fn update_camera_view(&mut self) {
         let world = self.game.get_world();
         world.run(|cameras: View<Camera>, transforms: View<Transform>| {
-            for camera in cameras.iter().filter(|c| c.active) {
-                //                     FPS camera: look from position in the direction we're facing
+            for (camera, transform) in (&cameras, &transforms).iter().filter(|(c, _)| c.active) {
+                //FPS camera: look from position in the direction we're facing
+                let pos = transform.get_position_vector();
+                let position = vec3(pos[0], pos[1], pos[2]);
+
                 let forward = camera.get_forward_vector();
-                let target = camera.position + forward; // Look ahead from our position
+                let target = position + forward; // Look ahead from our position
                 let up = vec3(0.0, 1.0, 0.0);
 
-                let view = look_at(&camera.position, &target, &up);
+                let view = look_at(&position, &target, &up);
                 self.renderer.set_view(&view);
                 break;
             }

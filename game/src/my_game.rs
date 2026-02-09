@@ -71,7 +71,7 @@ impl Game for MyGame {
             Transform::with_pos(vec3(0.0, -3.0, 0.0)),
             Velocity::new(),
             KinematicCharacterComponent::new(),
-            RigidBodyComponent::new(RigidBodyType::KinematicPositionBased),
+            RigidBodyComponent::new(RigidBodyType::KinematicVelocityBased),
             ColliderComponent::new(SharedShape::capsule_y(1.0, 0.5)),
             Object3D::with_model(soldier.clone()),
             Player::new(),
@@ -120,7 +120,7 @@ impl Game for MyGame {
     fn on_update(&mut self, _delta_time: f32) {
         //println!("Updating game logic: {delta_time}s");
 
-        self.world.run(camera_movement);
+        //self.world.run(camera_movement);
         //self.world.run(move_suzanne);
 
         player::run_player_systems(&mut self.world);

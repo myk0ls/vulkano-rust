@@ -1,8 +1,7 @@
 use nalgebra::Isometry3;
-use nalgebra_glm::TVec3;
 use rapier3d::control::{CharacterAutostep, CharacterLength};
 use rapier3d::{control::KinematicCharacterController, prelude::*};
-use shipyard::{Component, EntitiesView, EntitiesViewMut, IntoIter, Unique, View, ViewMut, World};
+use shipyard::{Component, IntoIter, Unique, View, ViewMut, World};
 
 use crate::prelude::transform::Transform;
 
@@ -241,6 +240,55 @@ pub fn physics_sync_in(world: &mut World) {
     );
 }
 
+pub fn physics_kinematic(world: &mut World) {
+    let mut physics = world.get_unique::<&mut PhysicsEngine>().unwrap();
+
+    world.run(
+        |kinematic_character: ViewMut<KinematicCharacterComponent>,
+         bodies: View<RigidBodyComponent>| {
+            let dt = physics.integration_parameters.dt;
+
+            for (kinematic_character, body) in (&kinematic_character, &bodies).iter() {
+                let body_handle = body.handle.unwrap();
+                let rigid_body = physics.rigid_body_set.get(body_handle).unwrap();
+                let collider = physics.collider_set.get(rigid_body.colliders()[0]).unwrap();
+
+                let mut collisions = vec![];
+
+                // Immutable borrows: read collider shape, position, and query pipeline
+                // All drop at the end of this block before the mutable borrow below
+                let simulated_movement = {
+                    let query_pipeline = physics.query_pipeline();
+
+                    let desired_translation = kinematic_character.desired_movement;
+
+                    kinematic_character.controller.move_shape(
+                        dt,
+                        &physics.broad_phase.as_query_pipeline(
+                            physics.narrow_phase.query_dispatcher(),
+                            &physics.rigid_body_set,
+                            &physics.collider_set,
+                            QueryFilter::default().exclude_rigid_body(body_handle),
+                        ),
+                        collider.shape(),
+                        rigid_body.position().into(),
+                        desired_translation,
+                        |collision| {
+                            collisions.push(collision);
+                        },
+                    )
+                };
+
+                // Mutable borrow: apply the result
+                if let Some(rigid_body) = physics.rigid_body_set.get_mut(body_handle) {
+                    rigid_body.set_linvel(simulated_movement.translation / dt, true);
+                    //rigid_body.set_translation(simulated_movement.translation / dt, true);
+                }
+            }
+        },
+    );
+}
+
 pub fn physics_step(world: &mut World) {
     // Run the physics simulation step
     let mut physics = world.get_unique::<&mut PhysicsEngine>().unwrap();
@@ -259,7 +307,8 @@ pub fn physics_sync_out(world: &mut World) {
         |mut transforms: ViewMut<Transform>, bodies: View<RigidBodyComponent>| {
             for (transform, body) in (&mut transforms, &bodies).iter() {
                 if let Some(handle) = body.handle
-                    && body.body_type == RigidBodyType::Dynamic
+                    && (body.body_type == RigidBodyType::Dynamic
+                        || body.body_type == RigidBodyType::KinematicVelocityBased)
                 {
                     if let Some(rigid_body) = physics.rigid_body_set.get(handle) {
                         let pos = rigid_body.translation();
@@ -272,126 +321,3 @@ pub fn physics_sync_out(world: &mut World) {
         },
     );
 }
-
-// Character controller movement system - call this BEFORE physics_step
-pub fn character_controller_system(world: &mut World) {
-    let mut physics = world.get_unique::<&mut PhysicsEngine>().unwrap();
-
-    world.run(
-        |mut transforms: ViewMut<Transform>,
-         bodies: View<RigidBodyComponent>,
-         mut characters: ViewMut<KinematicCharacterComponent>| {
-            for (transform, body, character) in (&mut transforms, &bodies, &mut characters).iter() {
-                if let Some(body_handle) = body.handle {
-                    if let Some(collider_handle) = character.handle {
-                        if let Some(rigid_body) = physics.rigid_body_set.get(body_handle) {
-                            if let Some(collider) = physics.collider_set.get(collider_handle) {
-                                // Apply gravity to vertical velocity
-                                character.vertical_velocity -=
-                                    9.81 * physics.integration_parameters.dt;
-
-                                // Build final desired movement (horizontal + vertical)
-                                let mut final_movement = character.desired_movement;
-                                final_movement.y =
-                                    character.vertical_velocity * physics.integration_parameters.dt;
-
-                                // Get current position from transform (convert to physics coords)
-                                let pos = transform.get_position_vector();
-                                let character_pos =
-                                    Pose::from(Isometry3::translation(pos[0], -pos[1], pos[2]));
-
-                                // Get the shape
-                                let character_shape = collider.shape();
-
-                                // Create query pipeline
-                                let query_pipeline = physics.query_pipeline();
-
-                                // Use character controller to resolve collisions
-                                let corrected_movement = character.controller.move_shape(
-                                    physics.integration_parameters.dt,
-                                    &query_pipeline,
-                                    character_shape,
-                                    &character_pos,
-                                    final_movement,
-                                    |_| {}, // Collision event handler
-                                );
-
-                                // Check if grounded (reset vertical velocity if on ground)
-                                if corrected_movement.grounded {
-                                    character.vertical_velocity = 0.0;
-                                }
-
-                                // Apply the corrected movement to the rigid body
-                                if let Some(rigid_body_mut) =
-                                    physics.rigid_body_set.get_mut(body_handle)
-                                {
-                                    let new_pos = rigid_body_mut.translation()
-                                        + corrected_movement.translation;
-                                    rigid_body_mut.set_translation(new_pos, true);
-
-                                    // Update transform (flip Y axis: physics +Y up -> rendering -Y up)
-                                    transform.set_position(new_pos.x, -new_pos.y, new_pos.z);
-                                }
-
-                                // Reset horizontal desired movement for next frame
-                                character.desired_movement = Vec3::ZERO;
-                            }
-                        }
-                    }
-                }
-            }
-        },
-    );
-}
-
-// OLD COMMENTED CODE BELOW - REMOVE IF THE ABOVE WORKS
-// pub fn character_controller_system(world: &mut World) {
-//     let mut physics = world.get_unique::<&mut PhysicsEngine>().unwrap();
-
-//     world.run(
-//         |mut transforms: ViewMut<Transform>,
-//          bodies: View<RigidBodyComponent>,
-//          mut characters: ViewMut<KinematicCharacterComponent>| {
-//             for (transform, body, character) in (&mut transforms, &bodies, &mut characters).iter() {
-//                 if let Some(body_handle) = body.handle {
-//                     if let Some(collider_handle) = character.handle {
-//                         if let Some(rigid_body) = physics.rigid_body_set.get(body_handle) {
-//                             if let Some(collider) = physics.collider_set.get(collider_handle) {
-//                                 // Apply character controller movement
-//                                 let corrected_movement = character.controller.move_shape(
-//                                     physics.integration_parameters.dt,
-//                                     &physics.broad_phase.as_query_pipeline(
-//                                         &physics.narrow_phase.query_dispatcher(),
-//                                         bodies,
-//                                         colliders,
-//                                         filter,
-//                                     ) | _
-//                                         | {}, // Collision event handler
-//                                 );
-
-//                                 // Update rigid body position
-//                                 if let Some(rigid_body_mut) =
-//                                     physics.rigid_body_set.get_mut(body_handle)
-//                                 {
-//                                     let new_pos = rigid_body_mut.translation()
-//                                         + corrected_movement.translation;
-//                                     rigid_body_mut.set_translation(new_pos, true);
-
-//                                     // Update transform (flip Y axis back)
-//                                     transform.set_position(new_pos.x, -new_pos.y, new_pos.z);
-//                                 }
-
-//                                 // Reset movement for next frame
-//                                 character.desired_movement = Vec3 {
-//                                     x: 0.0,
-//                                     y: 0.0,
-//                                     z: 0.0,
-//                                 };
-//                             }
-//                         }
-//                     }
-//                 }
-//             }
-//         },
-//     );
-// }

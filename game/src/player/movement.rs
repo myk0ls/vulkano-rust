@@ -1,20 +1,21 @@
 use nalgebra_glm::vec3;
-use rapier3d::prelude::Vector3;
+use rapier3d::prelude::Vec3;
 use sdl3::keyboard::Keycode;
 use shipyard::{IntoIter, UniqueView, View, ViewMut};
 use vulkano_engine::input::input_manager::InputManager;
-use vulkano_engine::physics::physics_engine::KinematicCharacterComponent;
+use vulkano_engine::physics::physics_engine::{KinematicCharacterComponent, PhysicsEngine};
 use vulkano_engine::prelude::camera::Camera;
-use vulkano_engine::prelude::delta_time::DeltaTime;
 
 use crate::player::Player;
+
+const JUMP_FORCE: f32 = 1.0;
 
 pub fn player_movement(
     players: View<Player>,
     cameras: View<Camera>,
-    mut kinematic_characters: ViewMut<KinematicCharacterComponent>,
+    mut kinematic_character_components: ViewMut<KinematicCharacterComponent>,
     input_manager: UniqueView<InputManager>,
-    dt: UniqueView<DeltaTime>,
+    physics_engine: UniqueView<PhysicsEngine>,
 ) {
     let camera = cameras
         .iter()
@@ -23,36 +24,36 @@ pub fn player_movement(
 
     let forward = camera.get_forward_vector();
     let right = camera.get_right_vector();
+    let dt = physics_engine.integration_parameters.dt;
 
-    // Iterate over all player entities with character controller
-    for (_player, character) in (&players, &mut kinematic_characters).iter() {
-        // Build horizontal velocity from input
-        let mut horizontal_velocity = vec3(0.0, 0.0, 0.0);
+    for (_player, kinematic_character) in (&players, &mut kinematic_character_components).iter() {
+        let mut direction = vec3(0.0, 0.0, 0.0);
 
         if input_manager.pressed_keys.contains(&Keycode::W) {
-            horizontal_velocity += forward;
+            direction += forward;
         }
         if input_manager.pressed_keys.contains(&Keycode::S) {
-            horizontal_velocity -= forward;
+            direction -= forward;
         }
         if input_manager.pressed_keys.contains(&Keycode::A) {
-            horizontal_velocity -= right;
+            direction -= right;
         }
         if input_manager.pressed_keys.contains(&Keycode::D) {
-            horizontal_velocity += right;
+            direction += right;
         }
 
-        // Normalize and scale by move speed
-        if horizontal_velocity.magnitude() > 0.0 {
-            horizontal_velocity = horizontal_velocity.normalize() * crate::player::MOVE_SPEED;
+        //direction.y -= 0.981 * dt;
+        direction.y = 0.0;
+
+        // Normalize and scale by player speed and timestep to get a displacement for this frame
+        if direction.magnitude() > 0.0 {
+            direction = direction.normalize() * crate::player::MOVE_SPEED * dt;
         }
 
-        // Set desired movement (engine will handle gravity, collision, etc.)
-        // Only set horizontal movement - vertical is handled by character controller system
-        character.desired_movement = Vector3::new(
-            horizontal_velocity.x * dt.0,
-            0.0, // Don't touch Y - gravity is automatic
-            horizontal_velocity.z * dt.0,
-        );
+        // Apply gravity
+        direction.y -= 0.981 * dt;
+
+        kinematic_character.desired_movement = Vec3::new(direction.x, direction.y, direction.z);
+        println!("{}", kinematic_character.desired_movement);
     }
 }
