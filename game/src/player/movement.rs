@@ -8,7 +8,7 @@ use vulkano_engine::prelude::camera::Camera;
 
 use crate::player::Player;
 
-const JUMP_FORCE: f32 = 1.0;
+const JUMP_FORCE: f32 = 2.0;
 
 pub fn player_movement(
     players: View<Player>,
@@ -50,10 +50,18 @@ pub fn player_movement(
             direction = direction.normalize() * crate::player::MOVE_SPEED * dt;
         }
 
-        // Apply gravity
-        direction.y -= 0.981 * dt;
+        if kinematic_character.grounded && input_manager.pressed_keys.contains(&Keycode::Space) {
+            kinematic_character.vertical_velocity = JUMP_FORCE;
+        }
 
-        kinematic_character.desired_movement = Vec3::new(direction.x, direction.y, direction.z);
+        // Apply gravity
+        kinematic_character.vertical_velocity -= 0.981 * dt;
+
+        kinematic_character.desired_movement = Vec3::new(
+            direction.x,
+            kinematic_character.vertical_velocity * dt,
+            direction.z,
+        );
         println!("{}", kinematic_character.desired_movement);
     }
 }

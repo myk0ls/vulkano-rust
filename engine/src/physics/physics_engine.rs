@@ -1,5 +1,4 @@
 use crate::prelude::transform::Transform;
-use nalgebra::Isometry3;
 use rapier3d::control::CharacterCollision;
 use rapier3d::control::{CharacterAutostep, CharacterLength};
 use rapier3d::{control::KinematicCharacterController, prelude::*};
@@ -127,6 +126,7 @@ pub struct KinematicCharacterComponent {
     pub cached_shape: Option<SharedShape>,
     pub desired_movement: Vector,
     pub vertical_velocity: f32,
+    pub grounded: bool,
     pub collisions: Vec<CharacterCollision>,
 }
 
@@ -155,6 +155,7 @@ impl KinematicCharacterComponent {
                 z: 0.0,
             },
             vertical_velocity: 0.0,
+            grounded: false,
             collisions: Vec::new(),
         }
     }
@@ -263,8 +264,6 @@ pub fn physics_kinematic(world: &mut World) {
                 // Immutable borrows: read collider shape, position, and query pipeline
                 // All drop at the end of this block before the mutable borrow below
                 let simulated_movement = {
-                    let query_pipeline = physics.query_pipeline();
-
                     let desired_translation = kinematic_character.desired_movement;
 
                     kinematic_character.controller.move_shape(
@@ -284,6 +283,10 @@ pub fn physics_kinematic(world: &mut World) {
                     )
                 };
 
+                kinematic_character.grounded = simulated_movement.grounded;
+                if simulated_movement.grounded {
+                    kinematic_character.vertical_velocity = 0.0;
+                }
                 kinematic_character.collisions = collisions;
 
                 // Mutable borrow: apply the result
@@ -347,7 +350,7 @@ pub fn physics_step(world: &mut World) {
 }
 
 pub fn physics_sync_out(world: &mut World) {
-    let mut physics = world.get_unique::<&mut PhysicsEngine>().unwrap();
+    let physics = world.get_unique::<&PhysicsEngine>().unwrap();
 
     world.run(
         |mut transforms: ViewMut<Transform>, bodies: View<RigidBodyComponent>| {
