@@ -96,6 +96,8 @@ impl<G: Game> Application<G> {
 
         let mut skybox = self.renderer.upload_skybox(skybox_images);
 
+        self.renderer.set_ambient([1.0, 1.0, 1.0], 0.5);
+
         crate::physics::physics_engine::physics_bodies_creation_system(self.game.get_world_mut());
 
         self.sdl.mouse().set_relative_mouse_mode(&self.window, true);

@@ -62,6 +62,6 @@ pub fn player_movement(
             kinematic_character.vertical_velocity * dt,
             direction.z,
         );
-        println!("{}", kinematic_character.desired_movement);
+        // println!("{}", kinematic_character.desired_movement);
     }
 }

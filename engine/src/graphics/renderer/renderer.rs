@@ -1,6 +1,8 @@
 use std::{mem, slice, sync::Arc};
 
-use nalgebra_glm::{TMat4, TVec3, half_pi, identity, inverse, perspective, vec3};
+use nalgebra_glm::{
+    TMat4, TVec3, half_pi, identity, inverse, look_at_rh, ortho, perspective, vec3,
+};
 use sdl3::video::Window;
 use vulkano::buffer::allocator::{SubbufferAllocator, SubbufferAllocatorCreateInfo};
 use vulkano::descriptor_set::DescriptorSet;
@@ -66,6 +68,9 @@ use ash::vk;
 use vulkano::command_buffer::{PrimaryCommandBufferAbstract, SubpassBeginInfo, SubpassEndInfo};
 
 use vulkano::instance::InstanceExtensions;
+
+use vulkano::image::sampler::BorderColor;
+use vulkano::pipeline::graphics::rasterization::DepthBiasState;
 
 use crate::assets::asset_manager;
 use crate::graphics::renderer::PointLight;
@@ -167,6 +172,22 @@ mod pointlight_frag {
     }
 }
 
+mod shadows_vert {
+    vulkano_shaders::shader! {
+        ty: "vertex",
+        path: "src/graphics/renderer/shaders/shadows.vert",
+    }
+}
+
+mod shadows_frag {
+    vulkano_shaders::shader! {
+        ty: "fragment",
+        path: "src/graphics/renderer/shaders/shadows.frag",
+    }
+}
+
+const SHADOW_MAP_SIZE: u32 = 2048;
+
 #[derive(Debug, Clone)]
 enum RenderStage {
     Stopped,
@@ -204,6 +225,7 @@ pub struct Renderer {
     skybox_pipeline: Arc<GraphicsPipeline>,
     dummy_verts: Subbuffer<[DummyVertex]>,
     framebuffers: Vec<Arc<Framebuffer>>,
+    shadow_framebuffer: Arc<Framebuffer>,
     color_buffer: Arc<ImageView>,
     normal_buffer: Arc<ImageView>,
     vp_set: Arc<DescriptorSet>,
@@ -390,6 +412,25 @@ impl Renderer {
         let skybox_frag = skybox_frag::load(device.clone()).unwrap();
         let pointlight_vert = pointlight_vert::load(device.clone()).unwrap();
         let pointlight_frag = pointlight_frag::load(device.clone()).unwrap();
+        let shadows_vert = shadows_vert::load(device.clone()).unwrap();
+        let shadows_frag = shadows_frag::load(device.clone()).unwrap();
+
+        let shadow_render_pass = vulkano::single_pass_renderpass!(
+            device.clone(),
+            attachments: {
+                depth: {
+                    format: Format::D32_SFLOAT,
+                    samples: 1,
+                    load_op: Clear,
+                    store_op: Store,
+                },
+            },
+            pass: {
+                color: [],
+                depth_stencil: {depth},
+            }
+        )
+        .unwrap();
 
         let render_pass = vulkano::ordered_passes_renderpass!(device.clone(),
             attachments: {
@@ -786,6 +827,70 @@ impl Renderer {
             .unwrap()
         };
 
+        let shadow_pass = Subpass::from(shadow_render_pass.clone(), 0).unwrap();
+
+        let shadow_pipeline = {
+            let vs = shadows_vert.entry_point("main").unwrap();
+            let fs = shadows_frag.entry_point("main").unwrap();
+
+            let vertex_input_state = NormalVertex::per_vertex().definition(&vs).unwrap();
+
+            let stages = [
+                PipelineShaderStageCreateInfo::new(vs),
+                PipelineShaderStageCreateInfo::new(fs),
+            ];
+
+            let layout = PipelineLayout::new(
+                device.clone(),
+                PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
+                    .into_pipeline_layout_create_info(device.clone())
+                    .unwrap(),
+            )
+            .unwrap();
+
+            GraphicsPipeline::new(
+                device.clone(),
+                None,
+                GraphicsPipelineCreateInfo {
+                    stages: stages.into_iter().collect(),
+                    vertex_input_state: Some(vertex_input_state),
+                    input_assembly_state: Some(InputAssemblyState::default()),
+                    viewport_state: Some(ViewportState {
+                        viewports: [Viewport {
+                            offset: [0.0, 0.0],
+                            extent: [SHADOW_MAP_SIZE as f32, SHADOW_MAP_SIZE as f32],
+                            depth_range: 0.0..=1.0,
+                        }]
+                        .into_iter()
+                        .collect(),
+                        ..Default::default()
+                    }),
+                    //dynamic_state: [DynamicState::ViewportWithCount].into_iter().collect(),
+                    rasterization_state: Some(RasterizationState {
+                        cull_mode: CullMode::Front,
+                        depth_bias: Some(DepthBiasState {
+                            constant_factor: 1.25, // fights shadow acne
+                            clamp: 0.0,
+                            slope_factor: 1.75,
+                        }),
+                        ..Default::default()
+                    }),
+                    depth_stencil_state: Some(DepthStencilState {
+                        depth: Some(DepthState::simple()),
+                        ..Default::default()
+                    }),
+                    multisample_state: Some(MultisampleState::default()),
+                    color_blend_state: Some(ColorBlendState::with_attachment_states(
+                        0,
+                        Default::default(),
+                    )),
+                    subpass: Some(shadow_pass.clone().into()),
+                    ..GraphicsPipelineCreateInfo::layout(layout)
+                },
+            )
+            .unwrap()
+        };
+
         let vp_buffer = Buffer::from_data(
             memory_allocator.clone(),
             BufferCreateInfo {
@@ -864,6 +969,33 @@ impl Renderer {
                 &mut viewport,
             );
 
+        let shadow_map_image = Image::new(
+            memory_allocator.clone(),
+            ImageCreateInfo {
+                image_type: vulkano::image::ImageType::Dim2d,
+                format: Format::D32_SFLOAT,
+                extent: [SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, 1],
+                usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::SAMPLED,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let shadow_map_view = ImageView::new_default(shadow_map_image).unwrap();
+
+        let shadow_framebuffer = Framebuffer::new(
+            shadow_render_pass.clone(),
+            FramebufferCreateInfo {
+                attachments: vec![shadow_map_view.clone()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
         let sampler = Sampler::new(
             device.clone(),
             SamplerCreateInfo {
@@ -872,6 +1004,19 @@ impl Renderer {
                 mipmap_mode: SamplerMipmapMode::Nearest,
                 address_mode: [SamplerAddressMode::Repeat; 3],
                 mip_lod_bias: 0.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let shadow_sampler = Sampler::new(
+            device.clone(),
+            SamplerCreateInfo {
+                mag_filter: Filter::Linear,
+                min_filter: Filter::Linear,
+                compare: Some(CompareOp::LessOrEqual),
+                address_mode: [SamplerAddressMode::ClampToBorder; 3],
+                border_color: BorderColor::FloatOpaqueWhite,
                 ..Default::default()
             },
         )
@@ -919,6 +1064,7 @@ impl Renderer {
             skybox_pipeline,
             dummy_verts,
             framebuffers,
+            shadow_framebuffer,
             color_buffer,
             normal_buffer,
             vp_set,
@@ -1058,6 +1204,55 @@ impl Renderer {
 
         self.commands = None;
         self.render_stage = RenderStage::Stopped;
+    }
+
+    pub fn shadow_pass(
+        &mut self,
+        light: &DirectionalLight,
+        model: &mut assets::asset_manager::Model,
+        transform: &Transform,
+    ) -> Subbuffer<shadows_vert::LightSpaceMatrix> {
+        let light_space_matrix = Renderer::compute_light_space_matrix(light.position);
+
+        // Upload light space matrix uniform
+        let light_space_buffer = Buffer::from_data(
+            self.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::UNIFORM_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            shadows_vert::LightSpaceMatrix {
+                lightSpaceMatrix: light_space_matrix.into(),
+            },
+        )
+        .unwrap();
+
+        let push_constants = shadows_vert::PushConstants {
+            model: transform.model_matrix().into(),
+        };
+
+        // Begin shadow render pass
+        self.commands
+            .as_mut()
+            .unwrap()
+            .begin_render_pass(
+                RenderPassBeginInfo {
+                    clear_values: vec![Some(1.0f32.into())], // clear depth to 1.0
+                    ..RenderPassBeginInfo::framebuffer(self.shadow_framebuffer.clone())
+                },
+                SubpassBeginInfo {
+                    contents: SubpassContents::Inline,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        light_space_buffer
     }
 
     pub fn geometry(&mut self, model: &mut assets::asset_manager::Model, transform: &Transform) {
@@ -1677,7 +1872,7 @@ impl Renderer {
                     image_type: vulkano::image::ImageType::Dim2d,
                     format: Format::D16_UNORM,
                     extent: [dimensions[0], dimensions[1], 1],
-                    usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::TRANSIENT_ATTACHMENT,
+                    usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::SAMPLED,
                     ..Default::default()
                 },
                 AllocationCreateInfo {
@@ -2123,5 +2318,17 @@ impl Renderer {
         Skybox {
             cubemap: cubemap_view,
         }
+    }
+
+    pub fn compute_light_space_matrix(light_dir: [f32; 4]) -> TMat4<f32> {
+        let light_direction = vec3(light_dir[0], light_dir[1], light_dir[2]).normalize();
+        let eye = vec3(0.0, 0.0, 0.0) - light_direction * 50.0; // pull back along light dir
+        let target = vec3(0.0, 0.0, 0.0);
+        let up = vec3(0.0, 1.0, 0.0);
+
+        let light_view = look_at_rh(&eye, &target, &up);
+        let light_projection = ortho(-25.0, 25.0, -25.0, 25.0, 0.1, 100.0);
+
+        light_projection * light_view
     }
 }

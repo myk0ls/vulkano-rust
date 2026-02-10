@@ -345,8 +345,8 @@ pub fn physics_step(world: &mut World) {
     physics.step();
 
     // Debug: print rigid body positions (optional - remove in production)
-    let rigid_bodies = physics.rigid_body_set.iter();
-    rigid_bodies.for_each(|body| println!("rigdbody transliacija: {}", body.1.translation()));
+    // let rigid_bodies = physics.rigid_body_set.iter();
+    // rigid_bodies.for_each(|body| println!("rigdbody transliacija: {}", body.1.translation()));
 }
 
 pub fn physics_sync_out(world: &mut World) {

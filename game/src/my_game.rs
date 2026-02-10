@@ -87,7 +87,7 @@ impl Game for MyGame {
 
         let platform_ent = &self.world.add_entity((
             Transform::with_pos(vec3(0.0, 0.0, 0.0)),
-            Object3D::with_model(platform.clone()),
+            //Object3D::with_model(platform.clone()),
             RigidBodyComponent::new(RigidBodyType::Fixed),
             ColliderComponent::new(SharedShape::cuboid(100.0, 0.05, 100.0)),
         ));
@@ -98,11 +98,10 @@ impl Game for MyGame {
         //     Object3D::with_model(soldier.clone()),
         // ));
 
-        // let sponza_scene = &self.world.add_entity((
-        //     Transform::with_pos(vec3(0.0, 0.0, 0.0)),
-        //     Object3D::with_model(sponza.clone()),
-        // ));
-        //
+        let sponza_scene = &self.world.add_entity((
+            Transform::with_pos(vec3(0.0, 0.0, 0.0)),
+            Object3D::with_model(sponza.clone()),
+        ));
 
         // let monkey_entity3 = &self.world.add_entity((
         //     Transform::with_pos(vec3(0.0, 0.0, 4.0)),
