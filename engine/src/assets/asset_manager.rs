@@ -14,14 +14,16 @@ pub struct UnifiedGeometry {
     pub vertex_buffer: Option<Subbuffer<[NormalVertex]>>,
     pub index_buffer: Option<Subbuffer<[u32]>>,
     pub mesh_draws: Vec<MeshDrawInfo>,
+    pub textures: Vec<Arc<ImageView>>,
+    pub specular_data: Vec<[f32; 2]>,
 }
 
 pub struct MeshDrawInfo {
     pub index_offset: u32,
     pub index_count: u32,
-    pub vertex_offset: u32,
+    pub vertex_offset: i32, // Note: i32 for draw_indexed_indirect's vertex_offset
     pub vertex_count: u32,
-    pub material_index: usize,
+    pub material_index: u32, // Index into the texture array
 }
 
 pub struct Model {
@@ -49,6 +51,8 @@ impl AssetManager {
                 vertex_buffer: None,
                 index_buffer: None,
                 mesh_draws: Vec::new(),
+                textures: Vec::new(),
+                specular_data: Vec::new(),
             },
         }
     }
@@ -77,12 +81,16 @@ impl AssetManager {
     }
 
     pub fn build_unified_geometry(&mut self, memory_allocator: Arc<StandardMemoryAllocator>) {
-        let mut all_vertices = Vec::new();
-        let mut all_indices = Vec::new();
-        let mut mesh_draws = Vec::new();
+        let mut all_vertices: Vec<NormalVertex> = Vec::new();
+        let mut all_indices: Vec<u32> = Vec::new();
+        let mut mesh_draws: Vec<MeshDrawInfo> = Vec::new();
+        let mut textures: Vec<Arc<ImageView>> = Vec::new();
+        let mut specular_data: Vec<[f32; 2]> = Vec::new();
 
-        let mut current_vertex_offset = 0u32;
-        let mut current_index_offset = 0u32;
+        let mut texture_dedup: HashMap<usize, u32> = HashMap::new(); // Map from texture pointer to unified texture index
+
+        let mut current_vertex_offset: u32 = 0;
+        let mut current_index_offset: u32 = 0;
 
         // Iterate through all models and their meshes
         for (_model_name, model) in self.models.iter() {
@@ -90,23 +98,53 @@ impl AssetManager {
                 let vertex_count = mesh.vertices.len() as u32;
                 let index_count = mesh.indices.len() as u32;
 
+                // --- Resolve or insert texture, get material_index ---
+                let material_index = if let Some(gpu_texture) = mesh.texture.as_ref() {
+                    // Use the Arc's pointer address as a dedup key
+                    let ptr_key = Arc::as_ptr(gpu_texture) as usize;
+
+                    *texture_dedup.entry(ptr_key).or_insert_with(|| {
+                        let idx = textures.len() as u32;
+                        textures.push(gpu_texture.clone());
+
+                        // Derive specular values from the glTF material.
+                        // easy_gltf exposes roughness; convert to a Blinn-Phong-ish shininess.
+                        let roughness = mesh.material.pbr.roughness_factor;
+                        // Clamp roughness away from 0 to avoid infinite shininess
+                        let clamped = roughness.clamp(0.045, 1.0);
+                        let shininess = (2.0 / (clamped * clamped) - 2.0).clamp(1.0, 256.0);
+                        let intensity = 1.0 - roughness; // rougher → less specular
+
+                        specular_data.push([intensity, shininess]);
+
+                        idx
+                    })
+                } else {
+                    // No texture uploaded — this shouldn't happen if upload ran first,
+                    // but fall back to index 0 (first texture) as a safety net.
+                    eprintln!(
+                        "Warning: mesh has no GPU texture during build_unified_geometry. \
+                                        Was upload_mesh_to_gpu called first?"
+                    );
+                    0
+                };
+
                 mesh_draws.push(MeshDrawInfo {
-                    vertex_offset: current_vertex_offset,
+                    vertex_offset: current_vertex_offset as i32,
                     vertex_count,
                     index_offset: current_index_offset,
                     index_count,
-                    material_index: 0, // TODO: Properly track material indices
+                    material_index,
                 });
 
-                // Add vertices to unified buffer
+                // Append vertices as-is
                 all_vertices.extend_from_slice(&mesh.vertices);
 
-                // Add indices to unified buffer, offsetting them by current vertex offset
-                for &index in &mesh.indices {
-                    all_indices.push(index + current_vertex_offset);
-                }
+                // Append indices as-is (NOT pre-offset).
+                // draw_indexed_indirect's vertex_offset field handles the base offset,
+                // so indices stay local to each mesh.
+                all_indices.extend_from_slice(&mesh.indices);
 
-                // Update offsets for next mesh
                 current_vertex_offset += vertex_count;
                 current_index_offset += index_count;
             }
@@ -118,7 +156,7 @@ impl AssetManager {
                 Buffer::from_iter(
                     memory_allocator.clone(),
                     BufferCreateInfo {
-                        usage: BufferUsage::VERTEX_BUFFER,
+                        usage: BufferUsage::VERTEX_BUFFER | BufferUsage::STORAGE_BUFFER,
                         ..Default::default()
                     },
                     AllocationCreateInfo {
@@ -140,7 +178,7 @@ impl AssetManager {
                 Buffer::from_iter(
                     memory_allocator.clone(),
                     BufferCreateInfo {
-                        usage: BufferUsage::INDEX_BUFFER,
+                        usage: BufferUsage::INDEX_BUFFER | BufferUsage::STORAGE_BUFFER,
                         ..Default::default()
                     },
                     AllocationCreateInfo {
@@ -156,10 +194,21 @@ impl AssetManager {
             None
         };
 
-        // Update unified geometry
-        self.unified_geometry.vertex_buffer = vertex_buffer;
-        self.unified_geometry.index_buffer = index_buffer;
-        self.unified_geometry.mesh_draws = mesh_draws;
+        println!(
+            "Unified geometry built: {} vertices, {} indices, {} draws, {} unique textures",
+            current_vertex_offset,
+            current_index_offset,
+            mesh_draws.len(),
+            textures.len(),
+        );
+
+        self.unified_geometry = UnifiedGeometry {
+            vertex_buffer,
+            index_buffer,
+            mesh_draws,
+            textures,
+            specular_data,
+        };
     }
 
     pub fn get_unified_geometry(&self) -> &UnifiedGeometry {

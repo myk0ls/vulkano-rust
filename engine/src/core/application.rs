@@ -78,12 +78,12 @@ impl<G: Game> Application<G> {
 
         self.game.on_init();
 
-        //self.build_unified_geometry();
-
         let mut event_pump = self.sdl.event_pump().unwrap();
 
         //uploads all the object3d samplers before the real operation
         self.upload_samplers_objects3d();
+
+        self.build_unified_geometry();
 
         let skybox_images = SkyboxImages::new([
             "data/skybox/vz_clear_right.png",
@@ -96,7 +96,7 @@ impl<G: Game> Application<G> {
 
         let mut skybox = self.renderer.upload_skybox(skybox_images);
 
-        self.renderer.set_ambient([1.0, 1.0, 1.0], 0.5);
+        self.renderer.set_ambient([1.0, 1.0, 1.0], 0.25);
 
         crate::physics::physics_engine::physics_bodies_creation_system(self.game.get_world_mut());
 
@@ -193,24 +193,24 @@ impl<G: Game> Application<G> {
                 .unwrap()
                 .cleanup_finished();
 
-            //let directional_light = DirectionalLight::new([x, 0.0, z, 1.0], [1.0, 1.0, 1.0]);
             let directional_light = DirectionalLight::new([0.0, 1.0, 0.0, 1.0], [1.0, 1.0, 1.0]);
 
-            let point_light = PointLight::new([0.0, 1.5, 0.0, 1.0], [1.0, 1.0, 1.0], 2.0, 5.0);
+            let point_light = PointLight::new([0.0, 1.5, 0.0, 1.0], [1.0, 1.0, 1.0], 5.0, 5.0);
+            let point_light_2 = PointLight::new([-7.0, 1.5, 0.0, 1.0], [1.0, 1.0, 1.0], 5.0, 5.0);
+            let point_light_3 = PointLight::new([7.0, 1.5, 0.0, 1.0], [1.0, 1.0, 1.0], 5.0, 5.0);
 
-            //crate::physics::physics_engine::character_controller_system(self.game.get_world_mut());
-            //crate::physics::physics_engine::physics_sync_in(self.game.get_world_mut());
             crate::physics::physics_engine::physics_kinematic(self.game.get_world_mut());
             crate::physics::physics_engine::physics_kinematic_impulses(self.game.get_world_mut());
             crate::physics::physics_engine::physics_step(self.game.get_world_mut());
             crate::physics::physics_engine::physics_sync_out(self.game.get_world_mut());
 
             self.renderer.start();
-            //self.renderer.geometry(&mut suzanne);
             self.render_objects3d();
             self.renderer.ambient();
             self.renderer.directional(&directional_light);
             self.renderer.pointlight(&point_light);
+            // self.renderer.pointlight(&point_light_2);
+            // self.renderer.pointlight(&point_light_3);
             self.renderer.skybox(&mut skybox);
             //self.renderer.light_object(&directional_light);
             self.renderer.finish(&mut self.previous_frame_end);

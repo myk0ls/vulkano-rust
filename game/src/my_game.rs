@@ -67,36 +67,37 @@ impl Game for MyGame {
         };
 
         let player_entity = self.world.add_entity((
+            Player::new(),
             Camera::new(vec3(0.0, -5.0, 0.0)),
             Transform::with_pos(vec3(0.0, -3.0, 0.0)),
             Velocity::new(),
             KinematicCharacterComponent::new(),
             RigidBodyComponent::new(RigidBodyType::KinematicVelocityBased),
             ColliderComponent::new(SharedShape::capsule_y(1.0, 0.5)),
-            //Object3D::with_model(soldier.clone()),
-            Player::new(),
         ));
 
-        let monkey_entity = &self.world.add_entity((
-            Transform::with_pos(vec3(0.0, -50.0, 0.0)),
-            Object3D::with_model(suzanne.clone()),
-            RigidBodyComponent::new(RigidBodyType::Dynamic),
-            // ColliderComponent::new(SharedShape::cuboid(0.5, 0.5, 0.5)),
-            ColliderComponent::new(SharedShape::ball(0.5)),
-        ));
+        // let monkey_entity = &self.world.add_entity((
+        //     Transform::with_pos(vec3(0.0, -50.0, 0.0)),
+        //     Object3D::with_model(suzanne.clone()),
+        //     RigidBodyComponent::new(RigidBodyType::Dynamic),
+        //     // ColliderComponent::new(SharedShape::cuboid(0.5, 0.5, 0.5)),
+        //     ColliderComponent::new(SharedShape::ball(0.5)),
+        // ));
 
         let platform_ent = &self.world.add_entity((
             Transform::with_pos(vec3(0.0, 0.0, 0.0)),
             //Object3D::with_model(platform.clone()),
             RigidBodyComponent::new(RigidBodyType::Fixed),
-            ColliderComponent::new(SharedShape::cuboid(100.0, 0.05, 100.0)),
+            ColliderComponent::new(SharedShape::cuboid(100.0, 0.1, 100.0)),
         ));
 
         //main scene
-        // let soldier_entity = &self.world.add_entity((
-        //     Transform::with_pos(vec3(0.0, 0.0, 0.0)),
-        //     Object3D::with_model(soldier.clone()),
-        // ));
+        let soldier_entity = &self.world.add_entity((
+            Transform::with_pos(vec3(0.0, -60.0, 0.0)),
+            Object3D::with_model(soldier.clone()),
+            RigidBodyComponent::new(RigidBodyType::Dynamic),
+            ColliderComponent::new(SharedShape::ball(0.45)),
+        ));
 
         let sponza_scene = &self.world.add_entity((
             Transform::with_pos(vec3(0.0, 0.0, 0.0)),

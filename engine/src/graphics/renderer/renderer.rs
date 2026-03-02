@@ -6,6 +6,7 @@ use nalgebra_glm::{
 use sdl3::video::Window;
 use vulkano::buffer::allocator::{SubbufferAllocator, SubbufferAllocatorCreateInfo};
 use vulkano::descriptor_set::DescriptorSet;
+use vulkano::device::DeviceFeatures;
 use vulkano::image::view::ImageViewType;
 use vulkano::image::{Image, ImageCreateInfo};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
@@ -304,6 +305,15 @@ impl Renderer {
             ..DeviceExtensions::empty()
         };
 
+        let device_features = DeviceFeatures {
+            // Required for bindless textures
+            descriptor_binding_partially_bound: true,
+            runtime_descriptor_array: true,
+            descriptor_binding_variable_descriptor_count: true,
+            sampler_anisotropy: true,
+            ..DeviceFeatures::empty()
+        };
+
         //let device_features = BindlessContext::required_features(&instance);
 
         let (physical_device, queue_family_index) = instance
@@ -338,6 +348,7 @@ impl Renderer {
             physical_device,
             DeviceCreateInfo {
                 enabled_extensions: device_extensions,
+                enabled_features: device_features,
                 queue_create_infos: vec![QueueCreateInfo {
                     queue_family_index,
                     ..Default::default()
@@ -880,10 +891,11 @@ impl Renderer {
                         ..Default::default()
                     }),
                     multisample_state: Some(MultisampleState::default()),
-                    color_blend_state: Some(ColorBlendState::with_attachment_states(
-                        0,
-                        Default::default(),
-                    )),
+                    // color_blend_state: Some(ColorBlendState::with_attachment_states(
+                    //     0,
+                    //     Default::default(),
+                    // )),
+                    color_blend_state: None,
                     subpass: Some(shadow_pass.clone().into()),
                     ..GraphicsPipelineCreateInfo::layout(layout)
                 },
@@ -1001,9 +1013,10 @@ impl Renderer {
             SamplerCreateInfo {
                 mag_filter: Filter::Linear,
                 min_filter: Filter::Linear,
-                mipmap_mode: SamplerMipmapMode::Nearest,
+                mipmap_mode: SamplerMipmapMode::Linear,
                 address_mode: [SamplerAddressMode::Repeat; 3],
                 mip_lod_bias: 0.0,
+                anisotropy: Some(16.0),
                 ..Default::default()
             },
         )
@@ -2069,6 +2082,8 @@ impl Renderer {
             ];
         }
 
+        let mip_levels = (extent[0].max(extent[1]) as f32).log2().floor() as u32 + 1;
+
         // --- Upload staging buffer ---
         let format = Format::R8G8B8A8_SRGB;
 
@@ -2095,6 +2110,7 @@ impl Renderer {
                 format,
                 extent,
                 array_layers,
+                mip_levels: mip_levels,
                 usage: ImageUsage::TRANSFER_DST | ImageUsage::SAMPLED,
                 ..Default::default()
             },

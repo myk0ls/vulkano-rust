@@ -1,8 +1,9 @@
+use crate::prelude::delta_time::DeltaTime;
 use crate::prelude::transform::Transform;
 use rapier3d::control::CharacterCollision;
 use rapier3d::control::{CharacterAutostep, CharacterLength};
 use rapier3d::{control::KinematicCharacterController, prelude::*};
-use shipyard::{Component, IntoIter, Unique, View, ViewMut, World};
+use shipyard::{Component, IntoIter, Unique, UniqueView, View, ViewMut, World};
 
 #[derive(Component, Unique)]
 pub struct PhysicsEngine {
@@ -250,10 +251,11 @@ pub fn physics_kinematic(world: &mut World) {
 
     world.run(
         |mut kinematic_character: ViewMut<KinematicCharacterComponent>,
-         bodies: View<RigidBodyComponent>| {
-            let dt = physics.integration_parameters.dt;
+         bodies: View<RigidBodyComponent>,
+         delta_time: UniqueView<DeltaTime>| {
+            let dt = delta_time.0;
 
-            for (mut kinematic_character, body) in (&mut kinematic_character, &bodies).iter() {
+            for (kinematic_character, body) in (&mut kinematic_character, &bodies).iter() {
                 let body_handle = body.handle.unwrap();
                 let rigid_body = physics.rigid_body_set.get(body_handle).unwrap();
                 let collider = physics.collider_set.get(rigid_body.colliders()[0]).unwrap();
@@ -305,10 +307,11 @@ pub fn physics_kinematic_impulses(world: &mut World) {
 
     world.run(
         |mut kinematic_characters: ViewMut<KinematicCharacterComponent>,
-         bodies: View<RigidBodyComponent>| {
-            let dt = physics.integration_parameters.dt;
+         bodies: View<RigidBodyComponent>,
+         delta_time: UniqueView<DeltaTime>| {
+            let dt = delta_time.0;
 
-            for (mut kinematic_character, body) in (&mut kinematic_characters, &bodies).iter() {
+            for (kinematic_character, body) in (&mut kinematic_characters, &bodies).iter() {
                 if kinematic_character.collisions.is_empty() {
                     continue;
                 }

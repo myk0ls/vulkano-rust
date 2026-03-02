@@ -5,10 +5,11 @@ use shipyard::{IntoIter, UniqueView, View, ViewMut};
 use vulkano_engine::input::input_manager::InputManager;
 use vulkano_engine::physics::physics_engine::{KinematicCharacterComponent, PhysicsEngine};
 use vulkano_engine::prelude::camera::Camera;
+use vulkano_engine::scene::components::delta_time::DeltaTime;
 
 use crate::player::Player;
 
-const JUMP_FORCE: f32 = 2.0;
+const JUMP_FORCE: f32 = 0.5;
 
 pub fn player_movement(
     players: View<Player>,
@@ -16,6 +17,7 @@ pub fn player_movement(
     mut kinematic_character_components: ViewMut<KinematicCharacterComponent>,
     input_manager: UniqueView<InputManager>,
     physics_engine: UniqueView<PhysicsEngine>,
+    delta_time: UniqueView<DeltaTime>,
 ) {
     let camera = cameras
         .iter()
@@ -24,7 +26,7 @@ pub fn player_movement(
 
     let forward = camera.get_forward_vector();
     let right = camera.get_right_vector();
-    let dt = physics_engine.integration_parameters.dt;
+    let dt = delta_time.0;
 
     for (_player, kinematic_character) in (&players, &mut kinematic_character_components).iter() {
         let mut direction = vec3(0.0, 0.0, 0.0);
@@ -45,7 +47,6 @@ pub fn player_movement(
         //direction.y -= 0.981 * dt;
         direction.y = 0.0;
 
-        // Normalize and scale by player speed and timestep to get a displacement for this frame
         if direction.magnitude() > 0.0 {
             direction = direction.normalize() * crate::player::MOVE_SPEED * dt;
         }
