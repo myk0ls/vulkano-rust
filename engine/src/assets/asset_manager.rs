@@ -3,6 +3,7 @@ use crate::graphics::mesh::Mesh;
 use shipyard::{Component, Unique, track};
 use std::collections::HashMap;
 use std::sync::Arc;
+use vulkano::buffer::BufferContents;
 use vulkano::buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::image::view::ImageView;
 use vulkano::memory::allocator::{
@@ -28,9 +29,19 @@ pub struct MeshDrawInfo {
 
 pub struct Model {
     pub meshes: Vec<Mesh>,
+    pub draw_range: std::ops::Range<usize>, // indices into UnifiedGeometry.mesh_draws
 }
 
 impl Model {}
+
+#[derive(Clone, Copy, BufferContents)]
+#[repr(C)]
+pub struct DrawData {
+    pub model: [[f32; 4]; 4],
+    pub normals: [[f32; 4]; 4],
+    pub material_index: u32,
+    pub _pad: [u32; 3], // pad to 16-byte alignment (std430)
+}
 
 #[derive(Clone)]
 pub struct AssetHandle {
@@ -62,6 +73,7 @@ impl AssetManager {
             let loader = LoaderGLTF::new(filepath, [0.0, 0.0, 0.0]);
             let new_model = Model {
                 meshes: loader.get_meshes(),
+                draw_range: 0..0, // Will be set properly in build_unified_geometry
             };
 
             self.models.insert(filepath.to_string(), new_model);
@@ -93,7 +105,9 @@ impl AssetManager {
         let mut current_index_offset: u32 = 0;
 
         // Iterate through all models and their meshes
-        for (_model_name, model) in self.models.iter() {
+        for (_model_name, model) in self.models.iter_mut() {
+            let draw_start = mesh_draws.len();
+
             for mesh in &model.meshes {
                 let vertex_count = mesh.vertices.len() as u32;
                 let index_count = mesh.indices.len() as u32;
@@ -148,6 +162,8 @@ impl AssetManager {
                 current_vertex_offset += vertex_count;
                 current_index_offset += index_count;
             }
+
+            model.draw_range = draw_start..mesh_draws.len();
         }
 
         // Create unified vertex buffer

@@ -1,4 +1,5 @@
 #version 450
+#extension GL_ARB_shader_draw_parameters : enable
 
 layout(location = 0) in vec3 position;
 layout(location = 1) in vec3 normal;
@@ -9,30 +10,34 @@ layout(location = 0) out vec3 out_color;
 layout(location = 1) out vec3 out_normal;
 layout(location = 2) out vec4 out_location;
 layout(location = 3) out vec2 tex_coords;
+layout(location = 4) flat out uint out_material_index;
 
 layout(set = 0, binding = 0) uniform VP_Data {
     mat4 view;
     mat4 projection;
 } vp_uniforms;
 
-// layout(set = 1, binding = 0) uniform Model_Data {
-//     mat4 model;
-//     mat4 normals;
-// } model;
-
-layout(push_constant) uniform PushConstants {
+struct DrawData {
     mat4 model;
     mat4 normals;
-} model;
+    uint material_index;
+    uint _pad0;
+    uint _pad1;
+    uint _pad2;
+};
+
+layout(set = 2, binding = 0) readonly buffer DrawDataBuffer {
+    DrawData draws[];
+} draw_data;
 
 void main() {
-    //vec4 frag_pos = vp_uniforms.projection * vp_uniforms.view * model.model * vec4(position, 1.0); this clipspace
-    vec4 frag_pos = model.model * vec4(position, 1.0);
+    DrawData d = draw_data.draws[gl_DrawIDARB];
+    vec4 frag_pos = d.model * vec4(position, 1.0);
     //gl_Position = frag_pos; this from clipspace
     gl_Position = vp_uniforms.projection * vp_uniforms.view * frag_pos;
     out_color = color;
-    //out_normal = mat3(model.normals) * normal;
-    out_normal = normalize(mat3(transpose(inverse(model.model))) * normal); // world-space normal
+    out_normal = normalize(mat3(transpose(inverse(d.model))) * normal); // world-space normal
     out_location = frag_pos;
     tex_coords = uv;
+    out_material_index = d.material_index;
 }

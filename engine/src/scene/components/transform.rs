@@ -3,7 +3,7 @@ use nalgebra_glm::scale;
 use nalgebra_glm::{TMat4, TVec2, TVec3, Vec2, identity, rotate_normalized_axis, translate, vec3};
 use shipyard::{Component, track};
 
-#[derive(Component, Debug)]
+#[derive(Component, Debug, Clone)]
 pub struct Transform {
     pub position: TMat4<f32>,
     pub rotation: TMat4<f32>,

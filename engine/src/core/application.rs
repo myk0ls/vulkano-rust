@@ -256,14 +256,24 @@ impl<G: Game> Application<G> {
     pub fn render_objects3d(&mut self) {
         let world = self.game.get_world();
         let mut asset_manager = world.get_unique::<&mut AssetManager>().unwrap();
+        let unified = asset_manager.get_unified_geometry();
+
+        let mut draw_list: Vec<(usize, Transform)> = Vec::new();
 
         world.run(|objects: View<Object3D>, transforms: View<Transform>| {
             for (object, transform) in (&objects, &transforms).iter() {
-                if let Some(model) = asset_manager.get_model_mut(&object.model) {
-                    self.renderer.geometry(model, &transform);
+                if let Some(model) = asset_manager.get_model(&object.model) {
+                    // Find the mesh_draw indices that belong to this model.
+                    // You'll need to store (start_draw, draw_count) on the Model
+                    // or AssetHandle after build_unified_geometry.
+                    for draw_idx in model.draw_range.clone() {
+                        draw_list.push((draw_idx, transform.clone()));
+                    }
                 }
             }
         });
+
+        self.renderer.geometry(unified, &draw_list);
     }
 
     pub fn upload_samplers_objects3d(&mut self) {
@@ -287,5 +297,7 @@ impl<G: Game> Application<G> {
         let mut asset_manager = world.get_unique::<&mut AssetManager>().unwrap();
 
         asset_manager.build_unified_geometry(self.renderer.memory_allocator.clone());
+        self.renderer
+            .build_bindless_material_set(asset_manager.get_unified_geometry());
     }
 }

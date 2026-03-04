@@ -60,12 +60,14 @@ use vulkano::{
     sync::{self, GpuFuture},
 };
 
+use vulkano::descriptor_set::layout::DescriptorBindingFlags;
 use vulkano::{Validated, VulkanError, swapchain::acquire_next_image};
 
 use vulkano::buffer::{Buffer, BufferCreateInfo, Subbuffer};
 
 use ash::vk;
 
+use vulkano::command_buffer::DrawIndexedIndirectCommand;
 use vulkano::command_buffer::{PrimaryCommandBufferAbstract, SubpassBeginInfo, SubpassEndInfo};
 
 use vulkano::instance::InstanceExtensions;
@@ -73,7 +75,7 @@ use vulkano::instance::InstanceExtensions;
 use vulkano::image::sampler::BorderColor;
 use vulkano::pipeline::graphics::rasterization::DepthBiasState;
 
-use crate::assets::asset_manager;
+use crate::assets::asset_manager::{self, UnifiedGeometry};
 use crate::graphics::renderer::PointLight;
 use crate::{
     assets::{
@@ -230,6 +232,7 @@ pub struct Renderer {
     color_buffer: Arc<ImageView>,
     normal_buffer: Arc<ImageView>,
     vp_set: Arc<DescriptorSet>,
+    bindless_material_set: Option<Arc<DescriptorSet>>,
     viewport: Viewport,
     render_stage: RenderStage,
     pub commands: Option<AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>>,
@@ -311,6 +314,9 @@ impl Renderer {
             runtime_descriptor_array: true,
             descriptor_binding_variable_descriptor_count: true,
             sampler_anisotropy: true,
+            shader_sampled_image_array_non_uniform_indexing: true,
+            multi_draw_indirect: true,
+            shader_draw_parameters: true,
             ..DeviceFeatures::empty()
         };
 
@@ -404,7 +410,11 @@ impl Renderer {
         let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
         let descriptor_set_allocator = Arc::new(StandardDescriptorSetAllocator::new(
             device.clone(),
-            Default::default(),
+            StandardDescriptorSetAllocatorCreateInfo {
+                update_after_bind: true,
+                set_count: 32,
+                ..Default::default()
+            },
         ));
         let command_buffer_allocator = Arc::new(StandardCommandBufferAllocator::new(
             device.clone(),
@@ -517,9 +527,22 @@ impl Renderer {
                 PipelineShaderStageCreateInfo::new(fs),
             ];
 
+            let mut layout_create_info =
+                PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages);
+
+            // Patch set 1 (material set) for bindless textures:
+            // binding 1 is the `sampler2D textures[]` array
+            if let Some(set1) = layout_create_info.set_layouts.get_mut(1) {
+                if let Some(binding) = set1.bindings.get_mut(&1) {
+                    binding.binding_flags |= DescriptorBindingFlags::PARTIALLY_BOUND
+                        | DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT;
+                    binding.descriptor_count = 4096;
+                }
+            }
+
             let layout = PipelineLayout::new(
                 device.clone(),
-                PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
+                layout_create_info
                     .into_pipeline_layout_create_info(device.clone())
                     .unwrap(),
             )
@@ -1044,6 +1067,8 @@ impl Renderer {
         )
         .unwrap();
 
+        let bindless_material_set = None;
+
         let render_stage = RenderStage::Stopped;
 
         let commands = None;
@@ -1081,6 +1106,7 @@ impl Renderer {
             color_buffer,
             normal_buffer,
             vp_set,
+            bindless_material_set,
             viewport,
             render_stage,
             commands,
@@ -1268,7 +1294,7 @@ impl Renderer {
         light_space_buffer
     }
 
-    pub fn geometry(&mut self, model: &mut assets::asset_manager::Model, transform: &Transform) {
+    pub fn geometry(&mut self, unified: &UnifiedGeometry, objects: &[(usize, Transform)]) {
         match self.render_stage {
             RenderStage::Deferred => {}
             RenderStage::NeedsRedraw => {
@@ -1284,43 +1310,109 @@ impl Renderer {
             }
         }
 
-        let push_constants = deferred_vert::PushConstants {
-            model: transform.model_matrix().into(),
-            normals: transform.normal_matrix().into(),
-        };
+        if objects.is_empty() {
+            return;
+        }
 
-        for mesh in model.meshes.iter() {
-            self.commands
-                .as_mut()
-                .unwrap()
-                //.set_viewport(0, [self.viewport.clone()].into_iter().collect())
-                //.unwrap()
-                .bind_pipeline_graphics(self.deferred_pipeline.clone())
-                .unwrap()
-                .push_constants(self.deferred_pipeline.layout().clone(), 0, push_constants)
-                .unwrap()
-                .bind_descriptor_sets(
-                    PipelineBindPoint::Graphics,
-                    self.deferred_pipeline.layout().clone(),
-                    0,
-                    (
-                        self.vp_set.clone(),
-                        mesh.persist_desc_set.as_ref().unwrap().clone(),
-                    ),
-                )
-                .unwrap()
-                .bind_vertex_buffers(0, mesh.vertex_buffer.as_ref().unwrap().clone())
-                .unwrap()
-                .bind_index_buffer(mesh.index_buffer.as_ref().unwrap().clone())
-                .unwrap();
+        let vb = unified.vertex_buffer.as_ref().unwrap().clone();
+        let ib = unified.index_buffer.as_ref().unwrap().clone();
 
-            unsafe {
-                self.commands
-                    .as_mut()
-                    .unwrap()
-                    .draw_indexed(mesh.index_buffer.as_ref().unwrap().len() as u32, 1, 0, 0, 0)
-                    .unwrap();
-            }
+        // Build the indirect command buffer and the per-draw data SSBO
+        let mut indirect_commands: Vec<DrawIndexedIndirectCommand> =
+            Vec::with_capacity(objects.len());
+        let mut draw_data_vec: Vec<asset_manager::DrawData> = Vec::with_capacity(objects.len());
+
+        for (draw_idx, transform) in objects {
+            let draw = &unified.mesh_draws[*draw_idx];
+
+            indirect_commands.push(DrawIndexedIndirectCommand {
+                index_count: draw.index_count,
+                instance_count: 1,
+                first_index: draw.index_offset,
+                vertex_offset: draw.vertex_offset as u32,
+                first_instance: 0,
+            });
+
+            draw_data_vec.push(asset_manager::DrawData {
+                model: transform.model_matrix().into(),
+                normals: transform.normal_matrix().into(),
+                material_index: draw.material_index,
+                _pad: [0; 3],
+            });
+        }
+
+        // Upload indirect command buffer
+        let indirect_buffer = Buffer::from_iter(
+            self.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::INDIRECT_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            indirect_commands.into_iter(),
+        )
+        .unwrap();
+
+        // Upload per-draw data SSBO
+        let draw_data_buffer = Buffer::from_iter(
+            self.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            draw_data_vec.into_iter(),
+        )
+        .unwrap();
+
+        // Create descriptor set for draw data (set 2)
+        let draw_data_layout = self
+            .deferred_pipeline
+            .layout()
+            .set_layouts()
+            .get(2)
+            .unwrap()
+            .clone();
+
+        let draw_data_set = DescriptorSet::new(
+            self.descriptor_set_allocator.clone(),
+            draw_data_layout,
+            [WriteDescriptorSet::buffer(0, draw_data_buffer)],
+            [],
+        )
+        .unwrap();
+
+        let builder = self.commands.as_mut().unwrap();
+
+        builder
+            .bind_pipeline_graphics(self.deferred_pipeline.clone())
+            .unwrap()
+            .bind_vertex_buffers(0, vb)
+            .unwrap()
+            .bind_index_buffer(ib)
+            .unwrap()
+            .bind_descriptor_sets(
+                PipelineBindPoint::Graphics,
+                self.deferred_pipeline.layout().clone(),
+                0,
+                (
+                    self.vp_set.clone(),
+                    self.bindless_material_set.as_ref().unwrap().clone(),
+                    draw_data_set,
+                ),
+            )
+            .unwrap();
+
+        unsafe {
+            builder.draw_indexed_indirect(indirect_buffer).unwrap();
         }
     }
 
@@ -2175,37 +2267,23 @@ impl Renderer {
         mesh.vertex_buffer = Some(vertex_buffer);
         mesh.index_buffer = Some(index_buffer);
 
-        // let specular_buffer = CpuAccessibleBuffer::from_data(
-        //     &self.memory_allocator,
-        //     BufferUsage {
-        //         uniform_buffer: true,
-        //         ..BufferUsage::empty()
+        // let specular_buffer = Buffer::from_data(
+        //     self.memory_allocator.clone(),
+        //     BufferCreateInfo {
+        //         usage: BufferUsage::UNIFORM_BUFFER,
+        //         ..Default::default()
         //     },
-        //     false,
-        //     deferred_frag::ty::Specular_Data {
+        //     AllocationCreateInfo {
+        //         memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+        //             | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+        //         ..Default::default()
+        //     },
+        //     deferred_frag::Specular_Data {
         //         intensity: 0.5,
         //         shininess: 32.0,
         //     },
         // )
         // .unwrap();
-
-        let specular_buffer = Buffer::from_data(
-            self.memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::UNIFORM_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            deferred_frag::Specular_Data {
-                intensity: 0.5,
-                shininess: 32.0,
-            },
-        )
-        .unwrap();
 
         let model_layout = self
             .deferred_pipeline
@@ -2213,22 +2291,22 @@ impl Renderer {
             .set_layouts()
             .get(1)
             .unwrap();
-        let model_set = DescriptorSet::new(
-            self.descriptor_set_allocator.clone(),
-            model_layout.clone(),
-            [
-                WriteDescriptorSet::buffer(1, specular_buffer.clone()),
-                WriteDescriptorSet::image_view_sampler(
-                    2,
-                    mesh.texture.as_ref().unwrap().clone(),
-                    self.sampler.clone(),
-                ),
-            ],
-            [],
-        )
-        .unwrap();
+        // let model_set = DescriptorSet::new(
+        //     self.descriptor_set_allocator.clone(),
+        //     model_layout.clone(),
+        //     [
+        //         // WriteDescriptorSet::buffer(1, specular_buffer.clone()),
+        //         WriteDescriptorSet::image_view_sampler(
+        //             2,
+        //             mesh.texture.as_ref().unwrap().clone(),
+        //             self.sampler.clone(),
+        //         ),
+        //     ],
+        //     [],
+        // )
+        // .unwrap();
 
-        mesh.persist_desc_set = Some(model_set);
+        mesh.persist_desc_set = None;
     }
 
     pub fn upload_skybox(&self, skybox_images: SkyboxImages) -> Skybox {
@@ -2346,5 +2424,55 @@ impl Renderer {
         let light_projection = ortho(-25.0, 25.0, -25.0, 25.0, 0.1, 100.0);
 
         light_projection * light_view
+    }
+
+    pub fn build_bindless_material_set(&mut self, unified: &UnifiedGeometry) {
+        let specular_data: Vec<[f32; 2]> = unified.specular_data.clone();
+        let specular_buffer = Buffer::from_iter(
+            self.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            specular_data.into_iter(),
+        )
+        .unwrap();
+
+        let texture_writes: Vec<WriteDescriptorSet> = vec![
+            WriteDescriptorSet::buffer(0, specular_buffer),
+            WriteDescriptorSet::image_view_sampler_array(
+                1,
+                0,
+                unified
+                    .textures
+                    .iter()
+                    .map(|iv| (iv.clone() as _, self.sampler.clone()))
+                    .collect::<Vec<_>>(),
+            ),
+        ];
+
+        let layout = self
+            .deferred_pipeline
+            .layout()
+            .set_layouts()
+            .get(1)
+            .unwrap()
+            .clone();
+
+        let set = DescriptorSet::new_variable(
+            self.descriptor_set_allocator.clone(),
+            layout,
+            unified.textures.len() as u32,
+            texture_writes,
+            [],
+        )
+        .unwrap();
+
+        self.bindless_material_set = Some(set);
     }
 }
