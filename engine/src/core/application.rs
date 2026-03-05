@@ -96,7 +96,7 @@ impl<G: Game> Application<G> {
 
         let mut skybox = self.renderer.upload_skybox(skybox_images);
 
-        self.renderer.set_ambient([1.0, 1.0, 1.0], 0.25);
+        self.renderer.set_ambient([1.0, 1.0, 1.0], 0.35);
 
         crate::physics::physics_engine::physics_bodies_creation_system(self.game.get_world_mut());
 
@@ -193,7 +193,9 @@ impl<G: Game> Application<G> {
                 .unwrap()
                 .cleanup_finished();
 
-            let directional_light = DirectionalLight::new([0.0, 1.0, 0.0, 1.0], [1.0, 1.0, 1.0]);
+            //let directional_light = DirectionalLight::new([0.0, 1.0, 0.0, 1.0], [1.0, 1.0, 1.0]);
+            //let directional_light = DirectionalLight::new([1.0, 2.0, 1.0, 1.0], [1.0, 1.0, 1.0]);
+            let directional_light = DirectionalLight::new([0.1, 1.0, 0.1, 1.0], [1.0, 1.0, 1.0]);
 
             let point_light = PointLight::new([0.0, 1.5, 0.0, 1.0], [1.0, 1.0, 1.0], 5.0, 5.0);
             let point_light_2 = PointLight::new([-7.0, 1.5, 0.0, 1.0], [1.0, 1.0, 1.0], 5.0, 5.0);
@@ -205,10 +207,11 @@ impl<G: Game> Application<G> {
             crate::physics::physics_engine::physics_sync_out(self.game.get_world_mut());
 
             self.renderer.start();
+            self.render_shadows(&directional_light);
             self.render_objects3d();
             self.renderer.ambient();
             self.renderer.directional(&directional_light);
-            self.renderer.pointlight(&point_light);
+            //self.renderer.pointlight(&point_light);
             // self.renderer.pointlight(&point_light_2);
             // self.renderer.pointlight(&point_light_3);
             self.renderer.skybox(&mut skybox);
@@ -253,6 +256,30 @@ impl<G: Game> Application<G> {
         });
     }
 
+    pub fn render_shadows(&mut self, directional_light: &DirectionalLight) {
+        let world = self.game.get_world();
+        let mut asset_manager = world.get_unique::<&mut AssetManager>().unwrap();
+        let unified = asset_manager.get_unified_geometry();
+
+        let mut draw_list: Vec<(usize, Transform)> = Vec::new();
+
+        world.run(|objects: View<Object3D>, transforms: View<Transform>| {
+            for (object, transform) in (&objects, &transforms).iter() {
+                if let Some(model) = asset_manager.get_model(&object.model) {
+                    // Find the mesh_draw indices that belong to this model.
+                    // You'll need to store (start_draw, draw_count) on the Model
+                    // or AssetHandle after build_unified_geometry.
+                    for draw_idx in model.draw_range.clone() {
+                        draw_list.push((draw_idx, transform.clone()));
+                    }
+                }
+            }
+        });
+
+        self.renderer
+            .shadow_pass(&directional_light, unified, &draw_list);
+    }
+
     pub fn render_objects3d(&mut self) {
         let world = self.game.get_world();
         let mut asset_manager = world.get_unique::<&mut AssetManager>().unwrap();
@@ -286,7 +313,7 @@ impl<G: Game> Application<G> {
                     model
                         .meshes
                         .iter_mut()
-                        .for_each(|m| self.renderer.upload_mesh_to_gpu(m));
+                        .for_each(|m| self.renderer.upload_texture_to_gpu(m));
                 }
             }
         });

@@ -189,7 +189,7 @@ mod shadows_frag {
     }
 }
 
-const SHADOW_MAP_SIZE: u32 = 2048;
+const SHADOW_MAP_SIZE: u32 = 4096;
 
 #[derive(Debug, Clone)]
 enum RenderStage {
@@ -199,6 +199,7 @@ enum RenderStage {
     Directional,
     LightObject,
     NeedsRedraw,
+    Shadow,
 }
 
 pub struct Renderer {
@@ -219,7 +220,11 @@ pub struct Renderer {
     frag_location_buffer: Arc<ImageView>,
     specular_buffer: Arc<ImageView>,
     sampler: Arc<Sampler>,
+    shadow_sampler: Arc<Sampler>,
+    shadow_map_view: Arc<ImageView>,
     render_pass: Arc<RenderPass>,
+    shadow_render_pass: Arc<RenderPass>,
+    shadow_pipeline: Arc<GraphicsPipeline>,
     deferred_pipeline: Arc<GraphicsPipeline>,
     directional_pipeline: Arc<GraphicsPipeline>,
     pointlight_pipeline: Arc<GraphicsPipeline>,
@@ -1050,6 +1055,8 @@ impl Renderer {
             SamplerCreateInfo {
                 mag_filter: Filter::Linear,
                 min_filter: Filter::Linear,
+                mipmap_mode: SamplerMipmapMode::Linear,
+                mip_lod_bias: 0.0,
                 compare: Some(CompareOp::LessOrEqual),
                 address_mode: [SamplerAddressMode::ClampToBorder; 3],
                 border_color: BorderColor::FloatOpaqueWhite,
@@ -1093,7 +1100,11 @@ impl Renderer {
             frag_location_buffer,
             specular_buffer,
             sampler,
+            shadow_sampler,
+            shadow_map_view,
             render_pass,
+            shadow_render_pass,
+            shadow_pipeline,
             deferred_pipeline,
             directional_pipeline,
             pointlight_pipeline,
@@ -1148,36 +1159,12 @@ impl Renderer {
             return;
         }
 
-        let clear_values = vec![
-            Some([0.0, 0.0, 0.0, 1.0].into()),
-            Some([0.0, 0.0, 0.0, 1.0].into()),
-            Some([0.0, 0.0, 0.0, 1.0].into()),
-            Some([0.0, 0.0, 0.0, 1.0].into()),
-            Some([0.0, 0.0].into()),
-            Some(1.0.into()),
-        ];
-
         let mut commands = AutoCommandBufferBuilder::primary(
             self.command_buffer_allocator.clone(),
             self.queue.queue_family_index(),
             CommandBufferUsage::OneTimeSubmit,
         )
         .unwrap();
-
-        commands
-            .begin_render_pass(
-                RenderPassBeginInfo {
-                    clear_values,
-                    ..RenderPassBeginInfo::framebuffer(
-                        self.framebuffers[image_index as usize].clone(),
-                    )
-                },
-                SubpassBeginInfo {
-                    contents: SubpassContents::Inline,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
 
         self.commands = Some(commands);
         self.image_index = image_index;
@@ -1245,12 +1232,47 @@ impl Renderer {
         self.render_stage = RenderStage::Stopped;
     }
 
+    /// Begins the main deferred render pass.
+    /// From Shadow stage to Deferred stage.
+    fn begin_main_render_pass(&mut self) {
+        let clear_values = vec![
+            Some([0.0, 0.0, 0.0, 1.0].into()),
+            Some([0.0, 0.0, 0.0, 1.0].into()),
+            Some([0.0, 0.0, 0.0, 1.0].into()),
+            Some([0.0, 0.0, 0.0, 1.0].into()),
+            Some([0.0, 0.0].into()),
+            Some(1.0.into()),
+        ];
+
+        self.commands
+            .as_mut()
+            .unwrap()
+            .begin_render_pass(
+                RenderPassBeginInfo {
+                    clear_values,
+                    ..RenderPassBeginInfo::framebuffer(
+                        self.framebuffers[self.image_index as usize].clone(),
+                    )
+                },
+                SubpassBeginInfo {
+                    contents: SubpassContents::Inline,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+
     pub fn shadow_pass(
         &mut self,
         light: &DirectionalLight,
-        model: &mut assets::asset_manager::Model,
-        transform: &Transform,
-    ) -> Subbuffer<shadows_vert::LightSpaceMatrix> {
+        unified: &UnifiedGeometry,
+        objects: &[(usize, Transform)],
+    ) {
+        if (objects.is_empty()) {
+            self.begin_main_render_pass();
+            return;
+        }
+
         let light_space_matrix = Renderer::compute_light_space_matrix(light.position);
 
         // Upload light space matrix uniform
@@ -1271,9 +1293,94 @@ impl Renderer {
         )
         .unwrap();
 
-        let push_constants = shadows_vert::PushConstants {
-            model: transform.model_matrix().into(),
-        };
+        let vb = unified.vertex_buffer.as_ref().unwrap().clone();
+        let ib = unified.index_buffer.as_ref().unwrap().clone();
+
+        let mut indirect_commands: Vec<DrawIndexedIndirectCommand> =
+            Vec::with_capacity(objects.len());
+        let mut draw_data_vec: Vec<asset_manager::DrawData> = Vec::with_capacity(objects.len());
+
+        for (draw_idx, transform) in objects {
+            let draw = &unified.mesh_draws[*draw_idx];
+
+            indirect_commands.push(DrawIndexedIndirectCommand {
+                index_count: draw.index_count,
+                instance_count: 1,
+                first_index: draw.index_offset,
+                vertex_offset: draw.vertex_offset as u32,
+                first_instance: 0,
+            });
+
+            draw_data_vec.push(asset_manager::DrawData {
+                model: transform.model_matrix().into(),
+                normals: transform.normal_matrix().into(),
+                material_index: draw.material_index,
+                _pad: [0; 3],
+            });
+        }
+
+        let indirect_buffer = Buffer::from_iter(
+            self.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::INDIRECT_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            indirect_commands.into_iter(),
+        )
+        .unwrap();
+
+        let draw_data_buffer = Buffer::from_iter(
+            self.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            draw_data_vec.into_iter(),
+        )
+        .unwrap();
+
+        //create descriptor sets for shadow pipelines
+        // set 0 light space matrix
+        let light_space_layout = self
+            .shadow_pipeline
+            .layout()
+            .set_layouts()
+            .get(0)
+            .unwrap()
+            .clone();
+        let light_space_set = DescriptorSet::new(
+            self.descriptor_set_allocator.clone(),
+            light_space_layout,
+            [WriteDescriptorSet::buffer(0, light_space_buffer)],
+            [],
+        )
+        .unwrap();
+
+        //set 1 draw data SSBO
+        let draw_data_layout = self
+            .shadow_pipeline
+            .layout()
+            .set_layouts()
+            .get(1)
+            .unwrap()
+            .clone();
+        let draw_data_set = DescriptorSet::new(
+            self.descriptor_set_allocator.clone(),
+            draw_data_layout,
+            [WriteDescriptorSet::buffer(0, draw_data_buffer)],
+            [],
+        )
+        .unwrap();
 
         // Begin shadow render pass
         self.commands
@@ -1291,7 +1398,39 @@ impl Renderer {
             )
             .unwrap();
 
-        light_space_buffer
+        self.commands
+            .as_mut()
+            .unwrap()
+            .bind_pipeline_graphics(self.shadow_pipeline.clone())
+            .unwrap()
+            .bind_vertex_buffers(0, vb)
+            .unwrap()
+            .bind_index_buffer(ib)
+            .unwrap()
+            .bind_descriptor_sets(
+                PipelineBindPoint::Graphics,
+                self.shadow_pipeline.layout().clone(),
+                0,
+                (light_space_set, draw_data_set),
+            )
+            .unwrap();
+
+        unsafe {
+            self.commands
+                .as_mut()
+                .unwrap()
+                .draw_indexed_indirect(indirect_buffer)
+                .unwrap();
+        }
+
+        self.commands
+            .as_mut()
+            .unwrap()
+            .end_render_pass(SubpassEndInfo::default())
+            .unwrap();
+
+        //now begin main render pass
+        self.begin_main_render_pass();
     }
 
     pub fn geometry(&mut self, unified: &UnifiedGeometry, objects: &[(usize, Transform)]) {
@@ -1539,6 +1678,25 @@ impl Renderer {
         )
         .unwrap();
 
+        let light_space_matrix = Renderer::compute_light_space_matrix(directional_light.position);
+
+        let light_space_buffer = Buffer::from_data(
+            self.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::UNIFORM_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            directional_frag::LightSpaceData {
+                light_space_matrix: light_space_matrix.into(),
+            },
+        )
+        .unwrap();
+
         let directional_subbuffer =
             self.generate_directional_buffer(&self.directional_allocator, &directional_light);
 
@@ -1558,6 +1716,12 @@ impl Renderer {
                 WriteDescriptorSet::image_view(3, self.specular_buffer.clone()),
                 WriteDescriptorSet::buffer(4, directional_subbuffer.clone()),
                 WriteDescriptorSet::buffer(5, camera_buffer.clone()),
+                WriteDescriptorSet::buffer(6, light_space_buffer.clone()),
+                WriteDescriptorSet::image_view_sampler(
+                    7,
+                    self.shadow_map_view.clone(),
+                    self.shadow_sampler.clone(),
+                ),
             ],
             [],
         )
@@ -1649,7 +1813,7 @@ impl Renderer {
         .unwrap();
 
         let pointlight_layout = self
-            .directional_pipeline
+            .pointlight_pipeline
             .layout()
             .set_layouts()
             .get(0)
@@ -2145,7 +2309,7 @@ impl Renderer {
         .unwrap();
     }
 
-    pub fn upload_mesh_to_gpu(&self, mesh: &mut Mesh) {
+    pub fn upload_texture_to_gpu(&self, mesh: &mut Mesh) {
         //create a commandbuffer for upload
         let mut upload_cmd_buf = AutoCommandBufferBuilder::primary(
             self.command_buffer_allocator.clone(),
@@ -2231,82 +2395,6 @@ impl Renderer {
         let gpu_texture = ImageView::new_default(image).unwrap();
 
         mesh.texture = Some(gpu_texture);
-
-        //vertex,index,persistendescset
-
-        let vertex_buffer = Buffer::from_iter(
-            self.memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::VERTEX_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            mesh.vertices.iter().cloned(),
-        )
-        .unwrap();
-
-        let index_buffer = Buffer::from_iter(
-            self.memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::INDEX_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            mesh.indices.iter().cloned(),
-        )
-        .unwrap();
-
-        mesh.vertex_buffer = Some(vertex_buffer);
-        mesh.index_buffer = Some(index_buffer);
-
-        // let specular_buffer = Buffer::from_data(
-        //     self.memory_allocator.clone(),
-        //     BufferCreateInfo {
-        //         usage: BufferUsage::UNIFORM_BUFFER,
-        //         ..Default::default()
-        //     },
-        //     AllocationCreateInfo {
-        //         memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-        //             | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-        //         ..Default::default()
-        //     },
-        //     deferred_frag::Specular_Data {
-        //         intensity: 0.5,
-        //         shininess: 32.0,
-        //     },
-        // )
-        // .unwrap();
-
-        let model_layout = self
-            .deferred_pipeline
-            .layout()
-            .set_layouts()
-            .get(1)
-            .unwrap();
-        // let model_set = DescriptorSet::new(
-        //     self.descriptor_set_allocator.clone(),
-        //     model_layout.clone(),
-        //     [
-        //         // WriteDescriptorSet::buffer(1, specular_buffer.clone()),
-        //         WriteDescriptorSet::image_view_sampler(
-        //             2,
-        //             mesh.texture.as_ref().unwrap().clone(),
-        //             self.sampler.clone(),
-        //         ),
-        //     ],
-        //     [],
-        // )
-        // .unwrap();
-
-        mesh.persist_desc_set = None;
     }
 
     pub fn upload_skybox(&self, skybox_images: SkyboxImages) -> Skybox {
@@ -2421,9 +2509,17 @@ impl Renderer {
         let up = vec3(0.0, 1.0, 0.0);
 
         let light_view = look_at_rh(&eye, &target, &up);
+        // nalgebra_glm::ortho maps Z to [-1, 1] (OpenGL convention).
+        // Vulkan expects [0, 1]. Apply a correction matrix that remaps Z:
+        //   z_vulkan = z_gl * 0.5 + 0.5
         let light_projection = ortho(-25.0, 25.0, -25.0, 25.0, 0.1, 100.0);
 
-        light_projection * light_view
+        // Correction matrix: scales Z by 0.5 and biases by 0.5
+        let vulkan_depth_correction = nalgebra_glm::mat4(
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0, 1.0,
+        );
+
+        vulkan_depth_correction * light_projection * light_view
     }
 
     pub fn build_bindless_material_set(&mut self, unified: &UnifiedGeometry) {

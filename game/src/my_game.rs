@@ -1,7 +1,6 @@
 use crate::player;
 use rapier3d::prelude::RigidBodyType;
 use rapier3d::prelude::SharedShape;
-use rapier3d::prelude::*;
 use sdl3::{event::Event, keyboard::Keycode};
 use shipyard::IntoIter;
 use shipyard::UniqueView;
@@ -17,25 +16,20 @@ use vulkano_engine::scene::components::object3d::Object3D;
 
 use vulkano_engine::{
     core::application::Game,
-    graphics::{model::Model, renderer::DirectionalLight},
     scene::components::{camera::Camera, transform::Transform, velocity::Velocity},
 };
 
-use nalgebra_glm::{pi, vec3};
+use nalgebra_glm::vec3;
 
 use crate::player::Player;
 
-const MOVE_SPEED: f32 = 4.5;
-
 pub struct MyGame {
-    name: Option<String>,
     world: World,
 }
 
 impl MyGame {
     pub fn new() -> Self {
         Self {
-            name: None,
             world: World::new(),
         }
     }
@@ -145,37 +139,6 @@ impl Game for MyGame {
 
     fn get_world_mut(&mut self) -> &mut World {
         &mut self.world
-    }
-}
-
-pub fn camera_movement(
-    mut cameras: ViewMut<Camera>,
-    input_manager: UniqueView<InputManager>,
-    dt: UniqueView<DeltaTime>,
-) {
-    for camera in (&mut cameras).iter().filter(|c| c.active) {
-        let foward = camera.get_forward_vector();
-        let right = camera.get_right_vector();
-
-        let mut movement = vec3(0.0, 0.0, 0.0);
-
-        if input_manager.pressed_keys.contains(&Keycode::W) {
-            movement += foward;
-        }
-        if input_manager.pressed_keys.contains(&Keycode::S) {
-            movement -= foward;
-        }
-        if input_manager.pressed_keys.contains(&Keycode::A) {
-            movement -= right;
-        }
-        if input_manager.pressed_keys.contains(&Keycode::D) {
-            movement += right;
-        }
-
-        if movement.magnitude() > 0.0 {
-            movement = movement.normalize();
-            camera.position += movement * MOVE_SPEED * dt.0;
-        }
     }
 }
 

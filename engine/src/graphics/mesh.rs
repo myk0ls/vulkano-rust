@@ -9,9 +9,6 @@ pub struct Mesh {
     pub indices: Vec<u32>,
     pub material: Arc<Material>,
     pub texture: Option<Arc<ImageView>>,
-    pub vertex_buffer: Option<Subbuffer<[NormalVertex]>>,
-    pub index_buffer: Option<Subbuffer<[u32]>>,
-    pub persist_desc_set: Option<Arc<DescriptorSet>>,
 }
 
 impl Mesh {}

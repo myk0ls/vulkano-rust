@@ -22,7 +22,7 @@ pub struct UnifiedGeometry {
 pub struct MeshDrawInfo {
     pub index_offset: u32,
     pub index_count: u32,
-    pub vertex_offset: i32, // Note: i32 for draw_indexed_indirect's vertex_offset
+    pub vertex_offset: u32, // Note: i32 for draw_indexed_indirect's vertex_offset
     pub vertex_count: u32,
     pub material_index: u32, // Index into the texture array
 }
@@ -144,7 +144,7 @@ impl AssetManager {
                 };
 
                 mesh_draws.push(MeshDrawInfo {
-                    vertex_offset: current_vertex_offset as i32,
+                    vertex_offset: current_vertex_offset,
                     vertex_count,
                     index_offset: current_index_offset,
                     index_count,
