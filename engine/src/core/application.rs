@@ -18,7 +18,7 @@ use vulkano::sync::GpuFuture;
 
 use crate::graphics::renderer::Renderer;
 
-const SENSITIVITY: f32 = 0.005;
+const PHYSICS_DT: f32 = 1.0 / 60.0;
 
 pub trait Game {
     fn on_init(&mut self);
@@ -35,6 +35,7 @@ pub struct Application<G: Game> {
     pub sdl: Sdl,
     pub window: Window,
     pub renderer: Renderer,
+    pub physics_accumulator: f32,
     pub previous_frame_end: Option<Box<dyn vulkano::sync::GpuFuture>>,
 }
 
@@ -67,6 +68,7 @@ impl<G: Game> Application<G> {
             sdl,
             window,
             renderer,
+            physics_accumulator: 0.0,
             previous_frame_end: _previous_frame_end,
         }
     }
@@ -179,10 +181,10 @@ impl<G: Game> Application<G> {
 
             // Time delta
             let dt = self.last_frame.elapsed().as_secs_f32();
-            self.last_frame = std::time::Instant::now();
-
             //adds deltatime component
             self.game.get_world().add_unique(DeltaTime(dt));
+
+            self.last_frame = std::time::Instant::now();
 
             self.game.on_update(dt);
             self.game.on_render();
@@ -201,10 +203,17 @@ impl<G: Game> Application<G> {
             let point_light_2 = PointLight::new([-7.0, 1.5, 0.0, 1.0], [1.0, 1.0, 1.0], 5.0, 5.0);
             let point_light_3 = PointLight::new([7.0, 1.5, 0.0, 1.0], [1.0, 1.0, 1.0], 5.0, 5.0);
 
-            crate::physics::physics_engine::physics_kinematic(self.game.get_world_mut());
-            crate::physics::physics_engine::physics_kinematic_impulses(self.game.get_world_mut());
-            crate::physics::physics_engine::physics_step(self.game.get_world_mut());
-            crate::physics::physics_engine::physics_sync_out(self.game.get_world_mut());
+            self.physics_accumulator += dt;
+
+            while self.physics_accumulator >= PHYSICS_DT {
+                crate::physics::physics_engine::physics_kinematic(self.game.get_world_mut());
+                crate::physics::physics_engine::physics_kinematic_impulses(
+                    self.game.get_world_mut(),
+                );
+                crate::physics::physics_engine::physics_step(self.game.get_world_mut());
+                crate::physics::physics_engine::physics_sync_out(self.game.get_world_mut());
+                self.physics_accumulator -= PHYSICS_DT;
+            }
 
             self.renderer.start();
             self.render_shadows(&directional_light);

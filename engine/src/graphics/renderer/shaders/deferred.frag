@@ -20,8 +20,13 @@ layout(location = 3) out vec2 f_specular;
 
 void main() {
     //f_color = vec4(in_color, 1.0);
-    f_color = texture(textures[nonuniformEXT(in_material_index)], in_tex_coords);
+    vec4 tex_color = texture(textures[nonuniformEXT(in_material_index)], in_tex_coords);
+    if (tex_color.a < 0.5)
+        discard;
+
     f_normal = vec4(in_normal, 1.0);
     f_location = in_location;
     f_specular = specular_array.data[in_material_index];
+
+    f_color = tex_color;
 }

@@ -9,7 +9,7 @@ use vulkano_engine::scene::components::delta_time::DeltaTime;
 
 use crate::player::Player;
 
-const JUMP_FORCE: f32 = 1.0;
+const JUMP_FORCE: f32 = 1.5;
 
 pub fn player_movement(
     players: View<Player>,

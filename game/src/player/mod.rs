@@ -7,7 +7,7 @@ use shipyard::{Component, IntoIter, Unique, View, ViewMut, World};
 
 // const MOVE_SPEED: f32 = 0.5;
 // const SENSITIVITY: f32 = 0.005;
-const MOVE_SPEED: f32 = 1.0;
+const MOVE_SPEED: f32 = 4.0;
 const SENSITIVITY: f32 = 0.005;
 
 #[derive(Component, Unique)]
