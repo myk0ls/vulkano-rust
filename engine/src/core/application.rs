@@ -98,7 +98,7 @@ impl<G: Game> Application<G> {
 
         let mut skybox = self.renderer.upload_skybox(skybox_images);
 
-        self.renderer.set_ambient([1.0, 1.0, 1.0], 0.15);
+        self.renderer.set_ambient([1.0, 1.0, 1.0], 0.1);
 
         crate::physics::physics_engine::physics_bodies_creation_system(self.game.get_world_mut());
 
@@ -178,14 +178,23 @@ impl<G: Game> Application<G> {
                             }
                             Some(Keycode::F1) => {
                                 self.renderer.fxaa_enabled = !self.renderer.fxaa_enabled;
-                                println!("FXAA: {}", if self.renderer.fxaa_enabled { "ON" } else { "OFF" });
+                                println!(
+                                    "FXAA: {}",
+                                    if self.renderer.fxaa_enabled {
+                                        "ON"
+                                    } else {
+                                        "OFF"
+                                    }
+                                );
                             }
                             Some(Keycode::F2) => {
-                                self.renderer.shadow_softness = (self.renderer.shadow_softness + 0.5).min(16.0);
+                                self.renderer.shadow_softness =
+                                    (self.renderer.shadow_softness + 0.5).min(16.0);
                                 println!("Shadow softness: {:.1}", self.renderer.shadow_softness);
                             }
                             Some(Keycode::F3) => {
-                                self.renderer.shadow_softness = (self.renderer.shadow_softness - 0.5).max(0.0);
+                                self.renderer.shadow_softness =
+                                    (self.renderer.shadow_softness - 0.5).max(0.0);
                                 println!("Shadow softness: {:.1}", self.renderer.shadow_softness);
                             }
                             _ => {}

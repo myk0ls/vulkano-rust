@@ -1416,7 +1416,7 @@ impl Renderer {
             commands,
             image_index,
             acquire_future,
-            ao_radius: 0.03,
+            ao_radius: 0.05,
             ao_att_scale: 0.95,
             ao_dist_scale: 1.7,
             ao_blur_depth_threshold: 100.0,
