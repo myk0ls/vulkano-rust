@@ -98,7 +98,7 @@ impl<G: Game> Application<G> {
 
         let mut skybox = self.renderer.upload_skybox(skybox_images);
 
-        self.renderer.set_ambient([1.0, 1.0, 1.0], 0.35);
+        self.renderer.set_ambient([1.0, 1.0, 1.0], 0.65);
 
         crate::physics::physics_engine::physics_bodies_creation_system(self.game.get_world_mut());
 
@@ -115,6 +115,50 @@ impl<G: Game> Application<G> {
                     } => break 'running,
 
                     Event::KeyDown { keycode, .. } => {
+                        match keycode {
+                            Some(Keycode::KpPlus) => {
+                                self.renderer.ao_radius = (self.renderer.ao_radius + 0.05).min(5.0);
+                                println!("AO radius: {:.2}", self.renderer.ao_radius);
+                            }
+                            Some(Keycode::KpMinus) => {
+                                self.renderer.ao_radius = (self.renderer.ao_radius - 0.05).max(0.0);
+                                println!("AO radius: {:.2}", self.renderer.ao_radius);
+                            }
+                            Some(Keycode::KpMultiply) => {
+                                self.renderer.ao_att_scale = (self.renderer.ao_att_scale + 0.05).min(2.0);
+                                println!("AO attScale: {:.2}", self.renderer.ao_att_scale);
+                            }
+                            Some(Keycode::KpDivide) => {
+                                self.renderer.ao_att_scale = (self.renderer.ao_att_scale - 0.05).max(0.0);
+                                println!("AO attScale: {:.2}", self.renderer.ao_att_scale);
+                            }
+                            Some(Keycode::Kp7) => {
+                                self.renderer.ao_dist_scale = (self.renderer.ao_dist_scale + 0.1).min(10.0);
+                                println!("AO distScale: {:.2}", self.renderer.ao_dist_scale);
+                            }
+                            Some(Keycode::Kp4) => {
+                                self.renderer.ao_dist_scale = (self.renderer.ao_dist_scale - 0.1).max(0.1);
+                                println!("AO distScale: {:.2}", self.renderer.ao_dist_scale);
+                            }
+                            Some(Keycode::Kp8) => {
+                                self.renderer.ao_blur_depth_threshold = (self.renderer.ao_blur_depth_threshold + 10.0).min(1000.0);
+                                println!("AO blurDepthThreshold: {:.0}", self.renderer.ao_blur_depth_threshold);
+                            }
+                            Some(Keycode::Kp5) => {
+                                self.renderer.ao_blur_depth_threshold = (self.renderer.ao_blur_depth_threshold - 10.0).max(0.0);
+                                println!("AO blurDepthThreshold: {:.0}", self.renderer.ao_blur_depth_threshold);
+                            }
+                            Some(Keycode::Kp9) => {
+                                self.renderer.ao_composite_scale = (self.renderer.ao_composite_scale + 0.05).min(1.0);
+                                println!("AO compositeScale: {:.2}", self.renderer.ao_composite_scale);
+                            }
+                            Some(Keycode::Kp6) => {
+                                self.renderer.ao_composite_scale = (self.renderer.ao_composite_scale - 0.05).max(0.0);
+                                println!("AO compositeScale: {:.2}", self.renderer.ao_composite_scale);
+                            }
+                            _ => {}
+                        }
+
                         let mut input_manager = self
                             .game
                             .get_world_mut()

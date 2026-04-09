@@ -10,7 +10,8 @@ use vulkano::device::DeviceFeatures;
 use vulkano::image::view::ImageViewType;
 use vulkano::image::{Image, ImageCreateInfo};
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter};
-use vulkano::pipeline::{DynamicState, PipelineShaderStageCreateInfo};
+use vulkano::pipeline::compute::ComputePipelineCreateInfo;
+use vulkano::pipeline::{ComputePipeline, DynamicState, PipelineShaderStageCreateInfo};
 use vulkano::{
     Handle, Version, VulkanLibrary, VulkanObject,
     buffer::BufferUsage,
@@ -47,7 +48,7 @@ use vulkano::{
             input_assembly::InputAssemblyState,
             multisample::MultisampleState,
             rasterization::{CullMode, RasterizationState},
-            vertex_input::{BuffersDefinition, Vertex, VertexDefinition},
+            vertex_input::{BuffersDefinition, Vertex, VertexDefinition, VertexInputState},
             viewport::{Viewport, ViewportState},
         },
         layout::PipelineDescriptorSetLayoutCreateInfo,
@@ -189,6 +190,34 @@ mod shadows_frag {
     }
 }
 
+mod ao_comp {
+    vulkano_shaders::shader! {
+        ty: "compute",
+        path: "src/graphics/renderer/shaders/ao.comp"
+    }
+}
+
+mod blur_comp {
+    vulkano_shaders::shader! {
+        ty: "compute",
+        path: "src/graphics/renderer/shaders/blur.comp"
+    }
+}
+
+mod composite_vert {
+    vulkano_shaders::shader! {
+        ty: "vertex",
+        path: "src/graphics/renderer/shaders/composite.vert",
+    }
+}
+
+mod composite_frag {
+    vulkano_shaders::shader! {
+        ty: "fragment",
+        path: "src/graphics/renderer/shaders/composite.frag",
+    }
+}
+
 const SHADOW_MAP_SIZE: u32 = 4096;
 
 #[derive(Debug, Clone)]
@@ -231,11 +260,23 @@ pub struct Renderer {
     ambient_pipeline: Arc<GraphicsPipeline>,
     light_obj_pipeline: Arc<GraphicsPipeline>,
     skybox_pipeline: Arc<GraphicsPipeline>,
+    ao_pipeline: Arc<ComputePipeline>,
+    blur_pipeline: Arc<ComputePipeline>,
+    composite_pipeline: Arc<GraphicsPipeline>,
+    composite_render_pass: Arc<RenderPass>,
+    composite_framebuffers: Vec<Arc<Framebuffer>>,
+    scene_image: Arc<ImageView>,
     dummy_verts: Subbuffer<[DummyVertex]>,
     framebuffers: Vec<Arc<Framebuffer>>,
     shadow_framebuffer: Arc<Framebuffer>,
     color_buffer: Arc<ImageView>,
     normal_buffer: Arc<ImageView>,
+    depth_buffer: Arc<ImageView>,
+    ao_image: Arc<ImageView>,
+    ao_blurred_image: Arc<ImageView>,
+    ao_sampler: Arc<Sampler>,
+    ao_repeat_sampler: Arc<Sampler>,
+    ao_rotation_image: Arc<ImageView>,
     vp_set: Arc<DescriptorSet>,
     bindless_material_set: Option<Arc<DescriptorSet>>,
     viewport: Viewport,
@@ -243,6 +284,12 @@ pub struct Renderer {
     pub commands: Option<AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>>,
     image_index: u32,
     acquire_future: Option<SwapchainAcquireFuture>,
+    pub ao_radius: f32,
+    pub ao_att_scale: f32,
+    pub ao_dist_scale: f32,
+    pub ao_blur_depth_threshold: f32,
+    pub ao_composite_scale: f32,
+    pub ao_composite_bias: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -440,6 +487,9 @@ impl Renderer {
         let pointlight_frag = pointlight_frag::load(device.clone()).unwrap();
         let shadows_vert = shadows_vert::load(device.clone()).unwrap();
         let shadows_frag = shadows_frag::load(device.clone()).unwrap();
+        let ao_comp = ao_comp::load(device.clone()).unwrap();
+        let composite_vert = composite_vert::load(device.clone()).unwrap();
+        let composite_frag = composite_frag::load(device.clone()).unwrap();
 
         let shadow_render_pass = vulkano::single_pass_renderpass!(
             device.clone(),
@@ -476,7 +526,7 @@ impl Renderer {
                     format: Format::R16G16B16A16_SFLOAT,
                     samples: 1,
                     load_op: Clear,
-                    store_op: DontCare,
+                    store_op: Store,
                 },
                 frag_location: {
                     format: Format::R16G16B16A16_SFLOAT,
@@ -491,10 +541,10 @@ impl Renderer {
                     store_op: DontCare,
                 },
                 depth: {
-                    format: Format::D16_UNORM,
+                    format: Format::D32_SFLOAT,
                     samples: 1,
                     load_op: Clear,
-                    store_op: DontCare,
+                    store_op: Store,
                 }
             },
             passes: [
@@ -931,6 +981,105 @@ impl Renderer {
             .unwrap()
         };
 
+        let ao_pipeline = {
+            let cs = ao_comp.entry_point("main").unwrap();
+            let stage = PipelineShaderStageCreateInfo::new(cs);
+            let layout = PipelineLayout::new(
+                device.clone(),
+                PipelineDescriptorSetLayoutCreateInfo::from_stages([&stage])
+                    .into_pipeline_layout_create_info(device.clone())
+                    .unwrap(),
+            )
+            .unwrap();
+
+            ComputePipeline::new(
+                device.clone(),
+                None,
+                ComputePipelineCreateInfo::stage_layout(stage, layout),
+            )
+            .unwrap()
+        };
+
+        let blur_comp = blur_comp::load(device.clone()).unwrap();
+        let blur_pipeline = {
+            let cs = blur_comp.entry_point("main").unwrap();
+            let stage = PipelineShaderStageCreateInfo::new(cs);
+            let layout = PipelineLayout::new(
+                device.clone(),
+                PipelineDescriptorSetLayoutCreateInfo::from_stages([&stage])
+                    .into_pipeline_layout_create_info(device.clone())
+                    .unwrap(),
+            )
+            .unwrap();
+
+            ComputePipeline::new(
+                device.clone(),
+                None,
+                ComputePipelineCreateInfo::stage_layout(stage, layout),
+            )
+            .unwrap()
+        };
+
+        let composite_render_pass = vulkano::single_pass_renderpass!(
+            device.clone(),
+            attachments: {
+                color: {
+                    format: swapchain.image_format(),
+                    samples: 1,
+                    load_op: DontCare,
+                    store_op: Store,
+                },
+            },
+            pass: {
+                color: [color],
+                depth_stencil: {},
+            }
+        )
+        .unwrap();
+
+        let composite_pass = Subpass::from(composite_render_pass.clone(), 0).unwrap();
+
+        let composite_pipeline = {
+            let vs = composite_vert.entry_point("main").unwrap();
+            let fs = composite_frag.entry_point("main").unwrap();
+
+            let stages = [
+                PipelineShaderStageCreateInfo::new(vs),
+                PipelineShaderStageCreateInfo::new(fs),
+            ];
+
+            let layout = PipelineLayout::new(
+                device.clone(),
+                PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
+                    .into_pipeline_layout_create_info(device.clone())
+                    .unwrap(),
+            )
+            .unwrap();
+
+            GraphicsPipeline::new(
+                device.clone(),
+                None,
+                GraphicsPipelineCreateInfo {
+                    stages: stages.into_iter().collect(),
+                    vertex_input_state: Some(VertexInputState::new()),
+                    input_assembly_state: Some(InputAssemblyState::default()),
+                    viewport_state: Some(ViewportState {
+                        viewports: [viewport.clone()].into_iter().collect(),
+                        ..Default::default()
+                    }),
+                    rasterization_state: Some(RasterizationState::default()),
+                    multisample_state: Some(MultisampleState::default()),
+                    color_blend_state: Some(ColorBlendState::with_attachment_states(
+                        1,
+                        ColorBlendAttachmentState::default(),
+                    )),
+                    subpass: Some(composite_pass.into()),
+                    ..GraphicsPipelineCreateInfo::layout(layout)
+                },
+            )
+            .unwrap()
+        };
+
         let vp_buffer = Buffer::from_data(
             memory_allocator.clone(),
             BufferCreateInfo {
@@ -1001,13 +1150,25 @@ impl Renderer {
         )
         .unwrap();
 
-        let (framebuffers, color_buffer, normal_buffer, frag_location_buffer, specular_buffer) =
-            Renderer::window_size_dependent_setup(
-                memory_allocator.clone(),
-                &images,
-                render_pass.clone(),
-                &mut viewport,
-            );
+        let (
+            framebuffers,
+            composite_framebuffers,
+            scene_image,
+            color_buffer,
+            normal_buffer,
+            frag_location_buffer,
+            specular_buffer,
+            depth_buffer,
+            ao_image,
+            ao_blurred_image,
+        ) = Renderer::window_size_dependent_setup(
+            memory_allocator.clone(),
+            &images,
+            render_pass.clone(),
+            composite_render_pass.clone(),
+            swapchain.image_format(),
+            &mut viewport,
+        );
 
         let shadow_map_image = Image::new(
             memory_allocator.clone(),
@@ -1065,6 +1226,92 @@ impl Renderer {
         )
         .unwrap();
 
+        let ao_sampler = Sampler::new(
+            device.clone(),
+            SamplerCreateInfo {
+                mag_filter: Filter::Nearest,
+                min_filter: Filter::Nearest,
+                address_mode: [SamplerAddressMode::ClampToEdge; 3],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let ao_repeat_sampler = Sampler::new(
+            device.clone(),
+            SamplerCreateInfo {
+                mag_filter: Filter::Nearest,
+                min_filter: Filter::Nearest,
+                address_mode: [SamplerAddressMode::Repeat; 3],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // 4x4 SSAO rotation texture: 16 random vec3 values stored as RGBA8
+        // Component values are in [0,1]; shader subtracts 1.0 to shift to [-1,0]
+        #[rustfmt::skip]
+        let rotation_pixels: [u8; 64] = [
+            148, 203,  56, 255,   12,  87, 234, 255,  199,  41, 122, 255,   77, 166,  33, 255,
+             91, 218, 174, 255,  233,  14,  67, 255,  155, 139, 211, 255,   38, 249,  98, 255,
+            177,  62, 185, 255,  104, 191,  19, 255,   23, 133, 247, 255,  212,  78, 141, 255,
+             59, 222,  88, 255,  167,   5, 196, 255,  240, 112,  45, 255,   83, 158, 229, 255,
+        ];
+
+        let rotation_upload = Buffer::from_iter(
+            memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            rotation_pixels,
+        )
+        .unwrap();
+
+        let rotation_image = Image::new(
+            memory_allocator.clone(),
+            ImageCreateInfo {
+                image_type: vulkano::image::ImageType::Dim2d,
+                format: Format::R8G8B8A8_UNORM,
+                extent: [4, 4, 1],
+                usage: ImageUsage::TRANSFER_DST | ImageUsage::SAMPLED,
+                ..Default::default()
+            },
+            AllocationCreateInfo::default(),
+        )
+        .unwrap();
+
+        {
+            let mut upload_cmd = AutoCommandBufferBuilder::primary(
+                command_buffer_allocator.clone(),
+                queue.queue_family_index(),
+                CommandBufferUsage::OneTimeSubmit,
+            )
+            .unwrap();
+            upload_cmd
+                .copy_buffer_to_image(CopyBufferToImageInfo::buffer_image(
+                    rotation_upload,
+                    rotation_image.clone(),
+                ))
+                .unwrap();
+            upload_cmd
+                .build()
+                .unwrap()
+                .execute(queue.clone())
+                .unwrap()
+                .then_signal_fence_and_flush()
+                .unwrap()
+                .wait(None)
+                .unwrap();
+        }
+
+        let ao_rotation_image = ImageView::new_default(rotation_image).unwrap();
+
         let vp_layout = deferred_pipeline.layout().set_layouts().get(0).unwrap();
         let vp_set = DescriptorSet::new(
             descriptor_set_allocator.clone(),
@@ -1111,11 +1358,23 @@ impl Renderer {
             ambient_pipeline,
             light_obj_pipeline,
             skybox_pipeline,
+            ao_pipeline,
+            blur_pipeline,
+            composite_pipeline,
+            composite_render_pass,
+            composite_framebuffers,
+            scene_image,
             dummy_verts,
             framebuffers,
             shadow_framebuffer,
             color_buffer,
             normal_buffer,
+            depth_buffer,
+            ao_image,
+            ao_blurred_image,
+            ao_sampler,
+            ao_repeat_sampler,
+            ao_rotation_image,
             vp_set,
             bindless_material_set,
             viewport,
@@ -1123,6 +1382,12 @@ impl Renderer {
             commands,
             image_index,
             acquire_future,
+            ao_radius: 0.05,
+            ao_att_scale: 0.95,
+            ao_dist_scale: 1.7,
+            ao_blur_depth_threshold: 100.0,
+            ao_composite_scale: 1.0,
+            ao_composite_bias: 0.0,
         }
     }
 
@@ -1190,6 +1455,11 @@ impl Renderer {
 
         let mut commands = self.commands.take().unwrap();
         commands.end_render_pass(SubpassEndInfo::default()).unwrap();
+
+        self.dispatch_ao(&mut commands);
+        self.dispatch_blur(&mut commands);
+        self.dispatch_composite(&mut commands);
+
         let command_buffer = commands.build().unwrap();
 
         let af = self.acquire_future.take().unwrap();
@@ -2065,23 +2335,35 @@ impl Renderer {
 
         let (
             new_framebuffers,
+            new_composite_framebuffers,
+            new_scene_image,
             new_color_buffer,
             new_normal_buffer,
             new_frag_location_buffer,
             new_specular_buffer,
+            new_depth_buffer,
+            new_ao_image,
+            new_ao_blurred_image,
         ) = Renderer::window_size_dependent_setup(
             self.memory_allocator.clone(),
             &new_images,
             self.render_pass.clone(),
+            self.composite_render_pass.clone(),
+            self.swapchain.image_format(),
             &mut self.viewport,
         );
 
         self.swapchain = new_swapchain;
         self.framebuffers = new_framebuffers;
+        self.composite_framebuffers = new_composite_framebuffers;
+        self.scene_image = new_scene_image;
         self.color_buffer = new_color_buffer;
         self.normal_buffer = new_normal_buffer;
         self.frag_location_buffer = new_frag_location_buffer;
         self.specular_buffer = new_specular_buffer;
+        self.depth_buffer = new_depth_buffer;
+        self.ao_image = new_ao_image;
+        self.ao_blurred_image = new_ao_blurred_image;
 
         self.vp_buffer = Buffer::from_data(
             self.memory_allocator.clone(),
@@ -2122,9 +2404,16 @@ impl Renderer {
         allocator: Arc<StandardMemoryAllocator>,
         images: &[Arc<Image>],
         render_pass: Arc<RenderPass>,
+        composite_render_pass: Arc<RenderPass>,
+        swapchain_format: Format,
         viewport: &mut Viewport,
     ) -> (
         Vec<Arc<Framebuffer>>,
+        Vec<Arc<Framebuffer>>,
+        Arc<ImageView>,
+        Arc<ImageView>,
+        Arc<ImageView>,
+        Arc<ImageView>,
         Arc<ImageView>,
         Arc<ImageView>,
         Arc<ImageView>,
@@ -2139,7 +2428,7 @@ impl Renderer {
                 allocator.clone(),
                 ImageCreateInfo {
                     image_type: vulkano::image::ImageType::Dim2d,
-                    format: Format::D16_UNORM,
+                    format: Format::D32_SFLOAT,
                     extent: [dimensions[0], dimensions[1], 1],
                     usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::SAMPLED,
                     ..Default::default()
@@ -2185,7 +2474,7 @@ impl Renderer {
                     extent: [dimensions[0], dimensions[1], 1],
                     usage: ImageUsage::COLOR_ATTACHMENT
                         | ImageUsage::INPUT_ATTACHMENT
-                        | ImageUsage::TRANSIENT_ATTACHMENT,
+                        | ImageUsage::SAMPLED,
                     ..Default::default()
                 },
                 AllocationCreateInfo {
@@ -2241,15 +2530,72 @@ impl Renderer {
         )
         .unwrap();
 
-        let framebuffers = images
-            .iter()
-            .map(|image| {
-                let view = ImageView::new_default(image.clone()).unwrap();
+        let ao_image = ImageView::new_default(
+            Image::new(
+                allocator.clone(),
+                ImageCreateInfo {
+                    image_type: vulkano::image::ImageType::Dim2d,
+                    format: Format::R8_UNORM,
+                    extent: [dimensions[0], dimensions[1], 1],
+                    usage: ImageUsage::STORAGE | ImageUsage::SAMPLED,
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let ao_blurred_image = ImageView::new_default(
+            Image::new(
+                allocator.clone(),
+                ImageCreateInfo {
+                    image_type: vulkano::image::ImageType::Dim2d,
+                    format: Format::R8_UNORM,
+                    extent: [dimensions[0], dimensions[1], 1],
+                    usage: ImageUsage::STORAGE | ImageUsage::SAMPLED,
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        // Intermediate scene image — lighting writes here instead of swapchain
+        let scene_image = ImageView::new_default(
+            Image::new(
+                allocator.clone(),
+                ImageCreateInfo {
+                    image_type: vulkano::image::ImageType::Dim2d,
+                    format: swapchain_format,
+                    extent: [dimensions[0], dimensions[1], 1],
+                    usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::SAMPLED,
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        // Main render pass framebuffers — use scene_image as final_color target
+        let framebuffers = (0..images.len())
+            .map(|_| {
                 Framebuffer::new(
                     render_pass.clone(),
                     FramebufferCreateInfo {
                         attachments: vec![
-                            view,
+                            scene_image.clone(),
                             color_buffer.clone(),
                             normal_buffer.clone(),
                             frag_location_buffer.clone(),
@@ -2263,12 +2609,33 @@ impl Renderer {
             })
             .collect::<Vec<_>>();
 
+        // Composite framebuffers — one per swapchain image
+        let composite_framebuffers = images
+            .iter()
+            .map(|image| {
+                let view = ImageView::new_default(image.clone()).unwrap();
+                Framebuffer::new(
+                    composite_render_pass.clone(),
+                    FramebufferCreateInfo {
+                        attachments: vec![view],
+                        ..Default::default()
+                    },
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+
         (
             framebuffers,
+            composite_framebuffers,
+            scene_image.clone(),
             color_buffer.clone(),
             normal_buffer.clone(),
             frag_location_buffer.clone(),
             specular_buffer.clone(),
+            depth_buffer.clone(),
+            ao_image.clone(),
+            ao_blurred_image.clone(),
         )
     }
 
@@ -2570,5 +2937,223 @@ impl Renderer {
         .unwrap();
 
         self.bindless_material_set = Some(set);
+    }
+
+    pub fn dispatch_ao(
+        &mut self,
+        commands: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+    ) {
+        let dimensions = self.swapchain.image_extent();
+
+        let layout = self.ao_pipeline.layout().set_layouts().get(0).unwrap();
+        let ao_set = DescriptorSet::new(
+            self.descriptor_set_allocator.clone(),
+            layout.clone(),
+            [
+                WriteDescriptorSet::image_view_sampler(
+                    0,
+                    self.depth_buffer.clone(),
+                    self.ao_sampler.clone(),
+                ),
+                WriteDescriptorSet::image_view_sampler(
+                    1,
+                    self.ao_rotation_image.clone(),
+                    self.ao_repeat_sampler.clone(),
+                ),
+                WriteDescriptorSet::image_view(2, self.ao_image.clone()),
+            ],
+            [],
+        )
+        .unwrap();
+
+        let pc = ao_comp::PushConstants {
+            zNear: 0.01,
+            zFar: 1000.0,
+            radius: self.ao_radius,
+            attScale: self.ao_att_scale,
+            distScale: self.ao_dist_scale,
+        };
+
+        commands
+            .bind_pipeline_compute(self.ao_pipeline.clone())
+            .unwrap()
+            .bind_descriptor_sets(
+                PipelineBindPoint::Compute,
+                self.ao_pipeline.layout().clone(),
+                0,
+                ao_set,
+            )
+            .unwrap()
+            .push_constants(self.ao_pipeline.layout().clone(), 0, pc)
+            .unwrap();
+        unsafe {
+            commands
+                .dispatch([(dimensions[0] + 15) / 16, (dimensions[1] + 15) / 16, 1])
+                .unwrap();
+        }
+    }
+
+    pub fn dispatch_blur(
+        &mut self,
+        commands: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+    ) {
+        let dimensions = self.swapchain.image_extent();
+        let layout = self.blur_pipeline.layout().set_layouts().get(0).unwrap();
+        let groups = [(dimensions[0] + 15) / 16, (dimensions[1] + 15) / 16, 1];
+
+        commands
+            .bind_pipeline_compute(self.blur_pipeline.clone())
+            .unwrap();
+
+        // Pass 1: horizontal — ao_image -> ao_blurred_image
+        let h_set = DescriptorSet::new(
+            self.descriptor_set_allocator.clone(),
+            layout.clone(),
+            [
+                WriteDescriptorSet::image_view_sampler(
+                    0,
+                    self.ao_image.clone(),
+                    self.ao_sampler.clone(),
+                ),
+                WriteDescriptorSet::image_view(1, self.ao_blurred_image.clone()),
+                WriteDescriptorSet::image_view_sampler(
+                    2,
+                    self.depth_buffer.clone(),
+                    self.ao_sampler.clone(),
+                ),
+            ],
+            [],
+        )
+        .unwrap();
+
+        commands
+            .bind_descriptor_sets(
+                PipelineBindPoint::Compute,
+                self.blur_pipeline.layout().clone(),
+                0,
+                h_set,
+            )
+            .unwrap()
+            .push_constants(
+                self.blur_pipeline.layout().clone(),
+                0,
+                blur_comp::PushConstants {
+                    isHorizontal: 1,
+                    depthThreshold: self.ao_blur_depth_threshold,
+                },
+            )
+            .unwrap();
+        unsafe {
+            commands.dispatch(groups).unwrap();
+        }
+
+        // Pass 2: vertical — ao_blurred_image -> ao_image
+        let v_set = DescriptorSet::new(
+            self.descriptor_set_allocator.clone(),
+            layout.clone(),
+            [
+                WriteDescriptorSet::image_view_sampler(
+                    0,
+                    self.ao_blurred_image.clone(),
+                    self.ao_sampler.clone(),
+                ),
+                WriteDescriptorSet::image_view(1, self.ao_image.clone()),
+                WriteDescriptorSet::image_view_sampler(
+                    2,
+                    self.depth_buffer.clone(),
+                    self.ao_sampler.clone(),
+                ),
+            ],
+            [],
+        )
+        .unwrap();
+
+        commands
+            .bind_descriptor_sets(
+                PipelineBindPoint::Compute,
+                self.blur_pipeline.layout().clone(),
+                0,
+                v_set,
+            )
+            .unwrap()
+            .push_constants(
+                self.blur_pipeline.layout().clone(),
+                0,
+                blur_comp::PushConstants {
+                    isHorizontal: 0,
+                    depthThreshold: self.ao_blur_depth_threshold,
+                },
+            )
+            .unwrap();
+        unsafe {
+            commands.dispatch(groups).unwrap();
+        }
+    }
+
+    fn dispatch_composite(
+        &self,
+        commands: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+    ) {
+        let layout = self
+            .composite_pipeline
+            .layout()
+            .set_layouts()
+            .get(0)
+            .unwrap();
+        let composite_set = DescriptorSet::new(
+            self.descriptor_set_allocator.clone(),
+            layout.clone(),
+            [
+                WriteDescriptorSet::image_view_sampler(
+                    0,
+                    self.scene_image.clone(),
+                    self.ao_sampler.clone(),
+                ),
+                WriteDescriptorSet::image_view_sampler(
+                    1,
+                    self.ao_image.clone(),
+                    self.ao_sampler.clone(),
+                ),
+            ],
+            [],
+        )
+        .unwrap();
+
+        commands
+            .begin_render_pass(
+                RenderPassBeginInfo {
+                    clear_values: vec![None],
+                    ..RenderPassBeginInfo::framebuffer(
+                        self.composite_framebuffers[self.image_index as usize].clone(),
+                    )
+                },
+                SubpassBeginInfo {
+                    contents: SubpassContents::Inline,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .bind_pipeline_graphics(self.composite_pipeline.clone())
+            .unwrap()
+            .bind_descriptor_sets(
+                PipelineBindPoint::Graphics,
+                self.composite_pipeline.layout().clone(),
+                0,
+                composite_set,
+            )
+            .unwrap()
+            .push_constants(
+                self.composite_pipeline.layout().clone(),
+                0,
+                composite_frag::PushConstants {
+                    scale: self.ao_composite_scale,
+                    bias: self.ao_composite_bias,
+                },
+            )
+            .unwrap();
+        unsafe {
+            commands.draw(3, 1, 0, 0).unwrap();
+        }
+        commands.end_render_pass(SubpassEndInfo::default()).unwrap();
     }
 }

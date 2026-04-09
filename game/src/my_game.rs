@@ -60,6 +60,11 @@ impl Game for MyGame {
             asset_manager.load_model("data/models/sponza_atrium_3.glb")
         };
 
+        let bistro = {
+            let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
+            asset_manager.load_model("data/models/Bistro_Godot.glb")
+        };
+
         let player_entity = self.world.add_entity((
             Player::new(),
             Camera::new(vec3(0.0, -5.0, 0.0)),
@@ -97,6 +102,11 @@ impl Game for MyGame {
             Transform::with_pos(vec3(0.0, 0.0, 0.0)),
             Object3D::with_model(sponza.clone()),
         ));
+
+        // let bistro_scene = &self.world.add_entity((
+        //     Transform::with_pos(vec3(0.0, 0.0, 0.0)),
+        //     Object3D::with_model(bistro.clone()),
+        // ));
 
         // let monkey_entity3 = &self.world.add_entity((
         //     Transform::with_pos(vec3(0.0, 0.0, 4.0)),

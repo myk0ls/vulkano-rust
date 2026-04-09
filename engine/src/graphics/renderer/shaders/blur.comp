@@ -1,0 +1,64 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D texIn;
+layout(set = 0, binding = 1, r8) uniform writeonly image2D texOut;
+layout(set = 0, binding = 2) uniform sampler2D texDepth;
+
+layout(push_constant) uniform PushConstants {
+    uint isHorizontal;    // 1 = horizontal pass, 0 = vertical pass
+    float depthThreshold; // controls edge-stopping strength
+} pc;
+
+// 17-tap binomial (Pascal row 16) Gaussian weights, sum = 1.0
+const int kFilterSize = 17;
+const float gaussWeights[kFilterSize] = float[](
+    0.0000152587890625,
+    0.000244140625,
+    0.001831054688,
+    0.008544921875,
+    0.027770996094,
+    0.066650390625,
+    0.122192382813,
+    0.174560546875,
+    0.196380615234,
+    0.174560546875,
+    0.122192382813,
+    0.066650390625,
+    0.027770996094,
+    0.008544921875,
+    0.001831054688,
+    0.000244140625,
+    0.0000152587890625
+);
+
+void main() {
+    const vec2 size = vec2(textureSize(texIn, 0));
+    const vec2 xy = vec2(gl_GlobalInvocationID.xy);
+    if (xy.x >= size.x || xy.y >= size.y) return;
+    const vec2 texCoord = (xy + vec2(0.5)) / size;
+
+    // Step size in UV space: one texel along the blur direction
+    const float texScaler = 1.0 / (pc.isHorizontal == 1u ? size.x : size.y);
+
+    float fragDepth = texture(texDepth, texCoord).r;
+    float fragColor = texture(texIn, texCoord).r;
+
+    float c = 0.0;
+    for (int i = 0; i < kFilterSize; i++) {
+        float offset = float(i - kFilterSize / 2);
+        vec2 uv = texCoord + texScaler * (pc.isHorizontal == 1u
+            ? vec2(offset, 0.0)
+            : vec2(0.0, offset));
+
+        float color = texture(texIn, uv).r;
+        float depth = texture(texDepth, uv).r;
+
+        // Bilateral weight: reduce blur across depth discontinuities
+        float w = clamp(abs(depth - fragDepth) * pc.depthThreshold, 0.0, 1.0);
+        c += mix(color, fragColor, w) * gaussWeights[i];
+    }
+
+    imageStore(texOut, ivec2(xy), vec4(c, c, c, 1.0));
+}

@@ -1,0 +1,51 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D texDepth;
+layout(set = 0, binding = 1) uniform sampler2D texRotation;
+layout(set = 0, binding = 2, r8) uniform writeonly image2D texOut;
+
+layout(push_constant) uniform PushConstants {
+    float zNear;
+    float zFar;
+    float radius;
+    float attScale;
+    float distScale;
+} pc;
+
+// Convert perspective depth [0,1] to linear eye-space depth (negative, away from camera)
+float scaleZ(float smpl) {
+    return (pc.zFar * pc.zNear) / (smpl * (pc.zFar - pc.zNear) - pc.zFar);
+}
+
+const vec3 offsets[8] = vec3[8](
+    vec3(-0.5, -0.5, -0.5), vec3( 0.5, -0.5, -0.5),
+    vec3(-0.5,  0.5, -0.5), vec3( 0.5,  0.5, -0.5),
+    vec3(-0.5, -0.5,  0.5), vec3( 0.5, -0.5,  0.5),
+    vec3(-0.5,  0.5,  0.5), vec3( 0.5,  0.5,  0.5)
+);
+
+void main() {
+    const vec2 size = vec2(textureSize(texDepth, 0));
+    const vec2 xy = vec2(gl_GlobalInvocationID.xy);
+    const vec2 uv = (xy + vec2(0.5)) / size;
+    if (xy.x >= size.x || xy.y >= size.y) return;
+
+    const float Z = scaleZ(texture(texDepth, uv).x);
+
+    // Tile the 4x4 rotation texture across the screen; shift to [-1, 0] range
+    const vec3 plane = texture(texRotation, xy / 4.0).xyz - vec3(1.0);
+
+    float att = 0.0;
+    for (int i = 0; i < 8; i++) {
+        // Reflect offset off the random plane to get a varied sample direction
+        vec3 rSample = reflect(offsets[i], plane);
+        float zSample = scaleZ(texture(texDepth, uv + pc.radius * rSample.xy / Z).x);
+        float dist = max(zSample - Z, 0.0) / pc.distScale;
+        float occl = 15.0 * max(dist * (2.0 - dist), 0.0);
+        att += 1.0 / (1.0 + occl * occl);
+    }
+    att = clamp(att * att / 64.0 + 0.45, 0.0, 1.0) * pc.attScale;
+    imageStore(texOut, ivec2(xy), vec4(vec3(att), 1.0));
+}
