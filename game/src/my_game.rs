@@ -91,12 +91,12 @@ impl Game for MyGame {
         ));
 
         //main scene
-        let soldier_entity = &self.world.add_entity((
-            Transform::with_pos(vec3(0.0, -60.0, 0.0)),
-            Object3D::with_model(soldier.clone()),
-            RigidBodyComponent::new(RigidBodyType::Dynamic),
-            ColliderComponent::new(SharedShape::ball(0.45)),
-        ));
+        // let soldier_entity = &self.world.add_entity((
+        //     Transform::with_pos(vec3(0.0, -60.0, 0.0)),
+        //     Object3D::with_model(soldier.clone()),
+        //     RigidBodyComponent::new(RigidBodyType::Dynamic),
+        //     ColliderComponent::new(SharedShape::ball(0.45)),
+        // ));
 
         let sponza_scene = &self.world.add_entity((
             Transform::with_pos(vec3(0.0, 0.0, 0.0)),

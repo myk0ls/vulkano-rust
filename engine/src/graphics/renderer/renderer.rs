@@ -204,6 +204,13 @@ mod blur_comp {
     }
 }
 
+mod fxaa_comp {
+    vulkano_shaders::shader! {
+        ty: "compute",
+        path: "src/graphics/renderer/shaders/fxaa.comp"
+    }
+}
+
 mod composite_vert {
     vulkano_shaders::shader! {
         ty: "vertex",
@@ -262,6 +269,7 @@ pub struct Renderer {
     skybox_pipeline: Arc<GraphicsPipeline>,
     ao_pipeline: Arc<ComputePipeline>,
     blur_pipeline: Arc<ComputePipeline>,
+    fxaa_pipeline: Arc<ComputePipeline>,
     composite_pipeline: Arc<GraphicsPipeline>,
     composite_render_pass: Arc<RenderPass>,
     composite_framebuffers: Vec<Arc<Framebuffer>>,
@@ -274,6 +282,7 @@ pub struct Renderer {
     depth_buffer: Arc<ImageView>,
     ao_image: Arc<ImageView>,
     ao_blurred_image: Arc<ImageView>,
+    fxaa_image: Arc<ImageView>,
     ao_sampler: Arc<Sampler>,
     ao_repeat_sampler: Arc<Sampler>,
     ao_rotation_image: Arc<ImageView>,
@@ -290,6 +299,8 @@ pub struct Renderer {
     pub ao_blur_depth_threshold: f32,
     pub ao_composite_scale: f32,
     pub ao_composite_bias: f32,
+    pub fxaa_enabled: bool,
+    pub shadow_softness: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -1020,6 +1031,26 @@ impl Renderer {
             .unwrap()
         };
 
+        let fxaa_comp = fxaa_comp::load(device.clone()).unwrap();
+        let fxaa_pipeline = {
+            let cs = fxaa_comp.entry_point("main").unwrap();
+            let stage = PipelineShaderStageCreateInfo::new(cs);
+            let layout = PipelineLayout::new(
+                device.clone(),
+                PipelineDescriptorSetLayoutCreateInfo::from_stages([&stage])
+                    .into_pipeline_layout_create_info(device.clone())
+                    .unwrap(),
+            )
+            .unwrap();
+
+            ComputePipeline::new(
+                device.clone(),
+                None,
+                ComputePipelineCreateInfo::stage_layout(stage, layout),
+            )
+            .unwrap()
+        };
+
         let composite_render_pass = vulkano::single_pass_renderpass!(
             device.clone(),
             attachments: {
@@ -1161,6 +1192,7 @@ impl Renderer {
             depth_buffer,
             ao_image,
             ao_blurred_image,
+            fxaa_image,
         ) = Renderer::window_size_dependent_setup(
             memory_allocator.clone(),
             &images,
@@ -1360,6 +1392,7 @@ impl Renderer {
             skybox_pipeline,
             ao_pipeline,
             blur_pipeline,
+            fxaa_pipeline,
             composite_pipeline,
             composite_render_pass,
             composite_framebuffers,
@@ -1372,6 +1405,7 @@ impl Renderer {
             depth_buffer,
             ao_image,
             ao_blurred_image,
+            fxaa_image,
             ao_sampler,
             ao_repeat_sampler,
             ao_rotation_image,
@@ -1382,12 +1416,14 @@ impl Renderer {
             commands,
             image_index,
             acquire_future,
-            ao_radius: 0.05,
+            ao_radius: 0.03,
             ao_att_scale: 0.95,
             ao_dist_scale: 1.7,
             ao_blur_depth_threshold: 100.0,
             ao_composite_scale: 1.0,
             ao_composite_bias: 0.0,
+            fxaa_enabled: true,
+            shadow_softness: 2.0,
         }
     }
 
@@ -1458,6 +1494,7 @@ impl Renderer {
 
         self.dispatch_ao(&mut commands);
         self.dispatch_blur(&mut commands);
+        self.dispatch_fxaa(&mut commands);
         self.dispatch_composite(&mut commands);
 
         let command_buffer = commands.build().unwrap();
@@ -2000,8 +2037,6 @@ impl Renderer {
         self.commands
             .as_mut()
             .unwrap()
-            //.set_viewport(0, [self.viewport.clone()].into_iter().collect())
-            //.unwrap()
             .bind_pipeline_graphics(self.directional_pipeline.clone())
             .unwrap()
             .bind_vertex_buffers(0, self.dummy_verts.clone())
@@ -2011,6 +2046,14 @@ impl Renderer {
                 self.directional_pipeline.layout().clone(),
                 0,
                 directional_set.clone(),
+            )
+            .unwrap()
+            .push_constants(
+                self.directional_pipeline.layout().clone(),
+                0,
+                directional_frag::PushConstants {
+                    shadowRadius: self.shadow_softness,
+                },
             )
             .unwrap();
 
@@ -2344,6 +2387,7 @@ impl Renderer {
             new_depth_buffer,
             new_ao_image,
             new_ao_blurred_image,
+            new_fxaa_image,
         ) = Renderer::window_size_dependent_setup(
             self.memory_allocator.clone(),
             &new_images,
@@ -2364,6 +2408,7 @@ impl Renderer {
         self.depth_buffer = new_depth_buffer;
         self.ao_image = new_ao_image;
         self.ao_blurred_image = new_ao_blurred_image;
+        self.fxaa_image = new_fxaa_image;
 
         self.vp_buffer = Buffer::from_data(
             self.memory_allocator.clone(),
@@ -2410,6 +2455,7 @@ impl Renderer {
     ) -> (
         Vec<Arc<Framebuffer>>,
         Vec<Arc<Framebuffer>>,
+        Arc<ImageView>,
         Arc<ImageView>,
         Arc<ImageView>,
         Arc<ImageView>,
@@ -2568,6 +2614,26 @@ impl Renderer {
         )
         .unwrap();
 
+        // FXAA output image — same dimensions as scene, R8G8B8A8_UNORM supports STORAGE
+        let fxaa_image = ImageView::new_default(
+            Image::new(
+                allocator.clone(),
+                ImageCreateInfo {
+                    image_type: vulkano::image::ImageType::Dim2d,
+                    format: Format::R8G8B8A8_UNORM,
+                    extent: [dimensions[0], dimensions[1], 1],
+                    usage: ImageUsage::STORAGE | ImageUsage::SAMPLED,
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
         // Intermediate scene image — lighting writes here instead of swapchain
         let scene_image = ImageView::new_default(
             Image::new(
@@ -2636,6 +2702,7 @@ impl Renderer {
             depth_buffer.clone(),
             ao_image.clone(),
             ao_blurred_image.clone(),
+            fxaa_image.clone(),
         )
     }
 
@@ -3090,6 +3157,52 @@ impl Renderer {
         }
     }
 
+    fn dispatch_fxaa(&self, commands: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>) {
+        let dimensions = self.swapchain.image_extent();
+        let layout = self.fxaa_pipeline.layout().set_layouts().get(0).unwrap();
+        let fxaa_set = DescriptorSet::new(
+            self.descriptor_set_allocator.clone(),
+            layout.clone(),
+            [
+                WriteDescriptorSet::image_view_sampler(
+                    0,
+                    self.scene_image.clone(),
+                    self.ao_sampler.clone(),
+                ),
+                WriteDescriptorSet::image_view(1, self.fxaa_image.clone()),
+            ],
+            [],
+        )
+        .unwrap();
+
+        commands
+            .bind_pipeline_compute(self.fxaa_pipeline.clone())
+            .unwrap()
+            .bind_descriptor_sets(
+                PipelineBindPoint::Compute,
+                self.fxaa_pipeline.layout().clone(),
+                0,
+                fxaa_set,
+            )
+            .unwrap()
+            .push_constants(
+                self.fxaa_pipeline.layout().clone(),
+                0,
+                fxaa_comp::PushConstants {
+                    enabled: self.fxaa_enabled as u32,
+                    spanMax: 8.0,
+                    reduceMul: 0.125,
+                    reduceMin: 0.0078125,
+                },
+            )
+            .unwrap();
+        unsafe {
+            commands
+                .dispatch([(dimensions[0] + 15) / 16, (dimensions[1] + 15) / 16, 1])
+                .unwrap();
+        }
+    }
+
     fn dispatch_composite(
         &self,
         commands: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
@@ -3106,7 +3219,7 @@ impl Renderer {
             [
                 WriteDescriptorSet::image_view_sampler(
                     0,
-                    self.scene_image.clone(),
+                    self.fxaa_image.clone(),
                     self.ao_sampler.clone(),
                 ),
                 WriteDescriptorSet::image_view_sampler(

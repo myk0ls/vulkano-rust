@@ -1,0 +1,76 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D texIn;
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D texOut;
+
+layout(push_constant) uniform PushConstants {
+    uint  enabled;     // 0 = passthrough, 1 = FXAA active
+    float spanMax;     // max blur span in pixels (default 8.0)
+    float reduceMul;   // luma-based reduction multiplier (default 0.125 = 1/8)
+    float reduceMin;   // minimum reduction to avoid divide-by-zero (default 0.0078125 = 1/128)
+} pc;
+
+float luma(vec3 rgb) {
+    return dot(rgb, vec3(0.299, 0.587, 0.114));
+}
+
+void main() {
+    const vec2 size = vec2(textureSize(texIn, 0));
+    const ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    if (pos.x >= int(size.x) || pos.y >= int(size.y)) return;
+
+    const vec2 uv     = (vec2(pos) + 0.5) / size;
+    const vec2 texel  = 1.0 / size;
+
+    vec3 rgbM = textureLod(texIn, uv, 0.0).rgb;
+
+    if (pc.enabled == 0u) {
+        imageStore(texOut, pos, vec4(rgbM, 1.0));
+        return;
+    }
+
+    // Sample 4 diagonal neighbours
+    vec3 rgbNW = textureLod(texIn, uv + vec2(-1.0, -1.0) * texel, 0.0).rgb;
+    vec3 rgbNE = textureLod(texIn, uv + vec2( 1.0, -1.0) * texel, 0.0).rgb;
+    vec3 rgbSW = textureLod(texIn, uv + vec2(-1.0,  1.0) * texel, 0.0).rgb;
+    vec3 rgbSE = textureLod(texIn, uv + vec2( 1.0,  1.0) * texel, 0.0).rgb;
+
+    float lumaNW = luma(rgbNW);
+    float lumaNE = luma(rgbNE);
+    float lumaSW = luma(rgbSW);
+    float lumaSE = luma(rgbSE);
+    float lumaM  = luma(rgbM);
+
+    float lumaMin = min(lumaM, min(min(lumaNW, lumaNE), min(lumaSW, lumaSE)));
+    float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));
+
+    // Edge direction from luma gradient
+    vec2 dir;
+    dir.x = -((lumaNW + lumaNE) - (lumaSW + lumaSE));
+    dir.y =  ((lumaNW + lumaSW) - (lumaNE + lumaSE));
+
+    float dirReduce = max(
+        (lumaNW + lumaNE + lumaSW + lumaSE) * 0.25 * pc.reduceMul,
+        pc.reduceMin
+    );
+    float rcpDirMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
+    dir = clamp(dir * rcpDirMin, vec2(-pc.spanMax), vec2(pc.spanMax)) * texel;
+
+    // Two-pass blend: inner samples (1/3 span) and outer samples (full span)
+    vec3 rgbA = 0.5 * (
+        textureLod(texIn, uv + dir * (1.0/3.0 - 0.5), 0.0).rgb +
+        textureLod(texIn, uv + dir * (2.0/3.0 - 0.5), 0.0).rgb
+    );
+    vec3 rgbB = rgbA * 0.5 + 0.25 * (
+        textureLod(texIn, uv + dir * -0.5, 0.0).rgb +
+        textureLod(texIn, uv + dir *  0.5, 0.0).rgb
+    );
+
+    // Fall back to inner-only if outer samples push luma out of range
+    float lumaB = luma(rgbB);
+    vec3 result = (lumaB < lumaMin || lumaB > lumaMax) ? rgbA : rgbB;
+
+    imageStore(texOut, pos, vec4(result, 1.0));
+}
