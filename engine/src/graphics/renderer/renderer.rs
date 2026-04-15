@@ -16,8 +16,8 @@ use vulkano::{
     Handle, Version, VulkanLibrary, VulkanObject,
     buffer::BufferUsage,
     command_buffer::{
-        AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferToImageInfo,
-        PrimaryAutoCommandBuffer, RenderPassBeginInfo, SubpassContents,
+        AutoCommandBufferBuilder, BlitImageInfo, CommandBufferUsage, CopyBufferToImageInfo,
+        ImageBlit, PrimaryAutoCommandBuffer, RenderPassBeginInfo, SubpassContents,
         allocator::StandardCommandBufferAllocator,
     },
     descriptor_set::{
@@ -29,7 +29,9 @@ use vulkano::{
         physical::PhysicalDeviceType,
     },
     format::Format,
-    image::sampler::{Filter, Sampler, SamplerAddressMode, SamplerCreateInfo, SamplerMipmapMode},
+    image::sampler::{
+        Filter, LOD_CLAMP_NONE, Sampler, SamplerAddressMode, SamplerCreateInfo, SamplerMipmapMode,
+    },
     image::{
         ImageCreateFlags, ImageUsage,
         view::{ImageView, ImageViewCreateInfo},
@@ -1237,6 +1239,7 @@ impl Renderer {
                 mipmap_mode: SamplerMipmapMode::Linear,
                 address_mode: [SamplerAddressMode::Repeat; 3],
                 mip_lod_bias: 0.0,
+                lod: 0.0..=LOD_CLAMP_NONE,
                 anisotropy: Some(16.0),
                 ..Default::default()
             },
@@ -2801,20 +2804,51 @@ impl Renderer {
                 extent,
                 array_layers,
                 mip_levels: mip_levels,
-                usage: ImageUsage::TRANSFER_DST | ImageUsage::SAMPLED,
+                usage: ImageUsage::TRANSFER_DST | ImageUsage::TRANSFER_SRC | ImageUsage::SAMPLED,
                 ..Default::default()
             },
             AllocationCreateInfo::default(),
         )
         .unwrap();
 
-        // --- Copy buffer to image ---
+        // --- Copy buffer to mip level 0 ---
         upload_cmd_buf
             .copy_buffer_to_image(CopyBufferToImageInfo::buffer_image(
                 upload_buffer,
                 image.clone(),
             ))
             .unwrap();
+
+        // --- Generate mip chain via blit ---
+        for dst_mip in 1..mip_levels {
+            let src_mip = dst_mip - 1;
+            let src_w = (extent[0] >> src_mip).max(1);
+            let src_h = (extent[1] >> src_mip).max(1);
+            let dst_w = (extent[0] >> dst_mip).max(1);
+            let dst_h = (extent[1] >> dst_mip).max(1);
+
+            upload_cmd_buf
+                .blit_image(BlitImageInfo {
+                    filter: Filter::Linear,
+                    regions: smallvec::smallvec![ImageBlit {
+                        src_subresource: vulkano::image::ImageSubresourceLayers {
+                            aspects: vulkano::image::ImageAspects::COLOR,
+                            mip_level: src_mip,
+                            array_layers: 0..array_layers,
+                        },
+                        src_offsets: [[0, 0, 0], [src_w, src_h, 1]],
+                        dst_subresource: vulkano::image::ImageSubresourceLayers {
+                            aspects: vulkano::image::ImageAspects::COLOR,
+                            mip_level: dst_mip,
+                            array_layers: 0..array_layers,
+                        },
+                        dst_offsets: [[0, 0, 0], [dst_w, dst_h, 1]],
+                        ..Default::default()
+                    }],
+                    ..BlitImageInfo::images(image.clone(), image.clone())
+                })
+                .unwrap();
+        }
 
         let _upload_commands = upload_cmd_buf
             .build()

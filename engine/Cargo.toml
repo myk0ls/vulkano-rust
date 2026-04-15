@@ -8,6 +8,7 @@ bytemuck = { workspace = true }
 vulkano = { workspace = true }
 vulkano-shaders = { workspace = true }
 nalgebra-glm = { workspace = true }
+nalgebra = { workspace = true }
 rapier3d = { workspace = true }
 easy-gltf = { workspace = true }
 itertools = { workspace = true }
@@ -16,3 +17,4 @@ ash = { workspace = true }
 shipyard = { workspace = true }
 image = { workspace = true }
 gltf = "1.4.1"
+smallvec = "1.9"

@@ -285,16 +285,24 @@ pub fn physics_kinematic(world: &mut World) {
                     )
                 };
 
+                let jumping = kinematic_character.desired_movement.y > 0.0;
                 kinematic_character.grounded = simulated_movement.grounded;
-                if simulated_movement.grounded {
+                if simulated_movement.grounded && !jumping {
                     kinematic_character.vertical_velocity = 0.0;
                 }
                 kinematic_character.collisions = collisions;
 
                 // Mutable borrow: apply the result
                 if let Some(rigid_body) = physics.rigid_body_set.get_mut(body_handle) {
-                    rigid_body.set_linvel(simulated_movement.translation / dt, true);
-                    //rigid_body.set_translation(simulated_movement.translation / dt, true);
+                    let mut linvel = simulated_movement.translation / dt;
+                    // When grounded and not jumping, zero vertical velocity to prevent
+                    // micro-corrections against the floor offset being amplified into jitter.
+                    // When jumping, let the upward linvel through even if grounded is still
+                    // reported (snap_to_ground can keep grounded=true for the first frame).
+                    if simulated_movement.grounded && !jumping {
+                        linvel.y = 0.0;
+                    }
+                    rigid_body.set_linvel(linvel, true);
                 }
             }
         },

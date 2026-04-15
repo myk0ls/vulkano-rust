@@ -2,6 +2,10 @@
 // Licensed under the MIT license
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>
 
+pub mod animation;
+pub mod animator;
+pub mod context;
+pub mod skeleton;
 mod loader;
 use bytemuck::{Pod, Zeroable};
 pub use loader::LoaderGLTF;
