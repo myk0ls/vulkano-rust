@@ -197,6 +197,14 @@ impl<G: Game> Application<G> {
                                     (self.renderer.shadow_softness - 0.5).max(0.0);
                                 println!("Shadow softness: {:.1}", self.renderer.shadow_softness);
                             }
+                            Some(Keycode::F4) => {
+                                self.renderer.exposure = (self.renderer.exposure + 0.25);
+                                println!("Exposure: {:.2}", self.renderer.exposure);
+                            }
+                            Some(Keycode::F5) => {
+                                self.renderer.exposure = (self.renderer.exposure - 0.25);
+                                println!("Exposure: {:.2}", self.renderer.exposure);
+                            }
                             _ => {}
                         }
 

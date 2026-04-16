@@ -301,6 +301,7 @@ pub struct Renderer {
     pub ao_blur_depth_threshold: f32,
     pub ao_composite_scale: f32,
     pub ao_composite_bias: f32,
+    pub exposure: f32,
     pub fxaa_enabled: bool,
     pub shadow_softness: f32,
 }
@@ -971,9 +972,9 @@ impl Renderer {
                     rasterization_state: Some(RasterizationState {
                         cull_mode: CullMode::Front,
                         depth_bias: Some(DepthBiasState {
-                            constant_factor: 1.25, // fights shadow acne
+                            constant_factor: 0.0, // fights shadow acne
                             clamp: 0.0,
-                            slope_factor: 1.75,
+                            slope_factor: 0.0, //was 1.75
                         }),
                         ..Default::default()
                     }),
@@ -1425,6 +1426,7 @@ impl Renderer {
             ao_blur_depth_threshold: 100.0,
             ao_composite_scale: 1.0,
             ao_composite_bias: 0.0,
+            exposure: 1.0,
             fxaa_enabled: true,
             shadow_softness: 2.0,
         }
@@ -3295,6 +3297,7 @@ impl Renderer {
                 composite_frag::PushConstants {
                     scale: self.ao_composite_scale,
                     bias: self.ao_composite_bias,
+                    exposure: self.exposure,
                 },
             )
             .unwrap();
