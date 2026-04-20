@@ -14,6 +14,15 @@ use vulkano::memory::allocator::{
 /// Sentinel index meaning "no texture bound" for this slot.
 pub const NO_TEXTURE: u32 = u32::MAX;
 
+/// Per-draw axis-aligned bounding box in object space.
+/// Layout matches `struct AABB { float pt[6]; }` in frustum_culling.comp (std430).
+#[derive(Clone, Copy, BufferContents)]
+#[repr(C)]
+pub struct GpuAABB {
+    /// [min_x, min_y, min_z, max_x, max_y, max_z]
+    pub pt: [f32; 6],
+}
+
 /// Per-material data uploaded to the GPU.
 /// Layout must match the GLSL `Material` struct in deferred.frag (std430).
 #[derive(Clone, Copy, BufferContents)]
@@ -34,6 +43,8 @@ pub struct UnifiedGeometry {
     pub textures: Vec<Arc<ImageView>>,
     /// One entry per mesh draw, indexed by material_index in MeshDrawInfo.
     pub material_data: Vec<GpuMaterial>,
+    /// Object-space AABBs, one per mesh draw (same indexing as mesh_draws).
+    pub aabb_data: Vec<GpuAABB>,
 }
 
 pub struct MeshDrawInfo {
@@ -81,6 +92,7 @@ impl AssetManager {
                 mesh_draws: Vec::new(),
                 textures: Vec::new(),
                 material_data: Vec::new(),
+                aabb_data: Vec::new(),
             },
         }
     }
@@ -111,6 +123,7 @@ impl AssetManager {
         let mut mesh_draws: Vec<MeshDrawInfo> = Vec::new();
         let mut textures: Vec<Arc<ImageView>> = Vec::new();
         let mut material_data: Vec<GpuMaterial> = Vec::new();
+        let mut aabb_data: Vec<GpuAABB> = Vec::new();
 
         // Dedup raw GPU images by Arc pointer so the same image isn't uploaded twice.
         let mut texture_dedup: HashMap<usize, u32> = HashMap::new();
@@ -173,6 +186,22 @@ impl AssetManager {
                     index_offset: current_index_offset,
                     index_count,
                     material_index: mat_idx,
+                });
+
+                // Compute object-space AABB from vertex positions.
+                let mut aabb_min = [f32::MAX; 3];
+                let mut aabb_max = [f32::MIN; 3];
+                for v in &mesh.vertices {
+                    for k in 0..3 {
+                        aabb_min[k] = aabb_min[k].min(v.position[k]);
+                        aabb_max[k] = aabb_max[k].max(v.position[k]);
+                    }
+                }
+                aabb_data.push(GpuAABB {
+                    pt: [
+                        aabb_min[0], aabb_min[1], aabb_min[2],
+                        aabb_max[0], aabb_max[1], aabb_max[2],
+                    ],
                 });
 
                 all_vertices.extend_from_slice(&mesh.vertices);
@@ -242,6 +271,7 @@ impl AssetManager {
             mesh_draws,
             textures,
             material_data,
+            aabb_data,
         };
     }
 

@@ -227,6 +227,13 @@ mod composite_frag {
     }
 }
 
+mod cull_comp {
+    vulkano_shaders::shader! {
+        ty: "compute",
+        path: "src/graphics/renderer/shaders/frustum_culling.comp",
+    }
+}
+
 const SHADOW_MAP_SIZE: u32 = 4096;
 
 #[derive(Debug, Clone)]
@@ -272,6 +279,7 @@ pub struct Renderer {
     ao_pipeline: Arc<ComputePipeline>,
     blur_pipeline: Arc<ComputePipeline>,
     fxaa_pipeline: Arc<ComputePipeline>,
+    cull_pipeline: Arc<ComputePipeline>,
     composite_pipeline: Arc<GraphicsPipeline>,
     composite_render_pass: Arc<RenderPass>,
     composite_framebuffers: Vec<Arc<Framebuffer>>,
@@ -321,6 +329,13 @@ impl VP {
             camera_pos: vec3(0.0, 0.0, 0.0),
         }
     }
+}
+
+/// Pre-built, GPU-culled draw buffers produced by `Renderer::cull_pass`.
+/// Pass this to `shadow_pass` and `geometry` instead of the raw object list.
+pub struct CulledDrawBuffers {
+    pub indirect: Subbuffer<[DrawIndexedIndirectCommand]>,
+    pub draw_data: Subbuffer<[asset_manager::DrawData]>,
 }
 
 impl Renderer {
@@ -1054,6 +1069,25 @@ impl Renderer {
             .unwrap()
         };
 
+        let cull_comp = cull_comp::load(device.clone()).unwrap();
+        let cull_pipeline = {
+            let cs = cull_comp.entry_point("main").unwrap();
+            let stage = PipelineShaderStageCreateInfo::new(cs);
+            let layout = PipelineLayout::new(
+                device.clone(),
+                PipelineDescriptorSetLayoutCreateInfo::from_stages([&stage])
+                    .into_pipeline_layout_create_info(device.clone())
+                    .unwrap(),
+            )
+            .unwrap();
+            ComputePipeline::new(
+                device.clone(),
+                None,
+                ComputePipelineCreateInfo::stage_layout(stage, layout),
+            )
+            .unwrap()
+        };
+
         let composite_render_pass = vulkano::single_pass_renderpass!(
             device.clone(),
             attachments: {
@@ -1397,6 +1431,7 @@ impl Renderer {
             ao_pipeline,
             blur_pipeline,
             fxaa_pipeline,
+            cull_pipeline,
             composite_pipeline,
             composite_render_pass,
             composite_framebuffers,
@@ -1578,12 +1613,15 @@ impl Renderer {
         &mut self,
         light: &DirectionalLight,
         unified: &UnifiedGeometry,
-        objects: &[(usize, Transform)],
+        culled: Option<&CulledDrawBuffers>,
     ) {
-        if (objects.is_empty()) {
-            self.begin_main_render_pass();
-            return;
-        }
+        let culled = match culled {
+            None => {
+                self.begin_main_render_pass();
+                return;
+            }
+            Some(c) => c,
+        };
 
         let light_space_matrix = Renderer::compute_light_space_matrix(light.position);
 
@@ -1607,59 +1645,6 @@ impl Renderer {
 
         let vb = unified.vertex_buffer.as_ref().unwrap().clone();
         let ib = unified.index_buffer.as_ref().unwrap().clone();
-
-        let mut indirect_commands: Vec<DrawIndexedIndirectCommand> =
-            Vec::with_capacity(objects.len());
-        let mut draw_data_vec: Vec<asset_manager::DrawData> = Vec::with_capacity(objects.len());
-
-        for (draw_idx, transform) in objects {
-            let draw = &unified.mesh_draws[*draw_idx];
-
-            indirect_commands.push(DrawIndexedIndirectCommand {
-                index_count: draw.index_count,
-                instance_count: 1,
-                first_index: draw.index_offset,
-                vertex_offset: draw.vertex_offset as u32,
-                first_instance: 0,
-            });
-
-            draw_data_vec.push(asset_manager::DrawData {
-                model: transform.model_matrix().into(),
-                normals: transform.normal_matrix().into(),
-                material_index: draw.material_index,
-                _pad: [0; 3],
-            });
-        }
-
-        let indirect_buffer = Buffer::from_iter(
-            self.memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::INDIRECT_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            indirect_commands.into_iter(),
-        )
-        .unwrap();
-
-        let draw_data_buffer = Buffer::from_iter(
-            self.memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            draw_data_vec.into_iter(),
-        )
-        .unwrap();
 
         //create descriptor sets for shadow pipelines
         // set 0 light space matrix
@@ -1689,7 +1674,7 @@ impl Renderer {
         let draw_data_set = DescriptorSet::new(
             self.descriptor_set_allocator.clone(),
             draw_data_layout,
-            [WriteDescriptorSet::buffer(0, draw_data_buffer)],
+            [WriteDescriptorSet::buffer(0, culled.draw_data.clone())],
             [],
         )
         .unwrap();
@@ -1731,7 +1716,7 @@ impl Renderer {
             self.commands
                 .as_mut()
                 .unwrap()
-                .draw_indexed_indirect(indirect_buffer)
+                .draw_indexed_indirect(culled.indirect.clone())
                 .unwrap();
         }
 
@@ -1745,7 +1730,7 @@ impl Renderer {
         self.begin_main_render_pass();
     }
 
-    pub fn geometry(&mut self, unified: &UnifiedGeometry, objects: &[(usize, Transform)]) {
+    pub fn geometry(&mut self, unified: &UnifiedGeometry, culled: Option<&CulledDrawBuffers>) {
         match self.render_stage {
             RenderStage::Deferred => {}
             RenderStage::NeedsRedraw => {
@@ -1761,68 +1746,13 @@ impl Renderer {
             }
         }
 
-        if objects.is_empty() {
-            return;
-        }
+        let culled = match culled {
+            None => return,
+            Some(c) => c,
+        };
 
         let vb = unified.vertex_buffer.as_ref().unwrap().clone();
         let ib = unified.index_buffer.as_ref().unwrap().clone();
-
-        // Build the indirect command buffer and the per-draw data SSBO
-        let mut indirect_commands: Vec<DrawIndexedIndirectCommand> =
-            Vec::with_capacity(objects.len());
-        let mut draw_data_vec: Vec<asset_manager::DrawData> = Vec::with_capacity(objects.len());
-
-        for (draw_idx, transform) in objects {
-            let draw = &unified.mesh_draws[*draw_idx];
-
-            indirect_commands.push(DrawIndexedIndirectCommand {
-                index_count: draw.index_count,
-                instance_count: 1,
-                first_index: draw.index_offset,
-                vertex_offset: draw.vertex_offset as u32,
-                first_instance: 0,
-            });
-
-            draw_data_vec.push(asset_manager::DrawData {
-                model: transform.model_matrix().into(),
-                normals: transform.normal_matrix().into(),
-                material_index: draw.material_index,
-                _pad: [0; 3],
-            });
-        }
-
-        // Upload indirect command buffer
-        let indirect_buffer = Buffer::from_iter(
-            self.memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::INDIRECT_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            indirect_commands.into_iter(),
-        )
-        .unwrap();
-
-        // Upload per-draw data SSBO
-        let draw_data_buffer = Buffer::from_iter(
-            self.memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            draw_data_vec.into_iter(),
-        )
-        .unwrap();
 
         // Create descriptor set for draw data (set 2)
         let draw_data_layout = self
@@ -1836,7 +1766,7 @@ impl Renderer {
         let draw_data_set = DescriptorSet::new(
             self.descriptor_set_allocator.clone(),
             draw_data_layout,
-            [WriteDescriptorSet::buffer(0, draw_data_buffer)],
+            [WriteDescriptorSet::buffer(0, culled.draw_data.clone())],
             [],
         )
         .unwrap();
@@ -1863,7 +1793,9 @@ impl Renderer {
             .unwrap();
 
         unsafe {
-            builder.draw_indexed_indirect(indirect_buffer).unwrap();
+            builder
+                .draw_indexed_indirect(culled.indirect.clone())
+                .unwrap();
         }
     }
 
@@ -2872,12 +2804,8 @@ impl Renderer {
             // Saves 50% vs R8G8B8A8_UNORM.
             let raw = img.as_raw(); // [R,G,B, R,G,B, ...]
             let pixels: Vec<u8> = raw.chunks(3).flat_map(|c| [c[0], c[1]]).collect();
-            mesh.normal_texture = Some(self.upload_raw_to_gpu(
-                pixels,
-                img.width(),
-                img.height(),
-                Format::R8G8_UNORM,
-            ));
+            mesh.normal_texture =
+                Some(self.upload_raw_to_gpu(pixels, img.width(), img.height(), Format::R8G8_UNORM));
         }
 
         // --- Metallic-roughness map (R8G8_UNORM: R=metallic, G=roughness) ---
@@ -2892,22 +2820,28 @@ impl Renderer {
                 unreachable!()
             };
             let pixel_count = (width * height) as usize;
-            let m_raw = mesh.material.pbr.metallic_texture.as_ref()
+            let m_raw = mesh
+                .material
+                .pbr
+                .metallic_texture
+                .as_ref()
                 .map(|t| t.as_raw().clone())
                 .unwrap_or_else(|| vec![255u8; pixel_count]);
-            let r_raw = mesh.material.pbr.roughness_texture.as_ref()
+            let r_raw = mesh
+                .material
+                .pbr
+                .roughness_texture
+                .as_ref()
                 .map(|t| t.as_raw().clone())
                 .unwrap_or_else(|| vec![255u8; pixel_count]);
             // Pack into RG: 2 bytes/pixel instead of 4.
-            let pixels: Vec<u8> = m_raw.iter().zip(r_raw.iter())
+            let pixels: Vec<u8> = m_raw
+                .iter()
+                .zip(r_raw.iter())
                 .flat_map(|(&m, &r)| [m, r])
                 .collect();
-            mesh.mr_texture = Some(self.upload_raw_to_gpu(
-                pixels,
-                width,
-                height,
-                Format::R8G8_UNORM,
-            ));
+            mesh.mr_texture =
+                Some(self.upload_raw_to_gpu(pixels, width, height, Format::R8G8_UNORM));
         }
     }
 
@@ -2931,7 +2865,10 @@ impl Renderer {
 
         let staging = Buffer::from_iter(
             self.memory_allocator.clone(),
-            BufferCreateInfo { usage: BufferUsage::TRANSFER_SRC, ..Default::default() },
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
             AllocationCreateInfo {
                 memory_type_filter: MemoryTypeFilter::PREFER_HOST
                     | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
@@ -3170,6 +3107,183 @@ impl Renderer {
         .unwrap();
 
         self.bindless_material_set = Some(set);
+    }
+
+    /// Extract 6 normalised frustum planes (pointing inward) from a VP matrix.
+    /// Plane convention: dot(plane, vec4(world_pos, 1.0)) >= 0 means inside.
+    fn extract_frustum_planes(vp: &TMat4<f32>) -> [[f32; 4]; 6] {
+        let row = |i: usize| -> [f32; 4] { [vp[(i, 0)], vp[(i, 1)], vp[(i, 2)], vp[(i, 3)]] };
+        let add = |a: [f32; 4], b: [f32; 4]| -> [f32; 4] {
+            [a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]]
+        };
+        let sub = |a: [f32; 4], b: [f32; 4]| -> [f32; 4] {
+            [a[0] - b[0], a[1] - b[1], a[2] - b[2], a[3] - b[3]]
+        };
+        let norm = |p: [f32; 4]| -> [f32; 4] {
+            let len = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
+            if len > 1e-8 {
+                [p[0] / len, p[1] / len, p[2] / len, p[3] / len]
+            } else {
+                p
+            }
+        };
+
+        let r0 = row(0);
+        let r1 = row(1);
+        let r2 = row(2);
+        let r3 = row(3);
+
+        [
+            norm(add(r3, r0)), // left
+            norm(sub(r3, r0)), // right
+            norm(add(r3, r1)), // bottom
+            norm(sub(r3, r1)), // top
+            norm(r2),          // near  (Vulkan depth [0, 1])
+            norm(sub(r3, r2)), // far
+        ]
+    }
+
+    /// Build the indirect command + draw-data buffers, then run the GPU frustum-culling
+    /// compute pass that zeroes `instance_count` for draws whose AABB lies outside the
+    /// view frustum.  Returns `None` when `objects` is empty.
+    pub fn cull_pass(
+        &mut self,
+        unified: &UnifiedGeometry,
+        objects: &[(usize, Transform)],
+    ) -> Option<CulledDrawBuffers> {
+        if objects.is_empty() {
+            return None;
+        }
+
+        // ── build CPU-side arrays ──────────────────────────────────────────────
+        let mut indirect_commands: Vec<DrawIndexedIndirectCommand> =
+            Vec::with_capacity(objects.len());
+        let mut draw_data_vec: Vec<asset_manager::DrawData> = Vec::with_capacity(objects.len());
+        let mut aabb_vec: Vec<asset_manager::GpuAABB> = Vec::with_capacity(objects.len());
+
+        for (draw_idx, transform) in objects {
+            let draw = &unified.mesh_draws[*draw_idx];
+
+            indirect_commands.push(DrawIndexedIndirectCommand {
+                index_count: draw.index_count,
+                instance_count: 1,
+                first_index: draw.index_offset,
+                vertex_offset: draw.vertex_offset as u32,
+                first_instance: 0,
+            });
+
+            draw_data_vec.push(asset_manager::DrawData {
+                model: transform.model_matrix().into(),
+                normals: transform.normal_matrix().into(),
+                material_index: draw.material_index,
+                _pad: [0; 3],
+            });
+
+            aabb_vec.push(unified.aabb_data[*draw_idx]);
+        }
+
+        // ── upload to GPU buffers ──────────────────────────────────────────────
+        // indirect: needs STORAGE_BUFFER (compute writes) + INDIRECT_BUFFER (draw reads)
+        let indirect_buffer = Buffer::from_iter(
+            self.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::INDIRECT_BUFFER | BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            indirect_commands.into_iter(),
+        )
+        .unwrap();
+
+        let draw_data_buffer = Buffer::from_iter(
+            self.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            draw_data_vec.into_iter(),
+        )
+        .unwrap();
+
+        let aabb_buffer = Buffer::from_iter(
+            self.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            aabb_vec.into_iter(),
+        )
+        .unwrap();
+
+        // ── descriptor set ─────────────────────────────────────────────────────
+        let layout = self
+            .cull_pipeline
+            .layout()
+            .set_layouts()
+            .get(0)
+            .unwrap()
+            .clone();
+
+        let cull_set = DescriptorSet::new(
+            self.descriptor_set_allocator.clone(),
+            layout,
+            [
+                WriteDescriptorSet::buffer(0, indirect_buffer.clone()),
+                WriteDescriptorSet::buffer(1, draw_data_buffer.clone()),
+                WriteDescriptorSet::buffer(2, aabb_buffer),
+            ],
+            [],
+        )
+        .unwrap();
+
+        // ── frustum planes from current VP matrix ──────────────────────────────
+        let vp_matrix = self.vp.projection * self.vp.view;
+        let planes = Self::extract_frustum_planes(&vp_matrix);
+
+        let push_constants = cull_comp::PushConstants {
+            planes,
+            num_draws: objects.len() as u32,
+        };
+
+        // ── dispatch ──────────────────────────────────────────────────────────
+        let commands = self.commands.as_mut().unwrap();
+        commands
+            .bind_pipeline_compute(self.cull_pipeline.clone())
+            .unwrap()
+            .bind_descriptor_sets(
+                PipelineBindPoint::Compute,
+                self.cull_pipeline.layout().clone(),
+                0,
+                cull_set,
+            )
+            .unwrap()
+            .push_constants(self.cull_pipeline.layout().clone(), 0, push_constants)
+            .unwrap();
+
+        unsafe {
+            commands
+                .dispatch([(objects.len() as u32 + 63) / 64, 1, 1])
+                .unwrap();
+        }
+
+        Some(CulledDrawBuffers {
+            indirect: indirect_buffer,
+            draw_data: draw_data_buffer,
+        })
     }
 
     pub fn dispatch_ao(

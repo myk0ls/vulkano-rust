@@ -2,7 +2,7 @@ mod renderer;
 
 use nalgebra_glm::TVec3;
 use nalgebra_glm::vec3;
-pub use renderer::Renderer;
+pub use renderer::{CulledDrawBuffers, Renderer};
 
 #[derive(Default, Debug, Clone)]
 pub struct DirectionalLight {

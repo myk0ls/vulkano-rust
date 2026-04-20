@@ -16,7 +16,7 @@ use shipyard::{IntoIter, View, ViewMut, World};
 use vulkano::sync;
 use vulkano::sync::GpuFuture;
 
-use crate::graphics::renderer::Renderer;
+use crate::graphics::renderer::{CulledDrawBuffers, Renderer};
 
 const PHYSICS_DT: f32 = 1.0 / 60.0;
 
@@ -309,8 +309,9 @@ impl<G: Game> Application<G> {
             }
 
             self.renderer.start();
-            self.render_shadows(&directional_light);
-            self.render_objects3d();
+            let culled = self.build_culled_draw_list();
+            self.render_shadows(&directional_light, culled.as_ref());
+            self.render_objects3d(culled.as_ref());
             self.renderer.ambient();
             self.renderer.directional(&directional_light);
             //self.renderer.pointlight(&point_light);
@@ -358,9 +359,9 @@ impl<G: Game> Application<G> {
         });
     }
 
-    pub fn render_shadows(&mut self, directional_light: &DirectionalLight) {
+    fn build_culled_draw_list(&mut self) -> Option<CulledDrawBuffers> {
         let world = self.game.get_world();
-        let mut asset_manager = world.get_unique::<&mut AssetManager>().unwrap();
+        let asset_manager = world.get_unique::<&AssetManager>().unwrap();
         let unified = asset_manager.get_unified_geometry();
 
         let mut draw_list: Vec<(usize, Transform)> = Vec::new();
@@ -368,9 +369,6 @@ impl<G: Game> Application<G> {
         world.run(|objects: View<Object3D>, transforms: View<Transform>| {
             for (object, transform) in (&objects, &transforms).iter() {
                 if let Some(model) = asset_manager.get_model(&object.model) {
-                    // Find the mesh_draw indices that belong to this model.
-                    // You'll need to store (start_draw, draw_count) on the Model
-                    // or AssetHandle after build_unified_geometry.
                     for draw_idx in model.draw_range.clone() {
                         draw_list.push((draw_idx, transform.clone()));
                     }
@@ -378,31 +376,25 @@ impl<G: Game> Application<G> {
             }
         });
 
-        self.renderer
-            .shadow_pass(&directional_light, unified, &draw_list);
+        self.renderer.cull_pass(unified, &draw_list)
     }
 
-    pub fn render_objects3d(&mut self) {
+    pub fn render_shadows(
+        &mut self,
+        directional_light: &DirectionalLight,
+        culled: Option<&CulledDrawBuffers>,
+    ) {
         let world = self.game.get_world();
-        let mut asset_manager = world.get_unique::<&mut AssetManager>().unwrap();
+        let asset_manager = world.get_unique::<&AssetManager>().unwrap();
         let unified = asset_manager.get_unified_geometry();
+        self.renderer.shadow_pass(directional_light, unified, culled);
+    }
 
-        let mut draw_list: Vec<(usize, Transform)> = Vec::new();
-
-        world.run(|objects: View<Object3D>, transforms: View<Transform>| {
-            for (object, transform) in (&objects, &transforms).iter() {
-                if let Some(model) = asset_manager.get_model(&object.model) {
-                    // Find the mesh_draw indices that belong to this model.
-                    // You'll need to store (start_draw, draw_count) on the Model
-                    // or AssetHandle after build_unified_geometry.
-                    for draw_idx in model.draw_range.clone() {
-                        draw_list.push((draw_idx, transform.clone()));
-                    }
-                }
-            }
-        });
-
-        self.renderer.geometry(unified, &draw_list);
+    pub fn render_objects3d(&mut self, culled: Option<&CulledDrawBuffers>) {
+        let world = self.game.get_world();
+        let asset_manager = world.get_unique::<&AssetManager>().unwrap();
+        let unified = asset_manager.get_unified_geometry();
+        self.renderer.geometry(unified, culled);
     }
 
     pub fn upload_samplers_objects3d(&mut self) {
