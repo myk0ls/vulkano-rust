@@ -9,6 +9,10 @@ pub struct Mesh {
     pub indices: Vec<u32>,
     pub material: Arc<Material>,
     pub texture: Option<Arc<ImageView>>,
+    /// Normal map uploaded to GPU (R8G8B8A8_UNORM, linear)
+    pub normal_texture: Option<Arc<ImageView>>,
+    /// Combined metallic-roughness texture (R=metallic, G=roughness, R8G8B8A8_UNORM)
+    pub mr_texture: Option<Arc<ImageView>>,
 }
 
 impl Mesh {}

@@ -32,12 +32,12 @@ impl LoaderGLTF {
                     .vertices()
                     .into_iter()
                     .map(|vertex| Self::as_normal_vertex(vertex))
-                    //.filter(|v| unique_vertices.insert(v.clone()))
-                    //.unique()
                     .collect(),
                 indices: model.indices().unwrap().clone(),
                 material: model.material(),
                 texture: None,
+                normal_texture: None,
+                mr_texture: None,
             };
             ret.push(mesh_data);
         }
@@ -51,6 +51,7 @@ impl LoaderGLTF {
             normal: [vert.normal.x, vert.normal.y, vert.normal.z],
             color: [0.5, 0.5, 0.5],
             uv: [vert.tex_coords.x, vert.tex_coords.y],
+            tangent: [vert.tangent.x, vert.tangent.y, vert.tangent.z, vert.tangent.w],
         }
     }
 
@@ -61,48 +62,28 @@ impl LoaderGLTF {
                 Mode::Triangles | Mode::TriangleFan | Mode::TriangleStrip => {
                     let triangles = model.triangles().unwrap();
                     for triangle in triangles {
-                        ret.push(NormalVertex {
-                            position: [
-                                triangle[0].position.x,
-                                triangle[0].position.y,
-                                triangle[0].position.z,
-                            ],
-                            normal: [
-                                triangle[0].normal.x,
-                                triangle[0].normal.y,
-                                triangle[0].normal.z,
-                            ],
-                            color: self.color,
-                            uv: [triangle[0].tex_coords.x, triangle[0].tex_coords.y],
-                        });
-                        ret.push(NormalVertex {
-                            position: [
-                                triangle[1].position.x,
-                                triangle[1].position.y,
-                                triangle[1].position.z,
-                            ],
-                            normal: [
-                                triangle[1].normal.x,
-                                triangle[1].normal.y,
-                                triangle[1].normal.z,
-                            ],
-                            color: self.color,
-                            uv: [triangle[1].tex_coords.x, triangle[1].tex_coords.y],
-                        });
-                        ret.push(NormalVertex {
-                            position: [
-                                triangle[2].position.x,
-                                triangle[2].position.y,
-                                triangle[2].position.z,
-                            ],
-                            normal: [
-                                triangle[2].normal.x,
-                                triangle[2].normal.y,
-                                triangle[2].normal.z,
-                            ],
-                            color: self.color,
-                            uv: [triangle[2].tex_coords.x, triangle[2].tex_coords.y],
-                        });
+                        for i in 0..3 {
+                            ret.push(NormalVertex {
+                                position: [
+                                    triangle[i].position.x,
+                                    triangle[i].position.y,
+                                    triangle[i].position.z,
+                                ],
+                                normal: [
+                                    triangle[i].normal.x,
+                                    triangle[i].normal.y,
+                                    triangle[i].normal.z,
+                                ],
+                                color: self.color,
+                                uv: [triangle[i].tex_coords.x, triangle[i].tex_coords.y],
+                                tangent: [
+                                    triangle[i].tangent.x,
+                                    triangle[i].tangent.y,
+                                    triangle[i].tangent.z,
+                                    triangle[i].tangent.w,
+                                ],
+                            });
+                        }
                     }
                 }
                 Mode::Lines | Mode::LineLoop | Mode::LineStrip => {

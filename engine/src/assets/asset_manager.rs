@@ -11,25 +11,42 @@ use vulkano::memory::allocator::{
     StandardMemoryAllocator,
 };
 
+/// Sentinel index meaning "no texture bound" for this slot.
+pub const NO_TEXTURE: u32 = u32::MAX;
+
+/// Per-material data uploaded to the GPU.
+/// Layout must match the GLSL `Material` struct in deferred.frag (std430).
+#[derive(Clone, Copy, BufferContents)]
+#[repr(C)]
+pub struct GpuMaterial {
+    pub albedo_tex_idx: u32,
+    pub normal_tex_idx: u32,  // NO_TEXTURE if absent
+    pub mr_tex_idx: u32,      // NO_TEXTURE if absent; R=metallic, G=roughness
+    pub metallic_factor: f32,
+    pub roughness_factor: f32,
+}
+
 pub struct UnifiedGeometry {
     pub vertex_buffer: Option<Subbuffer<[NormalVertex]>>,
     pub index_buffer: Option<Subbuffer<[u32]>>,
     pub mesh_draws: Vec<MeshDrawInfo>,
+    /// Flat texture array: albedo, normal maps, and MR maps all in one bindless array.
     pub textures: Vec<Arc<ImageView>>,
-    pub specular_data: Vec<[f32; 2]>,
+    /// One entry per mesh draw, indexed by material_index in MeshDrawInfo.
+    pub material_data: Vec<GpuMaterial>,
 }
 
 pub struct MeshDrawInfo {
     pub index_offset: u32,
     pub index_count: u32,
-    pub vertex_offset: u32, // Note: i32 for draw_indexed_indirect's vertex_offset
+    pub vertex_offset: u32,
     pub vertex_count: u32,
-    pub material_index: u32, // Index into the texture array
+    pub material_index: u32, // Index into material_data (and indirectly into textures via GpuMaterial)
 }
 
 pub struct Model {
     pub meshes: Vec<Mesh>,
-    pub draw_range: std::ops::Range<usize>, // indices into UnifiedGeometry.mesh_draws
+    pub draw_range: std::ops::Range<usize>,
 }
 
 impl Model {}
@@ -40,7 +57,7 @@ pub struct DrawData {
     pub model: [[f32; 4]; 4],
     pub normals: [[f32; 4]; 4],
     pub material_index: u32,
-    pub _pad: [u32; 3], // pad to 16-byte alignment (std430)
+    pub _pad: [u32; 3],
 }
 
 #[derive(Clone)]
@@ -63,7 +80,7 @@ impl AssetManager {
                 index_buffer: None,
                 mesh_draws: Vec::new(),
                 textures: Vec::new(),
-                specular_data: Vec::new(),
+                material_data: Vec::new(),
             },
         }
     }
@@ -73,15 +90,11 @@ impl AssetManager {
             let loader = LoaderGLTF::new(filepath, [0.0, 0.0, 0.0]);
             let new_model = Model {
                 meshes: loader.get_meshes(),
-                draw_range: 0..0, // Will be set properly in build_unified_geometry
+                draw_range: 0..0,
             };
-
             self.models.insert(filepath.to_string(), new_model);
         }
-
-        AssetHandle {
-            id: filepath.to_string(),
-        }
+        AssetHandle { id: filepath.to_string() }
     }
 
     pub fn get_model(&self, handle: &AssetHandle) -> Option<&Model> {
@@ -97,14 +110,31 @@ impl AssetManager {
         let mut all_indices: Vec<u32> = Vec::new();
         let mut mesh_draws: Vec<MeshDrawInfo> = Vec::new();
         let mut textures: Vec<Arc<ImageView>> = Vec::new();
-        let mut specular_data: Vec<[f32; 2]> = Vec::new();
+        let mut material_data: Vec<GpuMaterial> = Vec::new();
 
-        let mut texture_dedup: HashMap<usize, u32> = HashMap::new(); // Map from texture pointer to unified texture index
+        // Dedup raw GPU images by Arc pointer so the same image isn't uploaded twice.
+        let mut texture_dedup: HashMap<usize, u32> = HashMap::new();
+
+        let mut push_tex = |textures: &mut Vec<Arc<ImageView>>,
+                            texture_dedup: &mut HashMap<usize, u32>,
+                            view: Option<&Arc<ImageView>>|
+         -> u32 {
+            match view {
+                None => NO_TEXTURE,
+                Some(iv) => {
+                    let key = Arc::as_ptr(iv) as usize;
+                    *texture_dedup.entry(key).or_insert_with(|| {
+                        let idx = textures.len() as u32;
+                        textures.push(iv.clone());
+                        idx
+                    })
+                }
+            }
+        };
 
         let mut current_vertex_offset: u32 = 0;
         let mut current_index_offset: u32 = 0;
 
-        // Iterate through all models and their meshes
         for (_model_name, model) in self.models.iter_mut() {
             let draw_start = mesh_draws.len();
 
@@ -112,51 +142,40 @@ impl AssetManager {
                 let vertex_count = mesh.vertices.len() as u32;
                 let index_count = mesh.indices.len() as u32;
 
-                // --- Resolve or insert texture, get material_index ---
-                let material_index = if let Some(gpu_texture) = mesh.texture.as_ref() {
-                    // Use the Arc's pointer address as a dedup key
-                    let ptr_key = Arc::as_ptr(gpu_texture) as usize;
-
-                    *texture_dedup.entry(ptr_key).or_insert_with(|| {
-                        let idx = textures.len() as u32;
-                        textures.push(gpu_texture.clone());
-
-                        // Derive specular values from the glTF material.
-                        // easy_gltf exposes roughness; convert to a Blinn-Phong-ish shininess.
-                        let roughness = mesh.material.pbr.roughness_factor;
-                        // Clamp roughness away from 0 to avoid infinite shininess
-                        let clamped = roughness.clamp(0.045, 1.0);
-                        let shininess = (2.0 / (clamped * clamped) - 2.0).clamp(1.0, 256.0);
-                        let intensity = 1.0 - roughness; // rougher → less specular
-
-                        specular_data.push([intensity, shininess]);
-
-                        idx
-                    })
+                // Resolve texture indices into the flat bindless array.
+                let albedo_idx = if let Some(tex) = mesh.texture.as_ref() {
+                    push_tex(&mut textures, &mut texture_dedup, Some(tex))
                 } else {
-                    // No texture uploaded — this shouldn't happen if upload ran first,
-                    // but fall back to index 0 (first texture) as a safety net.
                     eprintln!(
-                        "Warning: mesh has no GPU texture during build_unified_geometry. \
-                                        Was upload_mesh_to_gpu called first?"
+                        "Warning: mesh has no GPU albedo texture during build_unified_geometry. \
+                         Was upload_texture_to_gpu called first?"
                     );
                     0
                 };
+
+                let normal_idx = push_tex(&mut textures, &mut texture_dedup, mesh.normal_texture.as_ref());
+                let mr_idx = push_tex(&mut textures, &mut texture_dedup, mesh.mr_texture.as_ref());
+
+                let roughness = mesh.material.pbr.roughness_factor.clamp(0.045, 1.0);
+
+                let mat_idx = material_data.len() as u32;
+                material_data.push(GpuMaterial {
+                    albedo_tex_idx: albedo_idx,
+                    normal_tex_idx: normal_idx,
+                    mr_tex_idx: mr_idx,
+                    metallic_factor: mesh.material.pbr.metallic_factor,
+                    roughness_factor: roughness,
+                });
 
                 mesh_draws.push(MeshDrawInfo {
                     vertex_offset: current_vertex_offset,
                     vertex_count,
                     index_offset: current_index_offset,
                     index_count,
-                    material_index,
+                    material_index: mat_idx,
                 });
 
-                // Append vertices as-is
                 all_vertices.extend_from_slice(&mesh.vertices);
-
-                // Append indices as-is (NOT pre-offset).
-                // draw_indexed_indirect's vertex_offset field handles the base offset,
-                // so indices stay local to each mesh.
                 all_indices.extend_from_slice(&mesh.indices);
 
                 current_vertex_offset += vertex_count;
@@ -166,7 +185,6 @@ impl AssetManager {
             model.draw_range = draw_start..mesh_draws.len();
         }
 
-        // Create unified vertex buffer
         let vertex_buffer = if !all_vertices.is_empty() {
             Some(
                 Buffer::from_iter(
@@ -188,7 +206,6 @@ impl AssetManager {
             None
         };
 
-        // Create unified index buffer
         let index_buffer = if !all_indices.is_empty() {
             Some(
                 Buffer::from_iter(
@@ -211,11 +228,12 @@ impl AssetManager {
         };
 
         println!(
-            "Unified geometry built: {} vertices, {} indices, {} draws, {} unique textures",
+            "Unified geometry built: {} vertices, {} indices, {} draws, {} unique textures, {} materials",
             current_vertex_offset,
             current_index_offset,
             mesh_draws.len(),
             textures.len(),
+            material_data.len(),
         );
 
         self.unified_geometry = UnifiedGeometry {
@@ -223,7 +241,7 @@ impl AssetManager {
             index_buffer,
             mesh_draws,
             textures,
-            specular_data,
+            material_data,
         };
     }
 

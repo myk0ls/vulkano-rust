@@ -65,6 +65,11 @@ impl Game for MyGame {
             asset_manager.load_model("data/models/Bistro_Godot.glb")
         };
 
+        let metallic_suzanne = {
+            let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
+            asset_manager.load_model("data/models/metallic_suzanne.glb")
+        };
+
         let player_entity = self.world.add_entity((
             Player::new(),
             Camera::new(vec3(0.0, -5.0, 0.0)),
@@ -93,7 +98,8 @@ impl Game for MyGame {
         //main scene
         // let soldier_entity = &self.world.add_entity((
         //     Transform::with_pos(vec3(0.0, -60.0, 0.0)),
-        //     Object3D::with_model(soldier.clone()),
+        //     //Object3D::with_model(soldier.clone()),
+        //     Object3D::with_model(metallic_suzanne.clone()),
         //     RigidBodyComponent::new(RigidBodyType::Dynamic),
         //     ColliderComponent::new(SharedShape::ball(0.45)),
         // ));

@@ -94,6 +94,9 @@ pub struct NormalVertex {
     pub color: [f32; 3],
     #[format(R32G32_SFLOAT)]
     pub uv: [f32; 2],
+    /// Tangent vector (xyz) + handedness (w = +1 or -1) for TBN matrix construction
+    #[format(R32G32B32A32_SFLOAT)]
+    pub tangent: [f32; 4],
 }
 
 impl fmt::Display for DummyVertex {
