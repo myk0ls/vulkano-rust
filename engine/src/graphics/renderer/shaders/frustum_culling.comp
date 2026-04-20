@@ -1,0 +1,83 @@
+#version 450
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct AABB {
+    float pt[6];
+};
+
+struct DrawIndexedIndirectCommand {
+    uint index_count;
+    uint instance_count;
+    uint first_index;
+    int  vertex_offset;
+    uint first_instance;
+};
+
+struct DrawData {
+    mat4 model;
+    mat4 normals;
+    uint material_index;
+    uint pad0;
+    uint pad1;
+    uint pad2;
+};
+
+layout(std430, set = 0, binding = 0) buffer IndirectCommands {
+    DrawIndexedIndirectCommand dc[];
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer DrawDataBuffer {
+    DrawData draws[];
+};
+
+layout(std430, set = 0, binding = 2) readonly buffer AABBBuffer {
+    AABB boxes[];
+};
+
+layout(push_constant) uniform PushConstants {
+    vec4 planes[6];
+    uint num_draws;
+};
+
+#define min_x box.pt[0]
+#define min_y box.pt[1]
+#define min_z box.pt[2]
+#define max_x box.pt[3]
+#define max_y box.pt[4]
+#define max_z box.pt[5]
+
+bool isAABBinFrustum(AABB box, mat4 model) {
+    // Transform all 8 object-space corners to world space, then test against frustum planes.
+    // If all 8 corners are outside the same plane, the AABB is fully culled.
+    vec3 corners[8] = vec3[8](
+        vec3(min_x, min_y, min_z),
+        vec3(max_x, min_y, min_z),
+        vec3(min_x, max_y, min_z),
+        vec3(max_x, max_y, min_z),
+        vec3(min_x, min_y, max_z),
+        vec3(max_x, min_y, max_z),
+        vec3(min_x, max_y, max_z),
+        vec3(max_x, max_y, max_z)
+    );
+
+    for (int i = 0; i < 6; i++) {
+        int r = 0;
+        for (int j = 0; j < 8; j++) {
+            vec4 worldPos = model * vec4(corners[j], 1.0);
+            r += (dot(planes[i], worldPos) < 0.0) ? 1 : 0;
+        }
+        if (r == 8) return false;
+    }
+    return true;
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= num_draws) return;
+
+    AABB box = boxes[idx];
+    mat4 model = draws[idx].model;
+
+    dc[idx].instance_count = isAABBinFrustum(box, model) ? 1u : 0u;
+}
