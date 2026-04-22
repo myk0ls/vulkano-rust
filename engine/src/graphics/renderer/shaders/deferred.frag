@@ -64,7 +64,7 @@ void main() {
         metallic *= mr.r;
         roughness *= mr.g;
     }
-    roughness = max(roughness, 0.045); // avoid pure mirror singularity
+    roughness = max(roughness, 0.4); // floor for models with missing PBR data
 
     f_color = vec4(albedo.rgb, 1.0);
     f_normal = vec4(finalNormal, 1.0);

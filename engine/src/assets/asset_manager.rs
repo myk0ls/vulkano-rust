@@ -169,7 +169,7 @@ impl AssetManager {
                 let normal_idx = push_tex(&mut textures, &mut texture_dedup, mesh.normal_texture.as_ref());
                 let mr_idx = push_tex(&mut textures, &mut texture_dedup, mesh.mr_texture.as_ref());
 
-                let roughness = mesh.material.pbr.roughness_factor.clamp(0.045, 1.0);
+                let roughness = mesh.material.pbr.roughness_factor.clamp(0.4, 1.0);
 
                 let mat_idx = material_data.len() as u32;
                 material_data.push(GpuMaterial {

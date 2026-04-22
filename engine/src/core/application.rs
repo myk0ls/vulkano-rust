@@ -105,7 +105,7 @@ impl<G: Game> Application<G> {
         let prefiltered = self.renderer.bake_prefiltered_env(&skybox);
         let brdf_lut    = self.renderer.bake_brdf_lut();
 
-        self.renderer.set_ambient([1.0, 1.0, 1.0], 1.0);
+        self.renderer.set_ambient([1.0, 1.0, 1.0], 0.3);
 
         crate::physics::physics_engine::physics_bodies_creation_system(self.game.get_world_mut());
 
