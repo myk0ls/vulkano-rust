@@ -89,7 +89,7 @@ use crate::{
         mesh::Mesh,
         model::Model,
         renderer::DirectionalLight,
-        skybox::{Skybox, SkyboxImages},
+        skybox::{HdrSkyboxImages, Skybox, SkyboxImages},
     },
     scene::components::transform::{self, Transform},
 };
@@ -234,6 +234,27 @@ mod cull_comp {
     }
 }
 
+mod irradiance_comp {
+    vulkano_shaders::shader! {
+        ty: "compute",
+        path: "src/graphics/renderer/shaders/irradiance.comp",
+    }
+}
+
+mod prefilter_comp {
+    vulkano_shaders::shader! {
+        ty: "compute",
+        path: "src/graphics/renderer/shaders/prefilter.comp",
+    }
+}
+
+mod brdf_lut_comp {
+    vulkano_shaders::shader! {
+        ty: "compute",
+        path: "src/graphics/renderer/shaders/brdf_lut.comp",
+    }
+}
+
 const SHADOW_MAP_SIZE: u32 = 4096;
 
 #[derive(Debug, Clone)]
@@ -265,6 +286,7 @@ pub struct Renderer {
     frag_location_buffer: Arc<ImageView>,
     specular_buffer: Arc<ImageView>,
     sampler: Arc<Sampler>,
+    clamp_sampler: Arc<Sampler>,
     shadow_sampler: Arc<Sampler>,
     shadow_map_view: Arc<ImageView>,
     render_pass: Arc<RenderPass>,
@@ -540,7 +562,7 @@ impl Renderer {
         let render_pass = vulkano::ordered_passes_renderpass!(device.clone(),
             attachments: {
                 final_color: {
-                    format: swapchain.image_format(),
+                    format: Format::R16G16B16A16_SFLOAT,
                     samples: 1,
                     load_op: Clear,
                     store_op: Store,
@@ -599,6 +621,25 @@ impl Renderer {
 
         let deferred_pass = Subpass::from(render_pass.clone(), 0).unwrap();
         let lighting_pass = Subpass::from(render_pass.clone(), 1).unwrap();
+
+        let composite_render_pass = vulkano::single_pass_renderpass!(
+            device.clone(),
+            attachments: {
+                color: {
+                    format: swapchain.image_format(),
+                    samples: 1,
+                    load_op: DontCare,
+                    store_op: Store,
+                },
+            },
+            pass: {
+                color: [color],
+                depth_stencil: {},
+            }
+        )
+        .unwrap();
+
+        let composite_pass = Subpass::from(composite_render_pass.clone(), 0).unwrap();
 
         let deferred_pipeline = {
             let vs = deferred_vert.entry_point("main").unwrap();
@@ -1088,25 +1129,6 @@ impl Renderer {
             .unwrap()
         };
 
-        let composite_render_pass = vulkano::single_pass_renderpass!(
-            device.clone(),
-            attachments: {
-                color: {
-                    format: swapchain.image_format(),
-                    samples: 1,
-                    load_op: DontCare,
-                    store_op: Store,
-                },
-            },
-            pass: {
-                color: [color],
-                depth_stencil: {},
-            }
-        )
-        .unwrap();
-
-        let composite_pass = Subpass::from(composite_render_pass.clone(), 0).unwrap();
-
         let composite_pipeline = {
             let vs = composite_vert.entry_point("main").unwrap();
             let fs = composite_frag.entry_point("main").unwrap();
@@ -1281,6 +1303,19 @@ impl Renderer {
         )
         .unwrap();
 
+        let clamp_sampler = Sampler::new(
+            device.clone(),
+            SamplerCreateInfo {
+                mag_filter: Filter::Linear,
+                min_filter: Filter::Linear,
+                mipmap_mode: SamplerMipmapMode::Linear,
+                address_mode: [SamplerAddressMode::ClampToEdge; 3],
+                lod: 0.0..=LOD_CLAMP_NONE,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
         let shadow_sampler = Sampler::new(
             device.clone(),
             SamplerCreateInfo {
@@ -1417,6 +1452,7 @@ impl Renderer {
             frag_location_buffer,
             specular_buffer,
             sampler,
+            clamp_sampler,
             shadow_sampler,
             shadow_map_view,
             render_pass,
@@ -1819,7 +1855,12 @@ impl Renderer {
         .unwrap();
     }
 
-    pub fn ambient(&mut self) {
+    pub fn ambient(
+        &mut self,
+        irradiance: &Skybox,
+        prefiltered: &Skybox,
+        brdf_lut: &Arc<ImageView>,
+    ) {
         match self.render_stage {
             RenderStage::Deferred => {
                 self.render_stage = RenderStage::Ambient;
@@ -1846,7 +1887,44 @@ impl Renderer {
             ambient_layout.clone(),
             [
                 WriteDescriptorSet::image_view(0, self.color_buffer.clone()),
-                WriteDescriptorSet::buffer(1, self.ambient_buffer.clone()),
+                WriteDescriptorSet::image_view(1, self.normal_buffer.clone()),
+                WriteDescriptorSet::image_view(2, self.frag_location_buffer.clone()),
+                WriteDescriptorSet::image_view(3, self.specular_buffer.clone()),
+                WriteDescriptorSet::buffer(4, self.ambient_buffer.clone()),
+                WriteDescriptorSet::buffer(
+                    5,
+                    Buffer::from_data(
+                        self.memory_allocator.clone(),
+                        BufferCreateInfo {
+                            usage: BufferUsage::UNIFORM_BUFFER,
+                            ..Default::default()
+                        },
+                        AllocationCreateInfo {
+                            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                            ..Default::default()
+                        },
+                        ambient_frag::Camera_Data {
+                            position: self.vp.camera_pos.into(),
+                        },
+                    )
+                    .unwrap(),
+                ),
+                WriteDescriptorSet::image_view_sampler(
+                    6,
+                    irradiance.cubemap.clone(),
+                    self.sampler.clone(),
+                ),
+                WriteDescriptorSet::image_view_sampler(
+                    7,
+                    prefiltered.cubemap.clone(),
+                    self.sampler.clone(),
+                ),
+                WriteDescriptorSet::image_view_sampler(
+                    8,
+                    brdf_lut.clone(),
+                    self.clamp_sampler.clone(),
+                ),
             ],
             [],
         )
@@ -2577,7 +2655,7 @@ impl Renderer {
                 allocator.clone(),
                 ImageCreateInfo {
                     image_type: vulkano::image::ImageType::Dim2d,
-                    format: swapchain_format,
+                    format: Format::R16G16B16A16_SFLOAT,
                     extent: [dimensions[0], dimensions[1], 1],
                     usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::SAMPLED,
                     ..Default::default()
@@ -2809,16 +2887,18 @@ impl Renderer {
         }
 
         // --- Metallic-roughness map (R8G8_UNORM: R=metallic, G=roughness) ---
+        // easy_gltf already extracts individual channels as GrayImage (1 byte/pixel)
         let has_metallic = mesh.material.pbr.metallic_texture.is_some();
         let has_roughness = mesh.material.pbr.roughness_texture.is_some();
         if has_metallic || has_roughness {
-            let (width, height) = if let Some(t) = &mesh.material.pbr.metallic_texture {
-                (t.width(), t.height())
-            } else if let Some(t) = &mesh.material.pbr.roughness_texture {
-                (t.width(), t.height())
-            } else {
-                unreachable!()
-            };
+            let (width, height) = mesh
+                .material
+                .pbr
+                .metallic_texture
+                .as_ref()
+                .or(mesh.material.pbr.roughness_texture.as_ref())
+                .map(|t| (t.width(), t.height()))
+                .unwrap();
             let pixel_count = (width * height) as usize;
             let m_raw = mesh
                 .material
@@ -2826,7 +2906,7 @@ impl Renderer {
                 .metallic_texture
                 .as_ref()
                 .map(|t| t.as_raw().clone())
-                .unwrap_or_else(|| vec![255u8; pixel_count]);
+                .unwrap_or_else(|| vec![0u8; pixel_count]);
             let r_raw = mesh
                 .material
                 .pbr
@@ -2834,7 +2914,6 @@ impl Renderer {
                 .as_ref()
                 .map(|t| t.as_raw().clone())
                 .unwrap_or_else(|| vec![255u8; pixel_count]);
-            // Pack into RG: 2 bytes/pixel instead of 4.
             let pixels: Vec<u8> = m_raw
                 .iter()
                 .zip(r_raw.iter())
@@ -3038,6 +3117,395 @@ impl Renderer {
         Skybox {
             cubemap: cubemap_view,
         }
+    }
+
+    /// Upload an HDR equirectangular-derived cubemap as R32G32B32A32_SFLOAT.
+    pub fn upload_hdr_skybox(&self, hdr: HdrSkyboxImages) -> Skybox {
+        let face_size = hdr.face_size;
+
+        let all_bytes: Vec<u8> = hdr
+            .faces
+            .into_iter()
+            .flat_map(|face| face.into_iter().flat_map(|f| f.to_le_bytes()))
+            .collect();
+
+        let mut cmd = AutoCommandBufferBuilder::primary(
+            self.command_buffer_allocator.clone(),
+            self.queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )
+        .unwrap();
+
+        let staging = Buffer::from_iter(
+            self.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            all_bytes.into_iter(),
+        )
+        .unwrap();
+
+        let cube = Image::new(
+            self.memory_allocator.clone(),
+            ImageCreateInfo {
+                image_type: vulkano::image::ImageType::Dim2d,
+                format: Format::R32G32B32A32_SFLOAT,
+                extent: [face_size, face_size, 1],
+                array_layers: 6,
+                usage: ImageUsage::TRANSFER_DST | ImageUsage::SAMPLED,
+                flags: ImageCreateFlags::CUBE_COMPATIBLE,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        cmd.copy_buffer_to_image(CopyBufferToImageInfo::buffer_image(staging, cube.clone()))
+            .unwrap();
+
+        let cubemap_view = ImageView::new(
+            cube.clone(),
+            ImageViewCreateInfo {
+                view_type: ImageViewType::Cube,
+                ..ImageViewCreateInfo::from_image(&cube)
+            },
+        )
+        .unwrap();
+
+        cmd.build()
+            .unwrap()
+            .execute(self.queue.clone())
+            .unwrap()
+            .then_signal_fence_and_flush()
+            .unwrap()
+            .wait(None)
+            .unwrap();
+
+        Skybox {
+            cubemap: cubemap_view,
+        }
+    }
+
+    /// Convolve an HDR environment cubemap into a diffuse irradiance cubemap.
+    /// Returns a 32×32 cubemap suitable for sampling with a surface normal in the lighting pass.
+    pub fn bake_irradiance_map(&self, env: &Skybox) -> Skybox {
+        const IRR_SIZE: u32 = 32;
+
+        // Build the compute pipeline on the fly (one-time bake).
+        let cs = irradiance_comp::load(self.device.clone()).unwrap();
+        let stage = PipelineShaderStageCreateInfo::new(cs.entry_point("main").unwrap());
+        let layout = PipelineLayout::new(
+            self.device.clone(),
+            PipelineDescriptorSetLayoutCreateInfo::from_stages([&stage])
+                .into_pipeline_layout_create_info(self.device.clone())
+                .unwrap(),
+        )
+        .unwrap();
+        let pipeline = ComputePipeline::new(
+            self.device.clone(),
+            None,
+            ComputePipelineCreateInfo::stage_layout(stage, layout),
+        )
+        .unwrap();
+
+        // Output image: 32×32 × 6 layers, R32G32B32A32_SFLOAT, storage + sampled.
+        let irr_image = Image::new(
+            self.memory_allocator.clone(),
+            ImageCreateInfo {
+                image_type: vulkano::image::ImageType::Dim2d,
+                format: Format::R32G32B32A32_SFLOAT,
+                extent: [IRR_SIZE, IRR_SIZE, 1],
+                array_layers: 6,
+                usage: ImageUsage::STORAGE | ImageUsage::SAMPLED,
+                flags: ImageCreateFlags::CUBE_COMPATIBLE,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // Array view for compute writes; cube view for lighting sampling.
+        let array_view = ImageView::new(
+            irr_image.clone(),
+            ImageViewCreateInfo {
+                view_type: ImageViewType::Dim2dArray,
+                ..ImageViewCreateInfo::from_image(&irr_image)
+            },
+        )
+        .unwrap();
+        let cube_view = ImageView::new(
+            irr_image.clone(),
+            ImageViewCreateInfo {
+                view_type: ImageViewType::Cube,
+                ..ImageViewCreateInfo::from_image(&irr_image)
+            },
+        )
+        .unwrap();
+
+        let set_layout = pipeline.layout().set_layouts().get(0).unwrap();
+        let desc_set = DescriptorSet::new(
+            self.descriptor_set_allocator.clone(),
+            set_layout.clone(),
+            [
+                WriteDescriptorSet::image_view_sampler(
+                    0,
+                    env.cubemap.clone(),
+                    self.sampler.clone(),
+                ),
+                WriteDescriptorSet::image_view(1, array_view),
+            ],
+            [],
+        )
+        .unwrap();
+
+        let mut cmd = AutoCommandBufferBuilder::primary(
+            self.command_buffer_allocator.clone(),
+            self.queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )
+        .unwrap();
+
+        cmd.bind_pipeline_compute(pipeline.clone())
+            .unwrap()
+            .bind_descriptor_sets(
+                PipelineBindPoint::Compute,
+                pipeline.layout().clone(),
+                0,
+                desc_set,
+            )
+            .unwrap();
+
+        unsafe {
+            // Each workgroup covers 8×8 pixels; z dimension = 6 faces.
+            cmd.dispatch([IRR_SIZE / 8, IRR_SIZE / 8, 6]).unwrap();
+        }
+
+        cmd.build()
+            .unwrap()
+            .execute(self.queue.clone())
+            .unwrap()
+            .then_signal_fence_and_flush()
+            .unwrap()
+            .wait(None)
+            .unwrap();
+
+        Skybox { cubemap: cube_view }
+    }
+
+    /// Prefilter the environment cubemap at 5 roughness levels into mip levels.
+    /// Returns a 128×128 cubemap with LODs 0–4 (roughness 0.0–1.0).
+    pub fn bake_prefiltered_env(&self, env: &Skybox) -> Skybox {
+        const BASE_SIZE: u32 = 128;
+        const NUM_MIPS: u32 = 5;
+
+        let cs = prefilter_comp::load(self.device.clone()).unwrap();
+        let stage = PipelineShaderStageCreateInfo::new(cs.entry_point("main").unwrap());
+        let layout = PipelineLayout::new(
+            self.device.clone(),
+            PipelineDescriptorSetLayoutCreateInfo::from_stages([&stage])
+                .into_pipeline_layout_create_info(self.device.clone())
+                .unwrap(),
+        )
+        .unwrap();
+        let pipeline = ComputePipeline::new(
+            self.device.clone(),
+            None,
+            ComputePipelineCreateInfo::stage_layout(stage, layout),
+        )
+        .unwrap();
+
+        let image = Image::new(
+            self.memory_allocator.clone(),
+            ImageCreateInfo {
+                image_type: vulkano::image::ImageType::Dim2d,
+                format: Format::R32G32B32A32_SFLOAT,
+                extent: [BASE_SIZE, BASE_SIZE, 1],
+                mip_levels: NUM_MIPS,
+                array_layers: 6,
+                usage: ImageUsage::STORAGE | ImageUsage::SAMPLED,
+                flags: ImageCreateFlags::CUBE_COMPATIBLE,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let mut cmd = AutoCommandBufferBuilder::primary(
+            self.command_buffer_allocator.clone(),
+            self.queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )
+        .unwrap();
+
+        let set_layout = pipeline.layout().set_layouts().get(0).unwrap();
+
+        for mip in 0..NUM_MIPS {
+            let mip_size = (BASE_SIZE >> mip).max(1);
+            let roughness = mip as f32 / (NUM_MIPS - 1) as f32;
+
+            let mip_view = ImageView::new(
+                image.clone(),
+                ImageViewCreateInfo {
+                    view_type: ImageViewType::Dim2dArray,
+                    subresource_range: vulkano::image::ImageSubresourceRange {
+                        aspects: vulkano::image::ImageAspects::COLOR,
+                        mip_levels: mip..mip + 1,
+                        array_layers: 0..6,
+                    },
+                    ..ImageViewCreateInfo::from_image(&image)
+                },
+            )
+            .unwrap();
+
+            let desc_set = DescriptorSet::new(
+                self.descriptor_set_allocator.clone(),
+                set_layout.clone(),
+                [
+                    WriteDescriptorSet::image_view_sampler(
+                        0,
+                        env.cubemap.clone(),
+                        self.sampler.clone(),
+                    ),
+                    WriteDescriptorSet::image_view(1, mip_view),
+                ],
+                [],
+            )
+            .unwrap();
+
+            let groups = ((mip_size + 7) / 8).max(1);
+            cmd.bind_pipeline_compute(pipeline.clone())
+                .unwrap()
+                .bind_descriptor_sets(
+                    PipelineBindPoint::Compute,
+                    pipeline.layout().clone(),
+                    0,
+                    desc_set,
+                )
+                .unwrap()
+                .push_constants(
+                    pipeline.layout().clone(),
+                    0,
+                    prefilter_comp::PushConstants { roughness },
+                )
+                .unwrap();
+            unsafe {
+                cmd.dispatch([groups, groups, 6]).unwrap();
+            }
+        }
+
+        cmd.build()
+            .unwrap()
+            .execute(self.queue.clone())
+            .unwrap()
+            .then_signal_fence_and_flush()
+            .unwrap()
+            .wait(None)
+            .unwrap();
+
+        let cube_view = ImageView::new(
+            image.clone(),
+            ImageViewCreateInfo {
+                view_type: ImageViewType::Cube,
+                ..ImageViewCreateInfo::from_image(&image)
+            },
+        )
+        .unwrap();
+
+        Skybox { cubemap: cube_view }
+    }
+
+    /// Precompute the split-sum BRDF LUT (512×512, RG = scale/bias).
+    pub fn bake_brdf_lut(&self) -> Arc<ImageView> {
+        const LUT_SIZE: u32 = 512;
+
+        let cs = brdf_lut_comp::load(self.device.clone()).unwrap();
+        let stage = PipelineShaderStageCreateInfo::new(cs.entry_point("main").unwrap());
+        let layout = PipelineLayout::new(
+            self.device.clone(),
+            PipelineDescriptorSetLayoutCreateInfo::from_stages([&stage])
+                .into_pipeline_layout_create_info(self.device.clone())
+                .unwrap(),
+        )
+        .unwrap();
+        let pipeline = ComputePipeline::new(
+            self.device.clone(),
+            None,
+            ComputePipelineCreateInfo::stage_layout(stage, layout),
+        )
+        .unwrap();
+
+        let lut_image = Image::new(
+            self.memory_allocator.clone(),
+            ImageCreateInfo {
+                image_type: vulkano::image::ImageType::Dim2d,
+                format: Format::R32G32B32A32_SFLOAT,
+                extent: [LUT_SIZE, LUT_SIZE, 1],
+                usage: ImageUsage::STORAGE | ImageUsage::SAMPLED,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let lut_view = ImageView::new_default(lut_image.clone()).unwrap();
+
+        let set_layout = pipeline.layout().set_layouts().get(0).unwrap();
+        let desc_set = DescriptorSet::new(
+            self.descriptor_set_allocator.clone(),
+            set_layout.clone(),
+            [WriteDescriptorSet::image_view(0, lut_view.clone())],
+            [],
+        )
+        .unwrap();
+
+        let mut cmd = AutoCommandBufferBuilder::primary(
+            self.command_buffer_allocator.clone(),
+            self.queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )
+        .unwrap();
+
+        cmd.bind_pipeline_compute(pipeline.clone())
+            .unwrap()
+            .bind_descriptor_sets(
+                PipelineBindPoint::Compute,
+                pipeline.layout().clone(),
+                0,
+                desc_set,
+            )
+            .unwrap();
+        unsafe {
+            cmd.dispatch([LUT_SIZE / 8, LUT_SIZE / 8, 1]).unwrap();
+        }
+
+        cmd.build()
+            .unwrap()
+            .execute(self.queue.clone())
+            .unwrap()
+            .then_signal_fence_and_flush()
+            .unwrap()
+            .wait(None)
+            .unwrap();
+
+        lut_view
     }
 
     pub fn compute_light_space_matrix(light_dir: [f32; 4]) -> TMat4<f32> {

@@ -12,8 +12,8 @@ layout(location = 6) in float in_tangent_w;
 // Must match GpuMaterial in asset_manager.rs (std430, 5x 4-byte fields = 20 bytes each)
 struct Material {
     uint albedo_tex;
-    uint normal_tex;    // NO_TEXTURE = 0xFFFFFFFF
-    uint mr_tex;        // NO_TEXTURE = 0xFFFFFFFF; R=metallic, G=roughness
+    uint normal_tex; // NO_TEXTURE = 0xFFFFFFFF
+    uint mr_tex; // NO_TEXTURE = 0xFFFFFFFF; R=metallic, G=roughness
     float metallic_factor;
     float roughness_factor;
 };
@@ -50,24 +50,24 @@ void main() {
         vec2 rg = texture(textures[nonuniformEXT(mat.normal_tex)], in_tex_coords).rg;
         vec3 n;
         n.xy = rg * 2.0 - 1.0;
-        n.z  = sqrt(max(1.0 - dot(n.xy, n.xy), 0.0));
+        n.z = sqrt(max(1.0 - dot(n.xy, n.xy), 0.0));
         finalNormal = normalize(TBN * n);
     } else {
         finalNormal = N;
     }
 
     // Resolve metallic/roughness
-    float metallic  = mat.metallic_factor;
+    float metallic = mat.metallic_factor;
     float roughness = mat.roughness_factor;
     if (mat.mr_tex != 0xFFFFFFFFu) {
         vec2 mr = texture(textures[nonuniformEXT(mat.mr_tex)], in_tex_coords).rg;
-        metallic  *= mr.r;
+        metallic *= mr.r;
         roughness *= mr.g;
     }
     roughness = max(roughness, 0.045); // avoid pure mirror singularity
 
-    f_color    = vec4(albedo.rgb, 1.0);
-    f_normal   = vec4(finalNormal, 1.0);
+    f_color = vec4(albedo.rgb, 1.0);
+    f_normal = vec4(finalNormal, 1.0);
     f_location = in_location;
-    f_pbr      = vec2(metallic, roughness);
+    f_pbr = vec2(metallic, roughness);
 }

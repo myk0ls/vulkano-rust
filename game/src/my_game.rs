@@ -70,6 +70,11 @@ impl Game for MyGame {
             asset_manager.load_model("data/models/metallic_suzanne.glb")
         };
 
+        let uten = {
+            let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
+            asset_manager.load_model("data/models/utensils.gltf")
+        };
+
         let player_entity = self.world.add_entity((
             Player::new(),
             Camera::new(vec3(0.0, -5.0, 0.0)),
@@ -108,6 +113,16 @@ impl Game for MyGame {
             Transform::with_pos(vec3(0.0, 0.0, 0.0)),
             Object3D::with_model(sponza.clone()),
         ));
+
+        let utensils = &self.world.add_entity((
+            Transform::with_pos(vec3(0.0, -1.25, 0.0)),
+            Object3D::with_model(uten.clone()),
+        ));
+
+        // let de_dust_scene = &self.world.add_entity((
+        //     Transform::with_pos(vec3(0.0, 0.0, 0.0)),
+        //     Object3D::with_model(de_dust2.clone()),
+        // ));
 
         // let bistro_scene = &self.world.add_entity((
         //     Transform::with_pos(vec3(0.0, 0.0, 0.0)),

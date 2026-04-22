@@ -1,6 +1,6 @@
 use crate::assets::asset_manager::AssetManager;
 use crate::graphics::renderer::{DirectionalLight, PointLight};
-use crate::graphics::skybox::SkyboxImages;
+use crate::graphics::skybox::{HdrSkyboxImages, SkyboxImages};
 use crate::input::input_manager::InputManager;
 use crate::physics::physics_engine::PhysicsEngine;
 use crate::scene::components::camera::Camera;
@@ -87,18 +87,25 @@ impl<G: Game> Application<G> {
 
         self.build_unified_geometry();
 
-        let skybox_images = SkyboxImages::new([
-            "data/skybox/vz_clear_right.png",
-            "data/skybox/vz_clear_left.png",
-            "data/skybox/vz_clear_up.png",
-            "data/skybox/vz_clear_down.png",
-            "data/skybox/vz_clear_front.png",
-            "data/skybox/vz_clear_back.png",
-        ]);
+        // let skybox_images = SkyboxImages::new([
+        //     "data/skybox/vz_clear_right.png",
+        //     "data/skybox/vz_clear_left.png",
+        //     "data/skybox/vz_clear_up.png",
+        //     "data/skybox/vz_clear_down.png",
+        //     "data/skybox/vz_clear_front.png",
+        //     "data/skybox/vz_clear_back.png",
+        // ]);
 
-        let mut skybox = self.renderer.upload_skybox(skybox_images);
+        // let mut skybox = self.renderer.upload_skybox(skybox_images);
 
-        self.renderer.set_ambient([1.0, 1.0, 1.0], 0.1);
+        let hdr =
+            HdrSkyboxImages::from_equirect("data/skybox/citrus_orchard_road_puresky_4k.hdr", 512);
+        let mut skybox = self.renderer.upload_hdr_skybox(hdr);
+        let irradiance  = self.renderer.bake_irradiance_map(&skybox);
+        let prefiltered = self.renderer.bake_prefiltered_env(&skybox);
+        let brdf_lut    = self.renderer.bake_brdf_lut();
+
+        self.renderer.set_ambient([1.0, 1.0, 1.0], 1.0);
 
         crate::physics::physics_engine::physics_bodies_creation_system(self.game.get_world_mut());
 
@@ -312,7 +319,7 @@ impl<G: Game> Application<G> {
             let culled = self.build_culled_draw_list();
             self.render_shadows(&directional_light, culled.as_ref());
             self.render_objects3d(culled.as_ref());
-            self.renderer.ambient();
+            self.renderer.ambient(&irradiance, &prefiltered, &brdf_lut);
             self.renderer.directional(&directional_light);
             //self.renderer.pointlight(&point_light);
             // self.renderer.pointlight(&point_light_2);
@@ -387,7 +394,8 @@ impl<G: Game> Application<G> {
         let world = self.game.get_world();
         let asset_manager = world.get_unique::<&AssetManager>().unwrap();
         let unified = asset_manager.get_unified_geometry();
-        self.renderer.shadow_pass(directional_light, unified, culled);
+        self.renderer
+            .shadow_pass(directional_light, unified, culled);
     }
 
     pub fn render_objects3d(&mut self, culled: Option<&CulledDrawBuffers>) {

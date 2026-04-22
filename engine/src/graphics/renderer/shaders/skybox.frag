@@ -28,5 +28,9 @@ void main() {
 
     dir.y = -dir.y;
 
-    fragColor = texture(skybox, dir);
+    vec3 envColor = texture(skybox, dir).rgb;
+
+    // Optional: Add an intensity multiplier to balance the HDR strength
+    float intensity = 1.0;
+    fragColor = vec4(envColor * intensity, 1.0);
 }
