@@ -7,7 +7,7 @@ use vulkano_engine::physics::physics_engine::{KinematicCharacterComponent, Physi
 use vulkano_engine::prelude::camera::Camera;
 use vulkano_engine::scene::components::delta_time::DeltaTime;
 
-use crate::player::Player;
+use crate::player::{MOVE_SPEED, Player};
 
 const JUMP_FORCE: f32 = 1.5;
 
@@ -44,11 +44,16 @@ pub fn player_movement(
             direction += right;
         }
 
+        let mut speed = crate::player::MOVE_SPEED;
+        if input_manager.pressed_keys.contains(&Keycode::LShift) {
+            speed = MOVE_SPEED * 0.5;
+        }
+
         //direction.y -= 0.981 * dt;
         direction.y = 0.0;
 
         if direction.magnitude() > 0.0 {
-            direction = direction.normalize() * crate::player::MOVE_SPEED * dt;
+            direction = direction.normalize() * speed * dt;
         }
 
         if kinematic_character.grounded && input_manager.pressed_keys.contains(&Keycode::Space) {

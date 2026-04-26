@@ -52,7 +52,7 @@ void main() {
     vec2 brdf = texture(brdf_lut, vec2(NdotV, roughness)).rg;
     vec3 specular = prefiltered * (F * brdf.x + brdf.y);
 
-    vec3 ibl = diffuse * ambient.intensity + specular * (ambient.intensity * 0.1); //0.15
+    vec3 ibl = diffuse * ambient.intensity + specular * (ambient.intensity * 0.15);
     f_color = vec4(ibl, 1.0);
     //f_color = vec4(albedo * 0.2, 1.0);
 }

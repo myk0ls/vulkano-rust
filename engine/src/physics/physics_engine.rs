@@ -182,7 +182,7 @@ pub fn physics_bodies_creation_system(world: &mut World) {
                     let rigid_body = RigidBodyBuilder::new(body.body_type)
                         .translation(Vector::new(pos[0], -pos[1], pos[2]))
                         .rotation(Vector::new(rot[0], rot[1], rot[2]))
-                        .linear_damping(5.0) // Add damping to slow down falling (0.0 = no damping, 1.0 = lots)
+                        .linear_damping(1.0) // Add damping to slow down falling (0.0 = no damping, 1.0 = lots)
                         .build();
 
                     let handle = rigid_body_set.insert(rigid_body);

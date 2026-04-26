@@ -1,8 +1,9 @@
-use crate::assets::asset_manager::AssetManager;
+use crate::assets::asset_manager::{self, AssetManager};
 use crate::graphics::renderer::{DirectionalLight, PointLight};
 use crate::graphics::skybox::{HdrSkyboxImages, SkyboxImages};
 use crate::input::input_manager::InputManager;
 use crate::physics::physics_engine::PhysicsEngine;
+use crate::prelude::pointlight::Pointlight;
 use crate::scene::components::camera::Camera;
 use crate::scene::components::delta_time::DeltaTime;
 use crate::scene::components::object3d::Object3D;
@@ -101,9 +102,9 @@ impl<G: Game> Application<G> {
         let hdr =
             HdrSkyboxImages::from_equirect("data/skybox/citrus_orchard_road_puresky_4k.hdr", 512);
         let mut skybox = self.renderer.upload_hdr_skybox(hdr);
-        let irradiance  = self.renderer.bake_irradiance_map(&skybox);
+        let irradiance = self.renderer.bake_irradiance_map(&skybox);
         let prefiltered = self.renderer.bake_prefiltered_env(&skybox);
-        let brdf_lut    = self.renderer.bake_brdf_lut();
+        let brdf_lut = self.renderer.bake_brdf_lut();
 
         self.renderer.set_ambient([1.0, 1.0, 1.0], 0.3);
 
@@ -297,11 +298,11 @@ impl<G: Game> Application<G> {
 
             //let directional_light = DirectionalLight::new([0.0, 1.0, 0.0, 1.0], [1.0, 1.0, 1.0]);
             //let directional_light = DirectionalLight::new([1.0, 2.0, 1.0, 1.0], [1.0, 1.0, 1.0]);
-            let directional_light = DirectionalLight::new([0.1, 1.0, 0.1, 1.0], [1.0, 1.0, 1.0]);
+            let directional_light = DirectionalLight::new([0.1, 1.0, 0.1, 1.0], [4.0, 4.0, 4.0]);
 
-            let point_light = PointLight::new([0.0, 1.5, 0.0, 1.0], [1.0, 1.0, 1.0], 5.0, 5.0);
-            let point_light_2 = PointLight::new([-7.0, 1.5, 0.0, 1.0], [1.0, 1.0, 1.0], 5.0, 5.0);
-            let point_light_3 = PointLight::new([7.0, 1.5, 0.0, 1.0], [1.0, 1.0, 1.0], 5.0, 5.0);
+            //let point_light = PointLight::new([0.0, 1.5, 0.0, 1.0], [1.0, 10.0, 1.0], 5.0, 5.0);
+            //let point_light_2 = PointLight::new([-7.0, 1.5, 0.0, 1.0], [1.0, 1.0, 41.0], 5.0, 5.0);
+            //let point_light_3 = PointLight::new([7.0, 1.5, 0.0, 1.0], [10.0, 1.0, 1.0], 5.0, 5.0);
 
             self.physics_accumulator += dt;
 
@@ -322,8 +323,9 @@ impl<G: Game> Application<G> {
             self.renderer.ambient(&irradiance, &prefiltered, &brdf_lut);
             self.renderer.directional(&directional_light);
             //self.renderer.pointlight(&point_light);
-            // self.renderer.pointlight(&point_light_2);
-            // self.renderer.pointlight(&point_light_3);
+            //self.renderer.pointlight(&point_light_2);
+            //self.renderer.pointlight(&point_light_3);
+            self.render_pointlights();
             self.renderer.skybox(&mut skybox);
             //self.renderer.light_object(&directional_light);
             self.renderer.finish(&mut self.previous_frame_end);
@@ -403,6 +405,17 @@ impl<G: Game> Application<G> {
         let asset_manager = world.get_unique::<&AssetManager>().unwrap();
         let unified = asset_manager.get_unified_geometry();
         self.renderer.geometry(unified, culled);
+    }
+
+    pub fn render_pointlights(&mut self) {
+        let world = self.game.get_world();
+        let asset_manager = world.get_unique::<&AssetManager>().unwrap();
+
+        world.run(|mut pointlights: View<Pointlight>| {
+            for object in pointlights.iter() {
+                self.renderer.pointlight(&object);
+            }
+        });
     }
 
     pub fn upload_samplers_objects3d(&mut self) {

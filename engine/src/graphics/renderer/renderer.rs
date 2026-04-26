@@ -80,6 +80,7 @@ use vulkano::pipeline::graphics::rasterization::DepthBiasState;
 
 use crate::assets::asset_manager::{self, UnifiedGeometry};
 use crate::graphics::renderer::PointLight;
+use crate::scene::components::pointlight::Pointlight;
 use crate::{
     assets::{
         self,
@@ -2081,7 +2082,7 @@ impl Renderer {
         }
     }
 
-    pub fn pointlight(&mut self, light: &PointLight) {
+    pub fn pointlight(&mut self, light: &Pointlight) {
         match self.render_stage {
             RenderStage::Ambient => {
                 self.render_stage = RenderStage::Directional;

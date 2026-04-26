@@ -11,6 +11,7 @@ use vulkano_engine::input::input_manager::InputManager;
 use vulkano_engine::physics::physics_engine::ColliderComponent;
 use vulkano_engine::physics::physics_engine::KinematicCharacterComponent;
 use vulkano_engine::physics::physics_engine::RigidBodyComponent;
+use vulkano_engine::prelude::pointlight::Pointlight;
 use vulkano_engine::scene::components::delta_time::DeltaTime;
 use vulkano_engine::scene::components::object3d::Object3D;
 
@@ -50,20 +51,20 @@ impl Game for MyGame {
             asset_manager.load_model("data/models/platform.glb")
         };
 
-        let soldier = {
-            let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
-            asset_manager.load_model("data/models/Soldier.glb")
-        };
+        // let soldier = {
+        //     let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
+        //     asset_manager.load_model("data/models/Soldier.glb")
+        // };
 
         let sponza = {
             let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
             asset_manager.load_model("data/models/sponza_atrium_3.glb")
         };
 
-        let bistro = {
-            let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
-            asset_manager.load_model("data/models/Bistro_Godot.glb")
-        };
+        // let bistro = {
+        //     let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
+        //     asset_manager.load_model("data/models/Bistro_Godot.glb")
+        // };
 
         let metallic_suzanne = {
             let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
@@ -100,7 +101,9 @@ impl Game for MyGame {
             ColliderComponent::new(SharedShape::cuboid(100.0, 0.1, 100.0)),
         ));
 
+        // //
         //main scene
+        // //
         // let soldier_entity = &self.world.add_entity((
         //     Transform::with_pos(vec3(0.0, -60.0, 0.0)),
         //     //Object3D::with_model(soldier.clone()),
@@ -115,14 +118,30 @@ impl Game for MyGame {
         ));
 
         let utensils = &self.world.add_entity((
-            Transform::with_pos(vec3(0.0, -1.25, 0.0)),
+            Transform::with_pos_scale(vec3(0.0, -1.25, 0.0), 2.0),
             Object3D::with_model(uten.clone()),
         ));
 
-        // let de_dust_scene = &self.world.add_entity((
-        //     Transform::with_pos(vec3(0.0, 0.0, 0.0)),
-        //     Object3D::with_model(de_dust2.clone()),
-        // ));
+        let pointlight = &self.world.add_entity(Pointlight::new(
+            [0.0, 1.5, 0.0, 1.0],
+            [1.0, 10.0, 1.0],
+            5.0,
+            5.0,
+        ));
+
+        let pointlight2 = &self.world.add_entity(Pointlight::new(
+            [-7.0, 1.5, 0.0, 1.0],
+            [1.0, 1.0, 41.0],
+            5.0,
+            5.0,
+        ));
+
+        let pointlight3 = &self.world.add_entity(Pointlight::new(
+            [7.0, 1.5, 0.0, 1.0],
+            [10.0, 1.0, 1.0],
+            5.0,
+            5.0,
+        ));
 
         // let bistro_scene = &self.world.add_entity((
         //     Transform::with_pos(vec3(0.0, 0.0, 0.0)),

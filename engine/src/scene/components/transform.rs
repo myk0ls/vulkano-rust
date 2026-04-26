@@ -28,6 +28,15 @@ impl Transform {
         }
     }
 
+    pub fn with_pos_scale(v: TVec3<f32>, s: f32) -> Self {
+        let zero_position: TMat4<f32> = identity();
+        Transform {
+            position: translate(&zero_position, &v),
+            rotation: identity(),
+            uniform_scale: s,
+        }
+    }
+
     pub fn model_matrix(&self) -> TMat4<f32> {
         let mut model = self.position * self.rotation;
         model = scale(
