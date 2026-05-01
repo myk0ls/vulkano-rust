@@ -3,6 +3,7 @@ use sdl3::keyboard::Keycode;
 use shipyard::{IntoIter, UniqueView, UniqueViewMut, ViewMut};
 use vulkano_engine::input::input_manager::InputManager;
 use vulkano_engine::prelude::camera::Camera;
+use vulkano_engine::prelude::transform::Transform;
 use vulkano_engine::scene::components::delta_time::DeltaTime;
 
 use crate::player;
@@ -57,3 +58,20 @@ pub fn freecam_movement(
         }
     }
 }
+
+// pub fn crouch_toggle(
+//     mut cameras: ViewMut<Camera>,
+//     input_manager: UniqueView<InputManager>,
+//     mut transforms: ViewMut<Transform>,
+// ) {
+//     for (camera, transform) in (&mut cameras, &mut transforms)
+//         .iter()
+//         .filter(|(c, _)| c.active)
+//     {
+//         if input_manager.pressed_keys.contains(&Keycode::LCtrl) {
+//             camera.position.y = 0.5; // Crouched height
+//         } else {
+//             camera.position.y = 1.0; // Standing height
+//         }
+//     }
+// }

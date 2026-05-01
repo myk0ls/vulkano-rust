@@ -88,17 +88,6 @@ impl<G: Game> Application<G> {
 
         self.build_unified_geometry();
 
-        // let skybox_images = SkyboxImages::new([
-        //     "data/skybox/vz_clear_right.png",
-        //     "data/skybox/vz_clear_left.png",
-        //     "data/skybox/vz_clear_up.png",
-        //     "data/skybox/vz_clear_down.png",
-        //     "data/skybox/vz_clear_front.png",
-        //     "data/skybox/vz_clear_back.png",
-        // ]);
-
-        // let mut skybox = self.renderer.upload_skybox(skybox_images);
-
         let hdr =
             HdrSkyboxImages::from_equirect("data/skybox/citrus_orchard_road_puresky_4k.hdr", 512);
         let mut skybox = self.renderer.upload_hdr_skybox(hdr);
@@ -296,13 +285,7 @@ impl<G: Game> Application<G> {
                 .unwrap()
                 .cleanup_finished();
 
-            //let directional_light = DirectionalLight::new([0.0, 1.0, 0.0, 1.0], [1.0, 1.0, 1.0]);
-            //let directional_light = DirectionalLight::new([1.0, 2.0, 1.0, 1.0], [1.0, 1.0, 1.0]);
             let directional_light = DirectionalLight::new([0.1, 1.0, 0.1, 1.0], [4.0, 4.0, 4.0]);
-
-            //let point_light = PointLight::new([0.0, 1.5, 0.0, 1.0], [1.0, 10.0, 1.0], 5.0, 5.0);
-            //let point_light_2 = PointLight::new([-7.0, 1.5, 0.0, 1.0], [1.0, 1.0, 41.0], 5.0, 5.0);
-            //let point_light_3 = PointLight::new([7.0, 1.5, 0.0, 1.0], [10.0, 1.0, 1.0], 5.0, 5.0);
 
             self.physics_accumulator += dt;
 
@@ -322,9 +305,6 @@ impl<G: Game> Application<G> {
             self.render_objects3d(culled.as_ref());
             self.renderer.ambient(&irradiance, &prefiltered, &brdf_lut);
             self.renderer.directional(&directional_light);
-            //self.renderer.pointlight(&point_light);
-            //self.renderer.pointlight(&point_light_2);
-            //self.renderer.pointlight(&point_light_3);
             self.render_pointlights();
             self.renderer.skybox(&mut skybox);
             //self.renderer.light_object(&directional_light);
@@ -333,21 +313,6 @@ impl<G: Game> Application<G> {
             self.update_camera_view();
         }
     }
-
-    // pub fn update_camera_input(&mut self, dx: f32, dy: f32) {
-    //     let world = self.game.get_world_mut();
-    //     world.run(|mut cameras: ViewMut<Camera>| {
-    //         for camera in (&mut cameras).iter().filter(|c| c.active) {
-    //             camera.yaw += dx * SENSITIVITY;
-    //             camera.pitch += dy * SENSITIVITY;
-
-    //             camera.pitch = camera.pitch.clamp(
-    //                 -std::f32::consts::FRAC_PI_2 + 0.01,
-    //                 std::f32::consts::FRAC_PI_2 - 0.01,
-    //             );
-    //         }
-    //     });
-    // }
 
     pub fn update_camera_view(&mut self) {
         let world = self.game.get_world();

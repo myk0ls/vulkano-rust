@@ -45,7 +45,7 @@ pub fn player_movement(
         }
 
         let mut speed = crate::player::MOVE_SPEED;
-        if input_manager.pressed_keys.contains(&Keycode::LShift) {
+        if kinematic_character.grounded && input_manager.pressed_keys.contains(&Keycode::LShift) {
             speed = MOVE_SPEED * 0.5;
         }
 

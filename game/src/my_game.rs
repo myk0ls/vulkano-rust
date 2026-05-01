@@ -46,11 +46,6 @@ impl Game for MyGame {
             //asset_manager.load_model("data/models/suzanne.glb")
         };
 
-        let platform = {
-            let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
-            asset_manager.load_model("data/models/platform.glb")
-        };
-
         // let soldier = {
         //     let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
         //     asset_manager.load_model("data/models/Soldier.glb")
@@ -74,6 +69,11 @@ impl Game for MyGame {
         let uten = {
             let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
             asset_manager.load_model("data/models/utensils.gltf")
+        };
+
+        let sphere = {
+            let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
+            asset_manager.load_model("data/models/shiny_sphere.glb")
         };
 
         let player_entity = self.world.add_entity((
@@ -117,10 +117,17 @@ impl Game for MyGame {
             Object3D::with_model(sponza.clone()),
         ));
 
-        let utensils = &self.world.add_entity((
-            Transform::with_pos_scale(vec3(0.0, -1.25, 0.0), 2.0),
-            Object3D::with_model(uten.clone()),
-        ));
+        // let utensils = &self.world.add_entity((
+        //     Transform::with_pos_scale(vec3(0.0, -1.25, 0.0), 2.0),
+        //     Object3D::with_model(uten.clone()),
+        // ));
+
+        // let sphere_entity = &self.world.add_entity((
+        //     Transform::with_pos(vec3(0.0, -20.0, 0.0)),
+        //     Object3D::with_model(sphere.clone()),
+        //     RigidBodyComponent::new(RigidBodyType::Dynamic),
+        //     ColliderComponent::new(SharedShape::ball(0.5)),
+        // ));
 
         let pointlight = &self.world.add_entity(Pointlight::new(
             [0.0, 1.5, 0.0, 1.0],

@@ -10,7 +10,7 @@ struct DrawIndexedIndirectCommand {
     uint index_count;
     uint instance_count;
     uint first_index;
-    int  vertex_offset;
+    int vertex_offset;
     uint first_instance;
 };
 
@@ -51,15 +51,15 @@ bool isAABBinFrustum(AABB box, mat4 model) {
     // Transform all 8 object-space corners to world space, then test against frustum planes.
     // If all 8 corners are outside the same plane, the AABB is fully culled.
     vec3 corners[8] = vec3[8](
-        vec3(min_x, min_y, min_z),
-        vec3(max_x, min_y, min_z),
-        vec3(min_x, max_y, min_z),
-        vec3(max_x, max_y, min_z),
-        vec3(min_x, min_y, max_z),
-        vec3(max_x, min_y, max_z),
-        vec3(min_x, max_y, max_z),
-        vec3(max_x, max_y, max_z)
-    );
+            vec3(min_x, min_y, min_z),
+            vec3(max_x, min_y, min_z),
+            vec3(min_x, max_y, min_z),
+            vec3(max_x, max_y, min_z),
+            vec3(min_x, min_y, max_z),
+            vec3(max_x, min_y, max_z),
+            vec3(min_x, max_y, max_z),
+            vec3(max_x, max_y, max_z)
+        );
 
     for (int i = 0; i < 6; i++) {
         int r = 0;
@@ -79,5 +79,6 @@ void main() {
     AABB box = boxes[idx];
     mat4 model = draws[idx].model;
 
-    dc[idx].instance_count = isAABBinFrustum(box, model) ? 1u : 0u;
+    //dc[idx].instance_count = isAABBinFrustum(box, model) ? 1u : 0u;
+    dc[idx].instance_count = 1u;
 }

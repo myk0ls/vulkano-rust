@@ -29,8 +29,8 @@ pub struct GpuAABB {
 #[repr(C)]
 pub struct GpuMaterial {
     pub albedo_tex_idx: u32,
-    pub normal_tex_idx: u32,  // NO_TEXTURE if absent
-    pub mr_tex_idx: u32,      // NO_TEXTURE if absent; R=metallic, G=roughness
+    pub normal_tex_idx: u32, // NO_TEXTURE if absent
+    pub mr_tex_idx: u32,     // NO_TEXTURE if absent; R=metallic, G=roughness
     pub metallic_factor: f32,
     pub roughness_factor: f32,
 }
@@ -106,7 +106,9 @@ impl AssetManager {
             };
             self.models.insert(filepath.to_string(), new_model);
         }
-        AssetHandle { id: filepath.to_string() }
+        AssetHandle {
+            id: filepath.to_string(),
+        }
     }
 
     pub fn get_model(&self, handle: &AssetHandle) -> Option<&Model> {
@@ -166,10 +168,14 @@ impl AssetManager {
                     0
                 };
 
-                let normal_idx = push_tex(&mut textures, &mut texture_dedup, mesh.normal_texture.as_ref());
+                let normal_idx = push_tex(
+                    &mut textures,
+                    &mut texture_dedup,
+                    mesh.normal_texture.as_ref(),
+                );
                 let mr_idx = push_tex(&mut textures, &mut texture_dedup, mesh.mr_texture.as_ref());
 
-                let roughness = mesh.material.pbr.roughness_factor.clamp(0.4, 1.0);
+                let roughness = mesh.material.pbr.roughness_factor.clamp(0.05, 1.0);
 
                 let mat_idx = material_data.len() as u32;
                 material_data.push(GpuMaterial {
@@ -199,8 +205,12 @@ impl AssetManager {
                 }
                 aabb_data.push(GpuAABB {
                     pt: [
-                        aabb_min[0], aabb_min[1], aabb_min[2],
-                        aabb_max[0], aabb_max[1], aabb_max[2],
+                        aabb_min[0],
+                        aabb_min[1],
+                        aabb_min[2],
+                        aabb_max[0],
+                        aabb_max[1],
+                        aabb_max[2],
                     ],
                 });
 
