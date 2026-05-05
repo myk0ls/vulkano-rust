@@ -136,7 +136,7 @@ impl KinematicCharacterComponent {
         let mut controller = KinematicCharacterController::default();
 
         // Configure controller settings
-        controller.offset = CharacterLength::Absolute(0.01); // Small offset from surfaces
+        controller.offset = CharacterLength::Absolute(0.05);
         controller.autostep = Some(CharacterAutostep {
             max_height: CharacterLength::Absolute(0.5), // Can climb steps up to 0.5 units
             min_width: CharacterLength::Absolute(0.2),  // Step must be at least 0.2 units wide
@@ -144,7 +144,7 @@ impl KinematicCharacterComponent {
         });
         controller.max_slope_climb_angle = 45.0_f32.to_radians(); // Max 45 degree slopes
         controller.min_slope_slide_angle = 30.0_f32.to_radians(); // Slide on slopes > 30 degrees
-        controller.snap_to_ground = Some(CharacterLength::Absolute(0.2)); // Snap to ground within 0.2 units
+        controller.snap_to_ground = Some(CharacterLength::Absolute(0.05));
 
         Self {
             handle: None,
