@@ -79,7 +79,7 @@ impl Game for MyGame {
         let player_entity = self.world.add_entity((
             Player::new(),
             Camera::new(vec3(0.0, -5.0, 0.0)),
-            Transform::with_pos(vec3(0.0, -3.0, 0.0)),
+            Transform::with_pos(vec3(0.0, -5.0, 0.0)),
             Velocity::new(),
             KinematicCharacterComponent::new(),
             RigidBodyComponent::new(RigidBodyType::KinematicVelocityBased),
