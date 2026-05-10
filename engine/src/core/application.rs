@@ -212,6 +212,7 @@ impl<G: Game> Application<G> {
                             .unwrap();
 
                         input_manager.pressed_keys.insert(keycode.unwrap());
+                        input_manager.released_keys.remove(&keycode.unwrap());
                     }
                     Event::KeyUp { keycode, .. } => {
                         let mut input_manager = self
@@ -221,6 +222,7 @@ impl<G: Game> Application<G> {
                             .unwrap();
 
                         input_manager.pressed_keys.remove(&keycode.unwrap());
+                        input_manager.released_keys.insert(keycode.unwrap());
                     }
                     Event::MouseButtonDown { mouse_btn, .. } => {
                         let mut input_manager = self

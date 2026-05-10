@@ -61,21 +61,6 @@ impl Game for MyGame {
         //     asset_manager.load_model("data/models/Bistro_Godot.glb")
         // };
 
-        let metallic_suzanne = {
-            let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
-            asset_manager.load_model("data/models/metallic_suzanne.glb")
-        };
-
-        let uten = {
-            let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
-            asset_manager.load_model("data/models/utensils.gltf")
-        };
-
-        let sphere = {
-            let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
-            asset_manager.load_model("data/models/shiny_sphere.glb")
-        };
-
         let player_entity = self.world.add_entity((
             Player::new(),
             Camera::new(vec3(0.0, -5.0, 0.0)),
@@ -86,13 +71,13 @@ impl Game for MyGame {
             ColliderComponent::new(SharedShape::capsule_y(1.0, 0.5)),
         ));
 
-        // let monkey_entity = &self.world.add_entity((
-        //     Transform::with_pos(vec3(0.0, -50.0, 0.0)),
-        //     Object3D::with_model(suzanne.clone()),
-        //     RigidBodyComponent::new(RigidBodyType::Dynamic),
-        //     // ColliderComponent::new(SharedShape::cuboid(0.5, 0.5, 0.5)),
-        //     ColliderComponent::new(SharedShape::ball(0.5)),
-        // ));
+        let monkey_entity = &self.world.add_entity((
+            Transform::with_pos(vec3(0.0, -50.0, 0.0)),
+            Object3D::with_model(suzanne.clone()),
+            RigidBodyComponent::new(RigidBodyType::Dynamic),
+            //ColliderComponent::new(SharedShape::cuboid(0.5, 0.5, 0.5)),
+            ColliderComponent::new(SharedShape::ball(0.5)),
+        ));
 
         let platform_ent = &self.world.add_entity((
             Transform::with_pos(vec3(0.0, 0.0, 0.0)),
@@ -143,12 +128,12 @@ impl Game for MyGame {
             5.0,
         ));
 
-        let pointlight3 = &self.world.add_entity(Pointlight::new(
-            [7.0, 1.5, 0.0, 1.0],
-            [10.0, 1.0, 1.0],
-            5.0,
-            5.0,
-        ));
+        // let pointlight3 = &self.world.add_entity(Pointlight::new(
+        //     [7.0, 1.5, 0.0, 1.0],
+        //     [10.0, 1.0, 1.0],
+        //     5.0,
+        //     5.0,
+        // ));
 
         // let bistro_scene = &self.world.add_entity((
         //     Transform::with_pos(vec3(0.0, 0.0, 0.0)),

@@ -1,11 +1,7 @@
-use easy_gltf::Material;
 use nalgebra_glm::{
     TMat4, TVec3, identity, inverse_transpose, rotate_normalized_axis, scale, translate, vec3,
 };
-use vulkano::image::view::ImageView;
-
 use std::cell::Cell;
-use std::sync::Arc;
 
 use crate::graphics::mesh::Mesh;
 
