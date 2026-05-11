@@ -45,7 +45,7 @@ impl Renderer {
             extent = [base_texture.dimensions().0, base_texture.dimensions().1, 1];
         } else {
             let base_color = mesh.material.pbr.base_color_factor;
-            let (r, g, b, a) = (base_color.x, base_color.y, base_color.z, base_color.w);
+            let (r, g, b, a) = (base_color[0], base_color[1], base_color[2], base_color[3]);
             raw_pixels = vec![
                 (r.clamp(0.0, 1.0) * 255.0) as u8,
                 (g.clamp(0.0, 1.0) * 255.0) as u8,

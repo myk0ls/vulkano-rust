@@ -1,5 +1,5 @@
 use crate::assets::gltf_loader::NormalVertex;
-use easy_gltf::Material;
+use crate::assets::material::Material;
 use std::sync::Arc;
 use vulkano::{buffer::Subbuffer, descriptor_set::DescriptorSet, image::view::ImageView};
 

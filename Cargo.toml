@@ -12,7 +12,6 @@ vulkano-shaders = "0.35.0"
 nalgebra-glm = "0.17.0"
 nalgebra = "0.31.4"
 rapier3d = { version = "0.32.0", features = ["simd-stable"] }
-easy-gltf = "1.1.5"
 itertools = "0.14.0"
 sdl3 = { version = "=0.14.16", features = ["build-from-source"] }
 ash = "0.38.0"

@@ -10,7 +10,6 @@ vulkano-shaders = { workspace = true }
 nalgebra-glm = { workspace = true }
 nalgebra = { workspace = true }
 rapier3d = { workspace = true }
-easy-gltf = { workspace = true }
 itertools = { workspace = true }
 sdl3 = { workspace = true }
 ash = { workspace = true }
