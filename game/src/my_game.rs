@@ -58,6 +58,17 @@ impl Game for MyGame {
             asset_manager.create_animator(&soldier)
         };
 
+        // debug: show what clips were loaded
+        match &soldier_animator {
+            Some(anim) => {
+                println!("[Animator] {} clip(s) loaded:", anim.clips.len());
+                for (i, clip) in anim.clips.iter().enumerate() {
+                    println!("  [{}] {:?}  ({:.2}s)", i, clip.name, clip.duration);
+                }
+            }
+            None => println!("[Animator] create_animator returned None — model has no skin!"),
+        }
+
         let sponza = {
             let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
             asset_manager.load_model("data/models/sponza_atrium_3.glb")
@@ -76,7 +87,7 @@ impl Game for MyGame {
         let player_entity = self.world.add_entity((
             Player::new(),
             Camera::new(vec3(0.0, -5.0, 0.0)),
-            Transform::with_pos(vec3(0.0, -10.0, 0.0)),
+            Transform::with_pos(vec3(-5.0, -10.0, 0.0)),
             Velocity::new(),
             KinematicCharacterComponent::new(),
             RigidBodyComponent::new(RigidBodyType::KinematicVelocityBased),
@@ -102,12 +113,14 @@ impl Game for MyGame {
         //main scene
         // //
         let soldier_entity = &self.world.add_entity((
-            Transform::with_pos_scale(vec3(0.0, -50.0, 0.0), 0.0125),
-            Object3D::with_model(dragon.clone()),
-            //Object3D::with_model(metallic_suzanne.clone()),
+            //Transform::with_pos_scale(vec3(0.0, -50.0, 0.0), 0.0125),
+            //Object3D::with_model(dragon.clone()),
+            Transform::with_pos(vec3(0.0, -50.0, 0.0)),
+            Object3D::with_model(soldier.clone()),
             RigidBodyComponent::new(RigidBodyType::Dynamic),
-            ColliderComponent::new(SharedShape::ball(0.45)),
-            //soldier_animator.unwrap(),
+            //ColliderComponent::new(SharedShape::ball(0.45)),
+            ColliderComponent::new(SharedShape::capsule_z(0.2, 0.1)),
+            soldier_animator.unwrap(),
         ));
 
         let sponza_scene = &self.world.add_entity((
@@ -173,6 +186,7 @@ impl Game for MyGame {
         //self.world.run(move_suzanne);
 
         player::run_player_systems(&mut self.world);
+        //self.world.run(animate_soldier);
     }
 
     fn on_render(&mut self) {
@@ -201,6 +215,12 @@ impl Game for MyGame {
                 Some(Keycode::O) => {
                     self.world
                         .run(player::interact::rotate_directional_light_right);
+                }
+                Some(Keycode::L) => {
+                    self.world.run(animate_soldier_walk);
+                }
+                Some(Keycode::K) => {
+                    self.world.run(animate_soldier_run);
                 }
                 _ => {}
             },
@@ -231,10 +251,27 @@ pub fn move_suzanne(
     }
 }
 
-pub fn animate_soldier(mut animators: ViewMut<Animator>, dt: UniqueView<DeltaTime>) {
+pub fn animate_soldier_walk(mut animators: ViewMut<Animator>, dt: UniqueView<DeltaTime>) {
     for animator in (&mut animators).iter() {
-        if !animator.playing {
-            animator.play_by_name("Walk");
-        }
+        animator.play_by_name("Walk");
+        println!(
+            "[Animator] after play: playing={}, clip={:?}, time={:.3}",
+            animator.playing,
+            animator.clip_name(),
+            animator.current_time
+        );
+    }
+}
+
+pub fn animate_soldier_run(mut animators: ViewMut<Animator>, dt: UniqueView<DeltaTime>) {
+    for animator in (&mut animators).iter() {
+        println!("[Animator] not playing — calling play_by_name(\"Walk\")");
+        animator.play_by_name("Run");
+        println!(
+            "[Animator] after play: playing={}, clip={:?}, time={:.3}",
+            animator.playing,
+            animator.clip_name(),
+            animator.current_time
+        );
     }
 }

@@ -40,7 +40,9 @@ void main() {
             joint_weights.y * joint_mats.matrices[d.skin_offset + joint_indices.y] +
             joint_weights.z * joint_mats.matrices[d.skin_offset + joint_indices.z] +
             joint_weights.w * joint_mats.matrices[d.skin_offset + joint_indices.w];
-        local_pos = skin * vec4(position, 1.0);
+        vec4 pos_gltf = vec4(position.x, -position.y, position.z, 1.0);
+        vec4 skinned  = skin * pos_gltf;
+        local_pos     = vec4(skinned.x, -skinned.y, skinned.z, skinned.w);
     } else {
         local_pos = vec4(position, 1.0);
     }

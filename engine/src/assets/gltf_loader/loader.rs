@@ -123,8 +123,9 @@ fn collect_meshes(
             .map(|t| t.collect())
             .unwrap_or_else(|| vec![[1.0, 0.0, 0.0, 1.0]; count]);
 
-        let joints_0: Vec<[u32; 4]> = reader
-            .read_joints(0)
+        let joints_0_raw = reader.read_joints(0);
+        let is_skinned = joints_0_raw.is_some();
+        let joints_0: Vec<[u32; 4]> = joints_0_raw
             .map(|j| {
                 j.into_u16()
                     .map(|[a, b, c, d]| [a as u32, b as u32, c as u32, d as u32])
@@ -146,15 +147,28 @@ fn collect_meshes(
             .iter()
             .enumerate()
             .map(|(i, &pos)| {
-                let p = transform * glm::vec4(pos[0], pos[1], pos[2], 1.0);
-                let n = transform * glm::vec4(normals[i][0], normals[i][1], normals[i][2], 0.0);
-                let t = transform * glm::vec4(tangents[i][0], tangents[i][1], tangents[i][2], 0.0);
+                // Skinned meshes must stay in local bind-pose space — joint matrices
+                // handle the transformation to world space.  Static meshes bake the
+                // accumulated scene-graph transform into the vertices so they render
+                // correctly without per-node model matrices.
+                let (px, py, pz, nx, ny, nz, tx, ty, tz) = if is_skinned {
+                    (
+                        pos[0], pos[1], pos[2],
+                        normals[i][0], normals[i][1], normals[i][2],
+                        tangents[i][0], tangents[i][1], tangents[i][2],
+                    )
+                } else {
+                    let p = transform * glm::vec4(pos[0], pos[1], pos[2], 1.0);
+                    let n = transform * glm::vec4(normals[i][0], normals[i][1], normals[i][2], 0.0);
+                    let t = transform * glm::vec4(tangents[i][0], tangents[i][1], tangents[i][2], 0.0);
+                    (p.x / p.w, p.y / p.w, p.z / p.w, n.x, n.y, n.z, t.x, t.y, t.z)
+                };
                 NormalVertex {
-                    position: [p.x / p.w, -(p.y / p.w), p.z / p.w],
-                    normal: [n.x, n.y, n.z],
+                    position: [px, -py, pz],
+                    normal: [nx, ny, nz],
                     color,
                     uv: tex_coords[i],
-                    tangent: [t.x, t.y, t.z, tangents[i][3]],
+                    tangent: [tx, ty, tz, tangents[i][3]],
                     joint_indices: joints_0[i],
                     joint_weights: weights_0[i],
                 }

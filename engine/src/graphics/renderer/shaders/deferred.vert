@@ -52,8 +52,12 @@ void main() {
             joint_weights.y * joint_mats.matrices[d.skin_offset + joint_indices.y] +
             joint_weights.z * joint_mats.matrices[d.skin_offset + joint_indices.z] +
             joint_weights.w * joint_mats.matrices[d.skin_offset + joint_indices.w];
-        local_pos    = skin * vec4(position, 1.0);
-        mat3 skin3   = mat3(skin);
+        // Stored positions have Y negated for Vulkan NDC; joint matrices are in glTF Y-up space.
+        // Undo the Y-flip before skinning, then re-apply it to stay consistent with static meshes.
+        vec4 pos_gltf = vec4(position.x, -position.y, position.z, 1.0);
+        vec4 skinned  = skin * pos_gltf;
+        local_pos     = vec4(skinned.x, -skinned.y, skinned.z, skinned.w);
+        mat3 skin3    = mat3(skin);
         local_normal  = normalize(skin3 * normal);
         local_tangent = normalize(skin3 * tangent.xyz);
     } else {
