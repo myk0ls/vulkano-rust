@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use vulkano::{
-    buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer},
     buffer::allocator::SubbufferAllocator,
+    buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
         AutoCommandBufferBuilder, DrawIndexedIndirectCommand, PrimaryAutoCommandBuffer,
-        RenderPassBeginInfo, SubpassBeginInfo, SubpassEndInfo, SubpassContents,
+        RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo,
     },
     descriptor_set::{DescriptorSet, WriteDescriptorSet},
     memory::allocator::{AllocationCreateInfo, MemoryTypeFilter},
@@ -13,13 +13,15 @@ use vulkano::{
 };
 
 use super::{
-    CulledDrawBuffers, DirectionalLight, Renderer, RenderStage,
-    ambient_frag, composite_frag, directional_frag, directional_vert, pointlight_frag, shadows_vert, skybox_frag,
+    CulledDrawBuffers, RenderStage, Renderer, ambient_frag, composite_frag, directional_frag,
+    directional_vert, pointlight_frag, shadows_vert, skybox_frag,
 };
 use crate::{
     assets::asset_manager::{self, UnifiedGeometry},
     graphics::skybox::Skybox,
-    scene::components::{pointlight::Pointlight, transform::Transform},
+    scene::components::{
+        directional_light::DirectionalLight, pointlight::Pointlight, transform::Transform,
+    },
 };
 
 impl Renderer {
@@ -84,7 +86,10 @@ impl Renderer {
         let draw_data_set = DescriptorSet::new(
             self.descriptor_set_allocator.clone(),
             draw_data_layout,
-            [WriteDescriptorSet::buffer(0, culled.draw_data.clone())],
+            [
+                WriteDescriptorSet::buffer(0, culled.draw_data.clone()),
+                WriteDescriptorSet::buffer(1, culled.joint_matrices.clone()),
+            ],
             [],
         )
         .unwrap();
@@ -173,7 +178,10 @@ impl Renderer {
         let draw_data_set = DescriptorSet::new(
             self.descriptor_set_allocator.clone(),
             draw_data_layout,
-            [WriteDescriptorSet::buffer(0, culled.draw_data.clone())],
+            [
+                WriteDescriptorSet::buffer(0, culled.draw_data.clone()),
+                WriteDescriptorSet::buffer(1, culled.joint_matrices.clone()),
+            ],
             [],
         )
         .unwrap();
@@ -645,7 +653,8 @@ impl Renderer {
     pub fn cull_pass(
         &mut self,
         unified: &UnifiedGeometry,
-        objects: &[(usize, Transform)],
+        objects: &[(usize, Transform, u32)],
+        joint_matrices: &[[[f32; 4]; 4]],
     ) -> Option<CulledDrawBuffers> {
         if objects.is_empty() {
             return None;
@@ -656,7 +665,7 @@ impl Renderer {
         let mut draw_data_vec: Vec<asset_manager::DrawData> = Vec::with_capacity(objects.len());
         let mut aabb_vec: Vec<asset_manager::GpuAABB> = Vec::with_capacity(objects.len());
 
-        for (draw_idx, transform) in objects {
+        for (draw_idx, transform, skin_offset) in objects {
             let draw = &unified.mesh_draws[*draw_idx];
 
             indirect_commands.push(DrawIndexedIndirectCommand {
@@ -671,11 +680,40 @@ impl Renderer {
                 model: transform.model_matrix().into(),
                 normals: transform.normal_matrix().into(),
                 material_index: draw.material_index,
-                _pad: [0; 3],
+                skin_offset: *skin_offset,
+                _pad: [0; 2],
             });
 
             aabb_vec.push(unified.aabb_data[*draw_idx]);
         }
+
+        // Always upload at least one identity matrix so the SSBO binding is valid
+        // even when there are no skinned objects (NO_SKIN draws won't index into it).
+        let jm_vec: Vec<[[f32; 4]; 4]> = if joint_matrices.is_empty() {
+            vec![[
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]]
+        } else {
+            joint_matrices.to_vec()
+        };
+
+        let joint_matrices_buffer = Buffer::from_iter(
+            self.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            jm_vec.into_iter(),
+        )
+        .unwrap();
 
         let indirect_buffer = Buffer::from_iter(
             self.memory_allocator.clone(),
@@ -773,6 +811,7 @@ impl Renderer {
         Some(CulledDrawBuffers {
             indirect: indirect_buffer,
             draw_data: draw_data_buffer,
+            joint_matrices: joint_matrices_buffer,
         })
     }
 

@@ -1,5 +1,7 @@
+use crate::assets::animation::{AnimationClip, NodeTree, Skin};
 use crate::assets::gltf_loader::{LoaderGLTF, NormalVertex};
 use crate::graphics::mesh::Mesh;
+use crate::scene::components::animator::Animator;
 use shipyard::{Component, Unique, track};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,6 +15,9 @@ use vulkano::memory::allocator::{
 
 /// Sentinel index meaning "no texture bound" for this slot.
 pub const NO_TEXTURE: u32 = u32::MAX;
+
+/// Sentinel skin_offset meaning this draw call is not skinned.
+pub const NO_SKIN: u32 = u32::MAX;
 
 /// Per-draw axis-aligned bounding box in object space.
 /// Layout matches `struct AABB { float pt[6]; }` in frustum_culling.comp (std430).
@@ -58,6 +63,9 @@ pub struct MeshDrawInfo {
 pub struct Model {
     pub meshes: Vec<Mesh>,
     pub draw_range: std::ops::Range<usize>,
+    pub node_tree: NodeTree,
+    pub skins: Vec<Skin>,
+    pub animations: Vec<AnimationClip>,
 }
 
 impl Model {}
@@ -68,7 +76,9 @@ pub struct DrawData {
     pub model: [[f32; 4]; 4],
     pub normals: [[f32; 4]; 4],
     pub material_index: u32,
-    pub _pad: [u32; 3],
+    /// Byte offset into the joint matrix SSBO for this draw's skeleton. NO_SKIN if not animated.
+    pub skin_offset: u32,
+    pub _pad: [u32; 2],
 }
 
 #[derive(Clone)]
@@ -103,12 +113,28 @@ impl AssetManager {
             let new_model = Model {
                 meshes: loader.get_meshes(),
                 draw_range: 0..0,
+                node_tree: loader.get_node_tree(),
+                skins: loader.get_skins(),
+                animations: loader.get_animations(),
             };
             self.models.insert(filepath.to_string(), new_model);
         }
         AssetHandle {
             id: filepath.to_string(),
         }
+    }
+
+    /// Create an `Animator` component pre-loaded with the animation data for
+    /// the given model. Returns `None` if the model has no skin (i.e. is not
+    /// a skinned mesh).
+    pub fn create_animator(&self, handle: &AssetHandle) -> Option<Animator> {
+        let model = self.models.get(&handle.id)?;
+        let skin = model.skins.first()?.clone();
+        Some(Animator::new(
+            model.node_tree.clone(),
+            skin,
+            model.animations.clone(),
+        ))
     }
 
     pub fn get_model(&self, handle: &AssetHandle) -> Option<&Model> {

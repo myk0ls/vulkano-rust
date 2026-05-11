@@ -12,7 +12,9 @@ use vulkano_engine::physics::physics_engine::ColliderComponent;
 use vulkano_engine::physics::physics_engine::KinematicCharacterComponent;
 use vulkano_engine::physics::physics_engine::RigidBodyComponent;
 use vulkano_engine::prelude::pointlight::Pointlight;
+use vulkano_engine::scene::components::animator::Animator;
 use vulkano_engine::scene::components::delta_time::DeltaTime;
+use vulkano_engine::scene::components::directional_light::DirectionalLight;
 use vulkano_engine::scene::components::object3d::Object3D;
 
 use vulkano_engine::{
@@ -46,10 +48,15 @@ impl Game for MyGame {
             //asset_manager.load_model("data/models/suzanne.glb")
         };
 
-        // let soldier = {
-        //     let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
-        //     asset_manager.load_model("data/models/Soldier.glb")
-        // };
+        let soldier = {
+            let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
+            asset_manager.load_model("data/models/Soldier.glb")
+        };
+
+        let soldier_animator = {
+            let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
+            asset_manager.create_animator(&soldier)
+        };
 
         let sponza = {
             let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
@@ -61,6 +68,11 @@ impl Game for MyGame {
         //     asset_manager.load_model("data/models/Bistro_Godot.glb")
         // };
 
+        let dragon = {
+            let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
+            asset_manager.load_model("data/models/stanford_dragon_pbr.glb")
+        };
+
         let player_entity = self.world.add_entity((
             Player::new(),
             Camera::new(vec3(0.0, -5.0, 0.0)),
@@ -71,13 +83,13 @@ impl Game for MyGame {
             ColliderComponent::new(SharedShape::capsule_y(1.0, 0.5)),
         ));
 
-        let monkey_entity = &self.world.add_entity((
-            Transform::with_pos(vec3(0.0, -50.0, 0.0)),
-            Object3D::with_model(suzanne.clone()),
-            RigidBodyComponent::new(RigidBodyType::Dynamic),
-            //ColliderComponent::new(SharedShape::cuboid(0.5, 0.5, 0.5)),
-            ColliderComponent::new(SharedShape::ball(0.5)),
-        ));
+        // let monkey_entity = &self.world.add_entity((
+        //     Transform::with_pos(vec3(0.0, -50.0, 0.0)),
+        //     Object3D::with_model(suzanne.clone()),
+        //     RigidBodyComponent::new(RigidBodyType::Dynamic),
+        //     //ColliderComponent::new(SharedShape::cuboid(0.5, 0.5, 0.5)),
+        //     ColliderComponent::new(SharedShape::ball(0.5)),
+        // ));
 
         let platform_ent = &self.world.add_entity((
             Transform::with_pos(vec3(0.0, 0.0, 0.0)),
@@ -89,13 +101,14 @@ impl Game for MyGame {
         // //
         //main scene
         // //
-        // let soldier_entity = &self.world.add_entity((
-        //     Transform::with_pos(vec3(0.0, -60.0, 0.0)),
-        //     //Object3D::with_model(soldier.clone()),
-        //     Object3D::with_model(metallic_suzanne.clone()),
-        //     RigidBodyComponent::new(RigidBodyType::Dynamic),
-        //     ColliderComponent::new(SharedShape::ball(0.45)),
-        // ));
+        let soldier_entity = &self.world.add_entity((
+            Transform::with_pos_scale(vec3(0.0, -50.0, 0.0), 0.0125),
+            Object3D::with_model(dragon.clone()),
+            //Object3D::with_model(metallic_suzanne.clone()),
+            RigidBodyComponent::new(RigidBodyType::Dynamic),
+            ColliderComponent::new(SharedShape::ball(0.45)),
+            //soldier_animator.unwrap(),
+        ));
 
         let sponza_scene = &self.world.add_entity((
             Transform::with_pos(vec3(0.0, 0.0, 0.0)),
@@ -167,12 +180,32 @@ impl Game for MyGame {
     }
 
     fn on_event(&mut self, event: &Event) {
-        let input_manager = self.world.get_unique::<&mut InputManager>().unwrap();
+        // let input_manager = self.world.get_unique::<&mut InputManager>().unwrap();
 
-        input_manager
-            .pressed_keys
-            .iter()
-            .for_each(|x| println!("{}", x.name()));
+        // input_manager
+        //     .pressed_keys
+        //     .iter()
+        //     .for_each(|x| println!("{}", x.name()));
+
+        // println!("Event: {:?}", event);
+
+        match event {
+            Event::KeyDown { keycode, .. } => match keycode {
+                Some(Keycode::P) => {
+                    self.world.run(player::interact::pointlight_toggle);
+                }
+                Some(Keycode::I) => {
+                    self.world
+                        .run(player::interact::rotate_directional_light_left);
+                }
+                Some(Keycode::O) => {
+                    self.world
+                        .run(player::interact::rotate_directional_light_right);
+                }
+                _ => {}
+            },
+            _ => {}
+        }
     }
 
     fn get_world(&self) -> &World {
@@ -195,5 +228,13 @@ pub fn move_suzanne(
     for (object, mut transform) in (&object3ds, &mut transforms).iter() {
         transform.rotate(angle, vec3(0.0, 0.0, 1.0));
         //println!("Monkey position: {:?}", transform.position);
+    }
+}
+
+pub fn animate_soldier(mut animators: ViewMut<Animator>, dt: UniqueView<DeltaTime>) {
+    for animator in (&mut animators).iter() {
+        if !animator.playing {
+            animator.play_by_name("Walk");
+        }
     }
 }

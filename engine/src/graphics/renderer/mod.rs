@@ -7,18 +7,19 @@ mod upload;
 
 use std::{mem, sync::Arc};
 
-use nalgebra_glm::{TMat4, TVec3, half_pi, identity, inverse, look_at_rh, ortho, perspective, vec3};
+use nalgebra_glm::{
+    TMat4, TVec3, half_pi, identity, inverse, look_at_rh, ortho, perspective, vec3,
+};
 use sdl3::video::Window;
+use vulkano::command_buffer::{DrawIndexedIndirectCommand, PrimaryCommandBufferAbstract};
 use vulkano::{
-    Handle, Version, VulkanLibrary, VulkanObject,
-    Validated, VulkanError,
-    buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer},
+    Handle, Validated, Version, VulkanError, VulkanLibrary, VulkanObject,
     buffer::allocator::{SubbufferAllocator, SubbufferAllocatorCreateInfo},
+    buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
         AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferToImageInfo,
         PrimaryAutoCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents,
-        SubpassEndInfo,
-        allocator::StandardCommandBufferAllocator,
+        SubpassEndInfo, allocator::StandardCommandBufferAllocator,
     },
     descriptor_set::{
         DescriptorSet, WriteDescriptorSet,
@@ -32,8 +33,8 @@ use vulkano::{
     image::{
         Image, ImageCreateInfo, ImageUsage,
         sampler::{
-            BorderColor, Filter, LOD_CLAMP_NONE, Sampler, SamplerAddressMode,
-            SamplerCreateInfo, SamplerMipmapMode,
+            BorderColor, Filter, LOD_CLAMP_NONE, Sampler, SamplerAddressMode, SamplerCreateInfo,
+            SamplerMipmapMode,
         },
         view::{ImageView, ImageViewCreateInfo},
     },
@@ -51,7 +52,6 @@ use vulkano::{
     },
     sync::{self, GpuFuture},
 };
-use vulkano::command_buffer::{DrawIndexedIndirectCommand, PrimaryCommandBufferAbstract};
 
 use ash::vk;
 
@@ -205,45 +205,6 @@ mod brdf_lut_comp {
 
 // ── Public re-exports (was in old mod.rs) ──────────────────────────────────
 
-use nalgebra_glm::vec3 as glm_vec3;
-
-#[derive(Default, Debug, Clone)]
-pub struct DirectionalLight {
-    pub position: [f32; 4],
-    pub color: [f32; 3],
-}
-
-impl DirectionalLight {
-    pub fn new(position: [f32; 4], color: [f32; 3]) -> DirectionalLight {
-        DirectionalLight { position, color }
-    }
-
-    pub fn get_position(&self) -> TVec3<f32> {
-        glm_vec3(self.position[0], self.position[1], self.position[2])
-    }
-}
-
-#[derive(Default, Debug, Clone)]
-pub struct PointLight {
-    pub position: [f32; 4],
-    pub color: [f32; 3],
-    pub intensity: f32,
-    pub radius: f32,
-}
-
-impl PointLight {
-    pub fn new(position: [f32; 4], color: [f32; 3], intensity: f32, radius: f32) -> PointLight {
-        PointLight {
-            position,
-            color,
-            intensity,
-            radius,
-        }
-    }
-}
-
-// ── Internal types ─────────────────────────────────────────────────────────
-
 const SHADOW_MAP_SIZE: u32 = 4096;
 
 #[derive(Debug, Clone)]
@@ -277,6 +238,7 @@ impl VP {
 pub struct CulledDrawBuffers {
     pub indirect: Subbuffer<[DrawIndexedIndirectCommand]>,
     pub draw_data: Subbuffer<[asset_manager::DrawData]>,
+    pub joint_matrices: Subbuffer<[[[f32; 4]; 4]]>,
 }
 
 // ── Renderer struct ────────────────────────────────────────────────────────
@@ -1090,10 +1052,7 @@ impl Renderer {
                     | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
                 ..Default::default()
             },
-            ambient_frag::Ambient_Data {
-                color,
-                intensity,
-            },
+            ambient_frag::Ambient_Data { color, intensity },
         )
         .unwrap();
     }

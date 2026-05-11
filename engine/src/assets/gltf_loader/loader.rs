@@ -1,9 +1,14 @@
 #![allow(dead_code)]
 use gltf;
+use gltf::animation::util::ReadOutputs;
 use image::{DynamicImage, GrayImage, ImageBuffer};
 use nalgebra_glm as glm;
 use std::sync::Arc;
 
+use crate::assets::animation::{
+    AnimationChannel, AnimationClip, Interpolation, NodeData, NodeTree, Skin,
+    SamplerOutput, TargetProperty,
+};
 use crate::assets::material::{Material, NormalMap, PbrMaterial};
 use crate::graphics::mesh::Mesh;
 use super::NormalVertex;
@@ -11,6 +16,9 @@ use super::NormalVertex;
 pub struct LoaderGLTF {
     color: [f32; 3],
     meshes: Vec<Mesh>,
+    pub node_tree: NodeTree,
+    pub skins: Vec<Skin>,
+    pub animations: Vec<AnimationClip>,
 }
 
 impl LoaderGLTF {
@@ -24,11 +32,27 @@ impl LoaderGLTF {
             }
         }
 
-        LoaderGLTF { color: custom_color, meshes }
+        let node_tree = build_node_tree(&doc);
+        let skins = load_skins(&doc, &buffers);
+        let animations = load_animations(&doc, &buffers);
+
+        LoaderGLTF { color: custom_color, meshes, node_tree, skins, animations }
     }
 
     pub fn get_meshes(&self) -> Vec<Mesh> {
         self.meshes.clone()
+    }
+
+    pub fn get_node_tree(&self) -> NodeTree {
+        self.node_tree.clone()
+    }
+
+    pub fn get_skins(&self) -> Vec<Skin> {
+        self.skins.clone()
+    }
+
+    pub fn get_animations(&self) -> Vec<AnimationClip> {
+        self.animations.clone()
     }
 
     pub fn as_normal_vertices(&self) -> Vec<NormalVertex> {
@@ -45,6 +69,8 @@ impl LoaderGLTF {
         ret
     }
 }
+
+// ── mesh loading ──────────────────────────────────────────────────────────────
 
 fn collect_meshes(
     node: &gltf::Node,
@@ -97,6 +123,20 @@ fn collect_meshes(
             .map(|t| t.collect())
             .unwrap_or_else(|| vec![[1.0, 0.0, 0.0, 1.0]; count]);
 
+        let joints_0: Vec<[u32; 4]> = reader
+            .read_joints(0)
+            .map(|j| {
+                j.into_u16()
+                    .map(|[a, b, c, d]| [a as u32, b as u32, c as u32, d as u32])
+                    .collect()
+            })
+            .unwrap_or_else(|| vec![[0, 0, 0, 0]; count]);
+
+        let weights_0: Vec<[f32; 4]> = reader
+            .read_weights(0)
+            .map(|w| w.into_f32().collect())
+            .unwrap_or_else(|| vec![[1.0, 0.0, 0.0, 0.0]; count]);
+
         let indices: Vec<u32> = reader
             .read_indices()
             .map(|i| i.into_u32().collect())
@@ -115,6 +155,8 @@ fn collect_meshes(
                     color,
                     uv: tex_coords[i],
                     tangent: [t.x, t.y, t.z, tangents[i][3]],
+                    joint_indices: joints_0[i],
+                    joint_weights: weights_0[i],
                 }
             })
             .collect();
@@ -131,6 +173,132 @@ fn collect_meshes(
         });
     }
 }
+
+// ── node tree ─────────────────────────────────────────────────────────────────
+
+fn build_node_tree(doc: &gltf::Document) -> NodeTree {
+    let mut nodes: Vec<NodeData> = doc
+        .nodes()
+        .map(|node| {
+            let (translation, rotation, scale) = node.transform().decomposed();
+            NodeData {
+                name: node.name().map(String::from),
+                translation,
+                rotation,
+                scale,
+                children: node.children().map(|c| c.index()).collect(),
+                parent: None,
+            }
+        })
+        .collect();
+
+    // fill in parent back-references
+    for i in 0..nodes.len() {
+        for child in nodes[i].children.clone() {
+            nodes[child].parent = Some(i);
+        }
+    }
+
+    let roots = nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| n.parent.is_none())
+        .map(|(i, _)| i)
+        .collect();
+
+    NodeTree { nodes, roots }
+}
+
+// ── skins ─────────────────────────────────────────────────────────────────────
+
+fn load_skins(doc: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Vec<Skin> {
+    doc.skins()
+        .map(|skin| {
+            let joints: Vec<usize> = skin.joints().map(|n| n.index()).collect();
+
+            let inverse_bind_matrices = skin
+                .reader(|buf| Some(&buffers[buf.index()]))
+                .read_inverse_bind_matrices()
+                .map(|iter| iter.collect())
+                .unwrap_or_else(|| joints.iter().map(|_| identity_mat4()).collect());
+
+            Skin {
+                name: skin.name().map(String::from),
+                joints,
+                inverse_bind_matrices,
+            }
+        })
+        .collect()
+}
+
+fn identity_mat4() -> [[f32; 4]; 4] {
+    [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+}
+
+// ── animations ────────────────────────────────────────────────────────────────
+
+fn load_animations(doc: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Vec<AnimationClip> {
+    doc.animations()
+        .map(|animation| {
+            let name = animation.name().map(String::from);
+
+            let channels: Vec<AnimationChannel> = animation
+                .channels()
+                .filter_map(|channel| {
+                    let property = match channel.target().property() {
+                        gltf::animation::Property::Translation => TargetProperty::Translation,
+                        gltf::animation::Property::Rotation => TargetProperty::Rotation,
+                        gltf::animation::Property::Scale => TargetProperty::Scale,
+                        gltf::animation::Property::MorphTargetWeights => return None,
+                    };
+
+                    let reader = channel.reader(|buf| Some(&buffers[buf.index()]));
+
+                    let inputs: Vec<f32> = reader.read_inputs()?.collect();
+
+                    let interpolation = match channel.sampler().interpolation() {
+                        gltf::animation::Interpolation::Linear => Interpolation::Linear,
+                        gltf::animation::Interpolation::Step => Interpolation::Step,
+                        gltf::animation::Interpolation::CubicSpline => Interpolation::CubicSpline,
+                    };
+
+                    let output = match reader.read_outputs()? {
+                        ReadOutputs::Translations(iter) => {
+                            SamplerOutput::Translations(iter.collect())
+                        }
+                        ReadOutputs::Rotations(r) => {
+                            SamplerOutput::Rotations(r.into_f32().collect())
+                        }
+                        ReadOutputs::Scales(iter) => SamplerOutput::Scales(iter.collect()),
+                        ReadOutputs::MorphTargetWeights(_) => return None,
+                    };
+
+                    Some(AnimationChannel {
+                        target_node: channel.target().node().index(),
+                        property,
+                        inputs,
+                        output,
+                        interpolation,
+                    })
+                })
+                .collect();
+
+            let duration = channels
+                .iter()
+                .flat_map(|c| c.inputs.iter().copied())
+                .fold(0.0f32, f32::max);
+
+            AnimationClip { name, duration, channels }
+        })
+        .collect()
+}
+
+// ── material loading ──────────────────────────────────────────────────────────
 
 fn gltf_image_to_dynamic(data: &gltf::image::Data) -> DynamicImage {
     use gltf::image::Format;
@@ -164,9 +332,11 @@ fn gltf_image_to_dynamic(data: &gltf::image::Data) -> DynamicImage {
                 ImageBuffer::from_raw(data.width, data.height, rgba).unwrap(),
             )
         }
-        _ => DynamicImage::ImageRgba8(
-            ImageBuffer::from_pixel(data.width, data.height, image::Rgba([255, 255, 255, 255])),
-        ),
+        _ => DynamicImage::ImageRgba8(ImageBuffer::from_pixel(
+            data.width,
+            data.height,
+            image::Rgba([255, 255, 255, 255]),
+        )),
     }
 }
 
@@ -183,34 +353,35 @@ fn load_material(material: &gltf::Material, images: &[gltf::image::Data]) -> Mat
     let metallic_factor = pbr.metallic_factor();
     let roughness_factor = pbr.roughness_factor();
 
-    let (metallic_texture, roughness_texture) = if let Some(info) = pbr.metallic_roughness_texture() {
-        let img = gltf_image_to_dynamic(&images[info.texture().source().index()]);
-        let rgba = img.to_rgba8();
+    let (metallic_texture, roughness_texture) =
+        if let Some(info) = pbr.metallic_roughness_texture() {
+            let img = gltf_image_to_dynamic(&images[info.texture().source().index()]);
+            let rgba = img.to_rgba8();
 
-        let metallic = if metallic_factor > 0.0 {
-            let mut gray = GrayImage::new(rgba.width(), rgba.height());
-            for (x, y, px) in rgba.enumerate_pixels() {
-                gray[(x, y)][0] = px[2]; // blue channel = metallic per glTF spec
-            }
-            Some(Arc::new(gray))
+            let metallic = if metallic_factor > 0.0 {
+                let mut gray = GrayImage::new(rgba.width(), rgba.height());
+                for (x, y, px) in rgba.enumerate_pixels() {
+                    gray[(x, y)][0] = px[2]; // blue channel = metallic per glTF spec
+                }
+                Some(Arc::new(gray))
+            } else {
+                None
+            };
+
+            let roughness = if roughness_factor > 0.0 {
+                let mut gray = GrayImage::new(rgba.width(), rgba.height());
+                for (x, y, px) in rgba.enumerate_pixels() {
+                    gray[(x, y)][0] = px[1]; // green channel = roughness per glTF spec
+                }
+                Some(Arc::new(gray))
+            } else {
+                None
+            };
+
+            (metallic, roughness)
         } else {
-            None
+            (None, None)
         };
-
-        let roughness = if roughness_factor > 0.0 {
-            let mut gray = GrayImage::new(rgba.width(), rgba.height());
-            for (x, y, px) in rgba.enumerate_pixels() {
-                gray[(x, y)][0] = px[1]; // green channel = roughness per glTF spec
-            }
-            Some(Arc::new(gray))
-        } else {
-            None
-        };
-
-        (metallic, roughness)
-    } else {
-        (None, None)
-    };
 
     let normal = material.normal_texture().map(|info| {
         let img = gltf_image_to_dynamic(&images[info.texture().source().index()]);

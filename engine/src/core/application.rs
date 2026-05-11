@@ -1,11 +1,12 @@
 use crate::assets::asset_manager::{self, AssetManager};
-use crate::graphics::renderer::{DirectionalLight, PointLight};
 use crate::graphics::skybox::{HdrSkyboxImages, SkyboxImages};
 use crate::input::input_manager::InputManager;
 use crate::physics::physics_engine::PhysicsEngine;
 use crate::prelude::pointlight::Pointlight;
+use crate::scene::components::animator::Animator;
 use crate::scene::components::camera::Camera;
 use crate::scene::components::delta_time::DeltaTime;
+use crate::scene::components::directional_light::DirectionalLight;
 use crate::scene::components::object3d::Object3D;
 use crate::scene::components::transform::Transform;
 use nalgebra_glm::{look_at, vec3};
@@ -13,13 +14,13 @@ use sdl3::Sdl;
 use sdl3::event::{Event, WindowEvent};
 use sdl3::keyboard::Keycode;
 use sdl3::video::Window;
-use shipyard::{IntoIter, View, ViewMut, World};
+use shipyard::{Get, IntoIter, UniqueView, View, ViewMut, World};
 use vulkano::sync;
 use vulkano::sync::GpuFuture;
 
 use crate::graphics::renderer::{CulledDrawBuffers, Renderer};
 
-const PHYSICS_DT: f32 = 1.0 / 60.0;
+const PHYSICS_DT: f32 = 1.0 / 120.0;
 
 pub trait Game {
     fn on_init(&mut self);
@@ -78,6 +79,7 @@ impl<G: Game> Application<G> {
         self.game.get_world_mut().add_unique(AssetManager::new());
         self.game.get_world_mut().add_unique(InputManager::new());
         self.game.get_world_mut().add_unique(PhysicsEngine::new());
+        self.game.get_world_mut().add_unique(DirectionalLight::new([0.1, 1.0, 0.1, 1.0], [4.0, 4.0, 4.0]));
 
         self.game.on_init();
 
@@ -202,7 +204,7 @@ impl<G: Game> Application<G> {
                                 self.renderer.exposure = (self.renderer.exposure - 0.25);
                                 println!("Exposure: {:.2}", self.renderer.exposure);
                             }
-                            _ => {}
+                            _ => self.game.on_event(&event),
                         }
 
                         let mut input_manager = self
@@ -279,6 +281,7 @@ impl<G: Game> Application<G> {
             self.last_frame = std::time::Instant::now();
 
             self.game.on_update(dt);
+            self.update_animators(dt);
             self.game.on_render();
 
             self.previous_frame_end
@@ -286,8 +289,6 @@ impl<G: Game> Application<G> {
                 .take()
                 .unwrap()
                 .cleanup_finished();
-
-            let directional_light = DirectionalLight::new([0.1, 1.0, 0.1, 1.0], [4.0, 4.0, 4.0]);
 
             self.physics_accumulator += dt;
 
@@ -303,10 +304,11 @@ impl<G: Game> Application<G> {
 
             self.renderer.start();
             let culled = self.build_culled_draw_list();
-            self.render_shadows(&directional_light, culled.as_ref());
+            self.render_shadows(culled.as_ref());
             self.render_objects3d(culled.as_ref());
             self.renderer.ambient(&irradiance, &prefiltered, &brdf_lut);
-            self.renderer.directional(&directional_light);
+            self.render_directional();
+            //self.renderer.directional(&directional_light);
             self.render_pointlights();
             self.renderer.skybox(&mut skybox);
             //self.renderer.light_object(&directional_light);
@@ -340,31 +342,48 @@ impl<G: Game> Application<G> {
         let asset_manager = world.get_unique::<&AssetManager>().unwrap();
         let unified = asset_manager.get_unified_geometry();
 
-        let mut draw_list: Vec<(usize, Transform)> = Vec::new();
+        let mut draw_list: Vec<(usize, Transform, u32)> = Vec::new();
+        let mut all_joint_matrices: Vec<[[f32; 4]; 4]> = Vec::new();
 
-        world.run(|objects: View<Object3D>, transforms: View<Transform>| {
-            for (object, transform) in (&objects, &transforms).iter() {
-                if let Some(model) = asset_manager.get_model(&object.model) {
-                    for draw_idx in model.draw_range.clone() {
-                        draw_list.push((draw_idx, transform.clone()));
+        world.run(
+            |objects: View<Object3D>, transforms: View<Transform>, animators: View<Animator>| {
+                for (entity_id, (object, transform)) in (&objects, &transforms).iter().with_id() {
+                    if let Some(model) = asset_manager.get_model(&object.model) {
+                        let skin_offset = if let Ok(animator) = animators.get(entity_id) {
+                            let offset = all_joint_matrices.len() as u32;
+                            all_joint_matrices.extend_from_slice(animator.joint_matrices());
+                            offset
+                        } else {
+                            crate::assets::asset_manager::NO_SKIN
+                        };
+                        for draw_idx in model.draw_range.clone() {
+                            draw_list.push((draw_idx, transform.clone(), skin_offset));
+                        }
                     }
                 }
-            }
-        });
+            },
+        );
 
-        self.renderer.cull_pass(unified, &draw_list)
+        self.renderer
+            .cull_pass(unified, &draw_list, &all_joint_matrices)
     }
 
-    pub fn render_shadows(
-        &mut self,
-        directional_light: &DirectionalLight,
-        culled: Option<&CulledDrawBuffers>,
-    ) {
+    pub fn update_animators(&mut self, delta_time: f32) {
+        self.game
+            .get_world_mut()
+            .run(|mut animators: ViewMut<Animator>| {
+                for animator in (&mut animators).iter() {
+                    animator.update(delta_time);
+                }
+            });
+    }
+
+    pub fn render_shadows(&mut self, culled: Option<&CulledDrawBuffers>) {
         let world = self.game.get_world();
         let asset_manager = world.get_unique::<&AssetManager>().unwrap();
         let unified = asset_manager.get_unified_geometry();
-        self.renderer
-            .shadow_pass(directional_light, unified, culled);
+        let directional = world.get_unique::<&DirectionalLight>().unwrap();
+        self.renderer.shadow_pass(&directional, unified, culled);
     }
 
     pub fn render_objects3d(&mut self, culled: Option<&CulledDrawBuffers>) {
@@ -383,6 +402,13 @@ impl<G: Game> Application<G> {
                 self.renderer.pointlight(&object);
             }
         });
+    }
+
+    pub fn render_directional(&mut self) {
+        let world = self.game.get_world();
+
+        let directional = world.get_unique::<&DirectionalLight>().unwrap();
+        self.renderer.directional(&directional);
     }
 
     pub fn upload_samplers_objects3d(&mut self) {

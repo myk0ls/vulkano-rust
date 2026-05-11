@@ -6,6 +6,8 @@ layout(location = 1) in vec3 normal;
 layout(location = 2) in vec3 color;
 layout(location = 3) in vec2 uv;
 layout(location = 4) in vec4 tangent; // xyz = tangent dir, w = handedness (+/-1)
+layout(location = 5) in uvec4 joint_indices;
+layout(location = 6) in vec4 joint_weights;
 
 layout(location = 0) out vec3 out_color;
 layout(location = 1) out vec3 out_normal;
@@ -24,24 +26,49 @@ struct DrawData {
     mat4 model;
     mat4 normals;
     uint material_index;
+    uint skin_offset;
     uint _pad0;
     uint _pad1;
-    uint _pad2;
 };
 
 layout(set = 2, binding = 0) readonly buffer DrawDataBuffer {
     DrawData draws[];
 } draw_data;
 
+layout(set = 2, binding = 1) readonly buffer JointMatrices {
+    mat4 matrices[];
+} joint_mats;
+
 void main() {
     DrawData d = draw_data.draws[gl_DrawIDARB];
-    vec4 frag_pos = d.model * vec4(position, 1.0);
+
+    vec4 local_pos;
+    vec3 local_normal;
+    vec3 local_tangent;
+
+    if (d.skin_offset != 0xFFFFFFFFu) {
+        mat4 skin =
+            joint_weights.x * joint_mats.matrices[d.skin_offset + joint_indices.x] +
+            joint_weights.y * joint_mats.matrices[d.skin_offset + joint_indices.y] +
+            joint_weights.z * joint_mats.matrices[d.skin_offset + joint_indices.z] +
+            joint_weights.w * joint_mats.matrices[d.skin_offset + joint_indices.w];
+        local_pos    = skin * vec4(position, 1.0);
+        mat3 skin3   = mat3(skin);
+        local_normal  = normalize(skin3 * normal);
+        local_tangent = normalize(skin3 * tangent.xyz);
+    } else {
+        local_pos     = vec4(position, 1.0);
+        local_normal  = normal;
+        local_tangent = tangent.xyz;
+    }
+
+    vec4 frag_pos = d.model * local_pos;
     gl_Position = vp_uniforms.projection * vp_uniforms.view * frag_pos;
 
     mat3 normal_mat = mat3(transpose(inverse(d.model)));
     out_color = color;
-    out_normal = normalize(normal_mat * normal);
-    out_tangent = normalize(normal_mat * tangent.xyz);
+    out_normal = normalize(normal_mat * local_normal);
+    out_tangent = normalize(normal_mat * local_tangent);
     out_tangent_w = tangent.w;
     out_location = frag_pos;
     tex_coords = uv;

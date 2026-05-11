@@ -1,3 +1,4 @@
+pub mod animator;
 pub mod camera;
 pub mod delta_time;
 pub mod directional_light;

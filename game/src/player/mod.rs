@@ -1,5 +1,5 @@
 mod camera;
-mod interact;
+pub mod interact;
 mod movement;
 
 use nalgebra_glm::vec3;
@@ -8,7 +8,7 @@ use shipyard::{Component, IntoIter, Unique, View, ViewMut, World};
 
 // const MOVE_SPEED: f32 = 0.5;
 // const SENSITIVITY: f32 = 0.005;
-const MOVE_SPEED: f32 = 4.0;
+const MOVE_SPEED: f32 = 2.0;
 const SENSITIVITY: f32 = 0.005;
 
 #[derive(Component, Unique)]
@@ -23,5 +23,5 @@ impl Player {
 pub fn run_player_systems(world: &mut World) {
     world.run(camera::mouse_look);
     world.run(movement::player_movement);
-    world.run(interact::pointlight_toggle);
+    //world.run(interact::pointlight_toggle);
 }

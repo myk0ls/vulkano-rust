@@ -97,6 +97,12 @@ pub struct NormalVertex {
     /// Tangent vector (xyz) + handedness (w = +1 or -1) for TBN matrix construction
     #[format(R32G32B32A32_SFLOAT)]
     pub tangent: [f32; 4],
+    /// glTF JOINTS_0: indices into the skin's joint array (0 for non-skinned)
+    #[format(R32G32B32A32_UINT)]
+    pub joint_indices: [u32; 4],
+    /// glTF WEIGHTS_0: blend weights for each joint ([1,0,0,0] for non-skinned)
+    #[format(R32G32B32A32_SFLOAT)]
+    pub joint_weights: [f32; 4],
 }
 
 impl fmt::Display for DummyVertex {
