@@ -76,7 +76,7 @@ impl Game for MyGame {
         let player_entity = self.world.add_entity((
             Player::new(),
             Camera::new(vec3(0.0, -5.0, 0.0)),
-            Transform::with_pos(vec3(0.0, -5.0, 0.0)),
+            Transform::with_pos(vec3(0.0, -10.0, 0.0)),
             Velocity::new(),
             KinematicCharacterComponent::new(),
             RigidBodyComponent::new(RigidBodyType::KinematicVelocityBased),
@@ -141,12 +141,12 @@ impl Game for MyGame {
             5.0,
         ));
 
-        // let pointlight3 = &self.world.add_entity(Pointlight::new(
-        //     [7.0, 1.5, 0.0, 1.0],
-        //     [10.0, 1.0, 1.0],
-        //     5.0,
-        //     5.0,
-        // ));
+        let pointlight3 = &self.world.add_entity(Pointlight::new(
+            [7.0, 1.5, 0.0, 1.0],
+            [10.0, 1.0, 1.0],
+            5.0,
+            5.0,
+        ));
 
         // let bistro_scene = &self.world.add_entity((
         //     Transform::with_pos(vec3(0.0, 0.0, 0.0)),

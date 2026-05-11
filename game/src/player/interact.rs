@@ -19,19 +19,19 @@ pub fn pointlight_toggle(
 }
 
 pub fn rotate_directional_light_left(mut light: UniqueViewMut<DirectionalLight>) {
-    let step: f32 = 0.1;
+    let step: f32 = 0.05;
     let (sin, cos) = step.sin_cos();
-    let x = light.position[0];
+    let y = light.position[1];
     let z = light.position[2];
-    light.position[0] = cos * x - sin * z;
-    light.position[2] = sin * x + cos * z;
+    light.position[1] = cos * y - sin * z;
+    light.position[2] = sin * y + cos * z;
 }
 
 pub fn rotate_directional_light_right(mut light: UniqueViewMut<DirectionalLight>) {
-    let step: f32 = -0.1;
+    let step: f32 = -0.05;
     let (sin, cos) = step.sin_cos();
-    let x = light.position[0];
+    let y = light.position[1];
     let z = light.position[2];
-    light.position[0] = cos * x - sin * z;
-    light.position[2] = sin * x + cos * z;
+    light.position[1] = cos * y - sin * z;
+    light.position[2] = sin * y + cos * z;
 }

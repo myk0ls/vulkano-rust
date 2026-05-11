@@ -79,7 +79,9 @@ impl<G: Game> Application<G> {
         self.game.get_world_mut().add_unique(AssetManager::new());
         self.game.get_world_mut().add_unique(InputManager::new());
         self.game.get_world_mut().add_unique(PhysicsEngine::new());
-        self.game.get_world_mut().add_unique(DirectionalLight::new([0.1, 1.0, 0.1, 1.0], [4.0, 4.0, 4.0]));
+        self.game
+            .get_world_mut()
+            .add_unique(DirectionalLight::new([0.1, 1.0, 0.1, 1.0], [4.0, 4.0, 4.0]));
 
         self.game.on_init();
 
