@@ -58,6 +58,7 @@ pub struct MeshDrawInfo {
     pub vertex_offset: u32,
     pub vertex_count: u32,
     pub material_index: u32, // Index into material_data (and indirectly into textures via GpuMaterial)
+    pub is_skinned: bool,
 }
 
 pub struct Model {
@@ -218,6 +219,7 @@ impl AssetManager {
                     index_offset: current_index_offset,
                     index_count,
                     material_index: mat_idx,
+                    is_skinned: mesh.is_skinned,
                 });
 
                 // Compute object-space AABB from vertex positions.

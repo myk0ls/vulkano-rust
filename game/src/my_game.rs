@@ -1,4 +1,6 @@
 use crate::player;
+use crate::soldier;
+use crate::soldier::Soldier;
 use rapier3d::prelude::RigidBodyType;
 use rapier3d::prelude::SharedShape;
 use sdl3::{event::Event, keyboard::Keycode};
@@ -26,11 +28,11 @@ use nalgebra_glm::vec3;
 
 use crate::player::Player;
 
-pub struct MyGame {
+pub struct MyApp {
     world: World,
 }
 
-impl MyGame {
+impl MyApp {
     pub fn new() -> Self {
         Self {
             world: World::new(),
@@ -38,15 +40,30 @@ impl MyGame {
     }
 }
 
-impl Game for MyGame {
+impl Game for MyApp {
     fn on_init(&mut self) {
         println!("initialized!");
 
-        let suzanne = {
+        let horse = {
             let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
-            asset_manager.load_model("data/models/suzanne_2_material.glb")
-            //asset_manager.load_model("data/models/suzanne.glb")
+            asset_manager.load_model("data/models/Running_Horse_Animated.glb")
         };
+
+        let horse_animator = {
+            let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
+            asset_manager.create_animator(&horse)
+        };
+
+        // debug: show what clips were loaded
+        match &horse_animator {
+            Some(anim) => {
+                println!("[Animator] {} clip(s) loaded:", anim.clips.len());
+                for (i, clip) in anim.clips.iter().enumerate() {
+                    println!("  [{}] {:?}  ({:.2}s)", i, clip.name, clip.duration);
+                }
+            }
+            None => println!("[Animator] create_animator returned None — model has no skin!"),
+        }
 
         let soldier = {
             let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
@@ -94,14 +111,6 @@ impl Game for MyGame {
             ColliderComponent::new(SharedShape::capsule_y(1.0, 0.5)),
         ));
 
-        // let monkey_entity = &self.world.add_entity((
-        //     Transform::with_pos(vec3(0.0, -50.0, 0.0)),
-        //     Object3D::with_model(suzanne.clone()),
-        //     RigidBodyComponent::new(RigidBodyType::Dynamic),
-        //     //ColliderComponent::new(SharedShape::cuboid(0.5, 0.5, 0.5)),
-        //     ColliderComponent::new(SharedShape::ball(0.5)),
-        // ));
-
         let platform_ent = &self.world.add_entity((
             Transform::with_pos(vec3(0.0, 0.0, 0.0)),
             //Object3D::with_model(platform.clone()),
@@ -115,30 +124,26 @@ impl Game for MyGame {
         let soldier_entity = &self.world.add_entity((
             //Transform::with_pos_scale(vec3(0.0, -50.0, 0.0), 0.0125),
             //Object3D::with_model(dragon.clone()),
-            Transform::with_pos(vec3(0.0, -50.0, 0.0)),
+            Soldier::new(),
+            Transform::with_pos(vec3(-9.0, 0.0, 0.0)),
             Object3D::with_model(soldier.clone()),
-            RigidBodyComponent::new(RigidBodyType::Dynamic),
+            //RigidBodyComponent::new(RigidBodyType::Dynamic),
             //ColliderComponent::new(SharedShape::ball(0.45)),
-            ColliderComponent::new(SharedShape::capsule_z(0.2, 0.1)),
+            //ColliderComponent::new(SharedShape::capsule_z(0.2, 0.1)),
             soldier_animator.unwrap(),
+        ));
+
+        let dragon_entity = &self.world.add_entity((
+            Transform::with_pos_scale(vec3(0.0, -50.0, 0.0), 0.0125),
+            Object3D::with_model(dragon.clone()),
+            RigidBodyComponent::new(RigidBodyType::Dynamic),
+            ColliderComponent::new(SharedShape::ball(0.45)),
         ));
 
         let sponza_scene = &self.world.add_entity((
             Transform::with_pos(vec3(0.0, 0.0, 0.0)),
             Object3D::with_model(sponza.clone()),
         ));
-
-        // let utensils = &self.world.add_entity((
-        //     Transform::with_pos_scale(vec3(0.0, -1.25, 0.0), 2.0),
-        //     Object3D::with_model(uten.clone()),
-        // ));
-
-        // let sphere_entity = &self.world.add_entity((
-        //     Transform::with_pos(vec3(0.0, -20.0, 0.0)),
-        //     Object3D::with_model(sphere.clone()),
-        //     RigidBodyComponent::new(RigidBodyType::Dynamic),
-        //     ColliderComponent::new(SharedShape::ball(0.5)),
-        // ));
 
         let pointlight = &self.world.add_entity(Pointlight::new(
             [0.0, 1.5, 0.0, 1.0],
@@ -165,18 +170,6 @@ impl Game for MyGame {
         //     Transform::with_pos(vec3(0.0, 0.0, 0.0)),
         //     Object3D::with_model(bistro.clone()),
         // ));
-
-        // let monkey_entity3 = &self.world.add_entity((
-        //     Transform::with_pos(vec3(0.0, 0.0, 4.0)),
-        //     Object3D::with_model(suzanne.clone()),
-        // ));
-
-        // for n in 5..100 {
-        //     &self.world.add_entity((
-        //         Transform::with_pos(vec3(0.0, 0.0, n as f32)),
-        //         Object3D::with_model(suzanne.clone()),
-        //     ));
-        // }
     }
 
     fn on_update(&mut self, _delta_time: f32) {
@@ -186,6 +179,7 @@ impl Game for MyGame {
         //self.world.run(move_suzanne);
 
         player::run_player_systems(&mut self.world);
+        soldier::run_soldier_systems(&mut self.world);
         //self.world.run(animate_soldier);
     }
 
@@ -251,27 +245,18 @@ pub fn move_suzanne(
     }
 }
 
-pub fn animate_soldier_walk(mut animators: ViewMut<Animator>, dt: UniqueView<DeltaTime>) {
-    for animator in (&mut animators).iter() {
+pub fn animate_soldier_walk(mut soldiers: ViewMut<Soldier>, mut animators: ViewMut<Animator>) {
+    for (mut soldier, mut animator) in (&mut soldiers, &mut animators).iter() {
+        soldier.is_walking = true;
+        soldier.is_running = false;
         animator.play_by_name("Walk");
-        println!(
-            "[Animator] after play: playing={}, clip={:?}, time={:.3}",
-            animator.playing,
-            animator.clip_name(),
-            animator.current_time
-        );
     }
 }
 
-pub fn animate_soldier_run(mut animators: ViewMut<Animator>, dt: UniqueView<DeltaTime>) {
-    for animator in (&mut animators).iter() {
-        println!("[Animator] not playing — calling play_by_name(\"Walk\")");
+pub fn animate_soldier_run(mut soldiers: ViewMut<Soldier>, mut animators: ViewMut<Animator>) {
+    for (mut soldier, mut animator) in (&mut soldiers, &mut animators).iter() {
+        soldier.is_running = true;
+        soldier.is_walking = false;
         animator.play_by_name("Run");
-        println!(
-            "[Animator] after play: playing={}, clip={:?}, time={:.3}",
-            animator.playing,
-            animator.clip_name(),
-            animator.current_time
-        );
     }
 }

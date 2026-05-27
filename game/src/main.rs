@@ -1,10 +1,12 @@
 mod my_game;
 mod player;
-use my_game::MyGame;
+mod soldier;
 use vulkano_engine::core::application::Application;
 
+use crate::my_game::MyApp;
+
 fn main() {
-    let mut game = MyGame::new();
-    let app = Application::new(game, "SDL3 + Vulkano", 1600, 900);
+    let client = MyApp::new();
+    let app = Application::new(client, "SDL3 + Vulkano", 1600, 900);
     app.run();
 }

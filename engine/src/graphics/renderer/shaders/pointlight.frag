@@ -22,16 +22,16 @@ const float PI = 3.14159265358979323846;
 
 // GGX normal distribution
 float D_GGX(float NdotH, float roughness) {
-    float a  = roughness * roughness;
+    float a = roughness * roughness;
     float a2 = a * a;
-    float d  = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
     return a2 / (PI * d * d);
 }
 
 // Smith GGX geometry term
 float G_Smith(float NdotV, float NdotL, float roughness) {
-    float r  = roughness + 1.0;
-    float k  = (r * r) / 8.0;
+    float r = roughness + 1.0;
+    float k = (r * r) / 8.0;
     float g1 = NdotV / (NdotV * (1.0 - k) + k);
     float g2 = NdotL / (NdotL * (1.0 - k) + k);
     return g1 * g2;
@@ -43,12 +43,13 @@ vec3 F_Schlick(float cosTheta, vec3 F0) {
 }
 
 void main() {
-    vec3 albedo    = subpassLoad(u_color).rgb;
-    vec3 N         = normalize(subpassLoad(u_normals).xyz);
-    vec3 fragPos   = subpassLoad(u_frag_location).xyz;
-    vec2 pbr       = subpassLoad(u_pbr).rg;
-    float metallic  = pbr.r;
+    vec3 albedo = subpassLoad(u_color).rgb;
+    vec3 N = normalize(subpassLoad(u_normals).xyz);
+    vec3 fragPos = subpassLoad(u_frag_location).xyz;
+    vec2 pbr = subpassLoad(u_pbr).rg;
+    float metallic = pbr.r;
     float roughness = pbr.g;
+    roughness = max(roughness, 0.15);
 
     vec3 lightDir = light.position.xyz - fragPos;
     float distance = length(lightDir);
@@ -68,7 +69,7 @@ void main() {
 
     float D = D_GGX(NdotH, roughness);
     float G = G_Smith(NdotV, NdotL, roughness);
-    vec3  F = F_Schlick(HdotV, F0);
+    vec3 F = F_Schlick(HdotV, F0);
 
     vec3 kD = (1.0 - F) * (1.0 - metallic);
     vec3 specular = (D * G * F) / max(4.0 * NdotV * NdotL, 0.001);

@@ -1,11 +1,3 @@
-// Copyright (c) 2022 taidaesal
-// Licensed under the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>
-
-//pub mod animation;
-//pub mod animator;
-//pub mod context;
-//pub mod skeleton;
 mod loader;
 use bytemuck::{Pod, Zeroable};
 pub use loader::LoaderGLTF;
@@ -20,9 +12,6 @@ use std::fmt;
 #[repr(C)]
 #[derive(Default, Clone, Copy, Vertex, BufferContents)]
 pub struct DummyVertex {
-    /// A regular position vector with the z-value shaved off for space.
-    /// This assumes the shaders will take a `vec2` and transform it as
-    /// needed.
     #[format(R32G32_SFLOAT)]
     pub position: [f32; 2],
 }
@@ -35,18 +24,6 @@ impl DummyVertex {
     /// This list will draw a square across the entire rendering area. This will
     /// cause the fragment shaders to execute on all pixels in the rendering
     /// area.
-    ///
-    /// # Example
-    ///
-    /// ```glsl
-    /// #version 450
-    ///
-    ///layout(location = 0) in vec2 position;
-    ///
-    ///void main() {
-    ///    gl_Position = vec4(position, 0.0, 1.0);
-    ///}
-    /// ```
     pub fn list() -> [DummyVertex; 6] {
         [
             DummyVertex {

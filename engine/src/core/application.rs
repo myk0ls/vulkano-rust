@@ -351,7 +351,7 @@ impl<G: Game> Application<G> {
             |objects: View<Object3D>, transforms: View<Transform>, animators: View<Animator>| {
                 for (entity_id, (object, transform)) in (&objects, &transforms).iter().with_id() {
                     if let Some(model) = asset_manager.get_model(&object.model) {
-                        let skin_offset = if let Ok(animator) = animators.get(entity_id) {
+                        let entity_skin_offset = if let Ok(animator) = animators.get(entity_id) {
                             let offset = all_joint_matrices.len() as u32;
                             all_joint_matrices.extend_from_slice(animator.joint_matrices());
                             offset
@@ -359,6 +359,14 @@ impl<G: Game> Application<G> {
                             crate::assets::asset_manager::NO_SKIN
                         };
                         for draw_idx in model.draw_range.clone() {
+                            // Only pass the skin offset for draws that actually have joint data.
+                            // Non-skinned primitives (e.g. rigid helmet attachments) must use
+                            // NO_SKIN so they don't incorrectly follow the root bone.
+                            let skin_offset = if unified.mesh_draws[draw_idx].is_skinned {
+                                entity_skin_offset
+                            } else {
+                                crate::assets::asset_manager::NO_SKIN
+                            };
                             draw_list.push((draw_idx, transform.clone(), skin_offset));
                         }
                     }

@@ -13,6 +13,8 @@ pub struct Mesh {
     pub normal_texture: Option<Arc<ImageView>>,
     /// Combined metallic-roughness texture (R=metallic, G=roughness, R8G8B8A8_UNORM)
     pub mr_texture: Option<Arc<ImageView>>,
+    /// True if this primitive has JOINTS_0/WEIGHTS_0 vertex attributes.
+    pub is_skinned: bool,
 }
 
 impl Mesh {}

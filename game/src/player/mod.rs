@@ -23,5 +23,4 @@ impl Player {
 pub fn run_player_systems(world: &mut World) {
     world.run(camera::mouse_look);
     world.run(movement::player_movement);
-    //world.run(interact::pointlight_toggle);
 }
