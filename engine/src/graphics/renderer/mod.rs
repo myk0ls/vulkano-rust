@@ -526,7 +526,10 @@ impl Renderer {
 
         let mut viewport = Viewport {
             offset: [0.0, 0.0],
-            extent: [1600.0, 900.0],
+            extent: [
+                swapchain.image_extent()[0] as f32,
+                swapchain.image_extent()[1] as f32,
+            ],
             depth_range: 0.0..=1.0,
         };
 

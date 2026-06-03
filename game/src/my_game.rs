@@ -67,7 +67,7 @@ impl Game for MyApp {
 
         let soldier = {
             let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();
-            asset_manager.load_model("data/models/Soldier.glb")
+            asset_manager.load_model("data/models/SoldierRe.glb")
         };
 
         let soldier_animator = {

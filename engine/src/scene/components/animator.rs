@@ -72,12 +72,12 @@ impl Animator {
             }
         }
 
-        // Sample all channels then apply — two steps to satisfy the borrow checker.
         let time = self.current_time;
+        let loop_dur = if self.looping { Some(duration) } else { None };
         let updates: Vec<(usize, NodeUpdate)> = self.clips[self.current_clip]
             .channels
             .iter()
-            .map(|ch| (ch.target_node, sample_channel(ch, time)))
+            .map(|ch| (ch.target_node, sample_channel(ch, time, loop_dur)))
             .collect();
 
         for (node_idx, update) in updates {
@@ -93,7 +93,6 @@ impl Animator {
     }
 
     /// The current joint matrices in column-major layout, ready to upload to a GPU buffer.
-    /// One matrix per joint in the skin; order matches `skin.joints`.
     pub fn joint_matrices(&self) -> &[[[f32; 4]; 4]] {
         &self.joint_matrices
     }
@@ -122,26 +121,34 @@ enum NodeUpdate {
     Scale([f32; 3]),
 }
 
-fn sample_channel(ch: &AnimationChannel, time: f32) -> NodeUpdate {
+fn sample_channel(ch: &AnimationChannel, time: f32, loop_dur: Option<f32>) -> NodeUpdate {
     match &ch.property {
         TargetProperty::Translation => {
-            NodeUpdate::Translation(sample_vec3(&ch.inputs, &ch.output, &ch.interpolation, time))
+            NodeUpdate::Translation(sample_vec3(&ch.inputs, &ch.output, &ch.interpolation, time, loop_dur))
         }
         TargetProperty::Rotation => {
-            NodeUpdate::Rotation(sample_quat(&ch.inputs, &ch.output, &ch.interpolation, time))
+            NodeUpdate::Rotation(sample_quat(&ch.inputs, &ch.output, &ch.interpolation, time, loop_dur))
         }
         TargetProperty::Scale => {
-            NodeUpdate::Scale(sample_vec3(&ch.inputs, &ch.output, &ch.interpolation, time))
+            NodeUpdate::Scale(sample_vec3(&ch.inputs, &ch.output, &ch.interpolation, time, loop_dur))
         }
     }
 }
 
-fn find_keyframes(inputs: &[f32], time: f32) -> (usize, usize, f32) {
+fn find_keyframes(inputs: &[f32], time: f32, loop_dur: Option<f32>) -> (usize, usize, f32) {
     if inputs.len() <= 1 || time <= inputs[0] {
         return (0, 0, 0.0);
     }
     let last = inputs.len() - 1;
     if time >= inputs[last] {
+        // When looping, interpolate from the last keyframe toward the first across the tail.
+        if let Some(dur) = loop_dur {
+            let tail = dur - inputs[last];
+            if tail > 1e-6 {
+                let alpha = ((time - inputs[last]) / tail).clamp(0.0, 1.0);
+                return (last, 0, alpha);
+            }
+        }
         return (last, last, 0.0);
     }
     let i = inputs.partition_point(|&t| t <= time).saturating_sub(1);
@@ -150,7 +157,7 @@ fn find_keyframes(inputs: &[f32], time: f32) -> (usize, usize, f32) {
     (i, j, alpha.clamp(0.0, 1.0))
 }
 
-fn sample_vec3(inputs: &[f32], output: &SamplerOutput, interp: &Interpolation, time: f32) -> [f32; 3] {
+fn sample_vec3(inputs: &[f32], output: &SamplerOutput, interp: &Interpolation, time: f32, loop_dur: Option<f32>) -> [f32; 3] {
     let vals: &[[f32; 3]] = match output {
         SamplerOutput::Translations(v) => v,
         SamplerOutput::Scales(v) => v,
@@ -159,12 +166,11 @@ fn sample_vec3(inputs: &[f32], output: &SamplerOutput, interp: &Interpolation, t
     if vals.is_empty() {
         return [0.0; 3];
     }
-    let (i, j, t) = find_keyframes(inputs, time);
+    let (i, j, t) = find_keyframes(inputs, time, loop_dur);
     match interp {
         Interpolation::Step => vals[i],
         Interpolation::Linear => lerp3(vals[i], vals[j], t),
         Interpolation::CubicSpline => {
-            // outputs are [in_tangent, value, out_tangent] per keyframe
             let a = vals.get(i * 3 + 1).copied().unwrap_or([0.0; 3]);
             let b = vals.get(j * 3 + 1).copied().unwrap_or([0.0; 3]);
             lerp3(a, b, t)
@@ -172,7 +178,7 @@ fn sample_vec3(inputs: &[f32], output: &SamplerOutput, interp: &Interpolation, t
     }
 }
 
-fn sample_quat(inputs: &[f32], output: &SamplerOutput, interp: &Interpolation, time: f32) -> [f32; 4] {
+fn sample_quat(inputs: &[f32], output: &SamplerOutput, interp: &Interpolation, time: f32, loop_dur: Option<f32>) -> [f32; 4] {
     let vals: &[[f32; 4]] = match output {
         SamplerOutput::Rotations(v) => v,
         _ => return [0.0, 0.0, 0.0, 1.0],
@@ -180,7 +186,7 @@ fn sample_quat(inputs: &[f32], output: &SamplerOutput, interp: &Interpolation, t
     if vals.is_empty() {
         return [0.0, 0.0, 0.0, 1.0];
     }
-    let (i, j, t) = find_keyframes(inputs, time);
+    let (i, j, t) = find_keyframes(inputs, time, loop_dur);
     match interp {
         Interpolation::Step => vals[i],
         Interpolation::Linear => slerp(vals[i], vals[j], t),
@@ -238,7 +244,6 @@ fn trs_to_mat4(t: [f32; 3], r: [f32; 4], s: [f32; 3]) -> glm::Mat4 {
 
 // ── matrix helpers ────────────────────────────────────────────────────────────
 
-/// Convert a nalgebra Mat4 to a column-major [[f32;4];4].
 fn to_cols(m: glm::Mat4) -> [[f32; 4]; 4] {
     let s = m.as_slice();
     [
@@ -249,7 +254,6 @@ fn to_cols(m: glm::Mat4) -> [[f32; 4]; 4] {
     ]
 }
 
-/// Flatten a column-major [[f32;4];4] for use with Mat4::from_column_slice.
 fn flatten(m: [[f32; 4]; 4]) -> [f32; 16] {
     [
         m[0][0], m[0][1], m[0][2], m[0][3],
