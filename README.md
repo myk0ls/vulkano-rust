@@ -10,6 +10,7 @@ A hobbyist 3D game engine written in Rust, built around Vulkan, ECS architecture
 - GPU resource management with descriptor indexing
 - Interactive 3D scene navigation
 - Multi-mesh scene rendering
+- SSAO, FXAA, ACES Filmic Tone mapping
 
 ## Technology Stack
 
