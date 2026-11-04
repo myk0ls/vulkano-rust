@@ -2,7 +2,24 @@
   "permissions": {
     "allow": [
       "Bash(cargo check *)",
-      "Bash(cargo build *)"
+      "Bash(cargo build *)",
+      "Bash(cargo --version)",
+      "Bash(rustc --version)",
+      "Bash(gcc --version)",
+      "Bash(rpm -q libshaderc libshaderc-devel glslc)",
+      "Bash(cargo search *)",
+      "Bash(CXXFLAGS=\"-include cstdint\" cargo build --release)",
+      "Bash(rpm -q SDL3 SDL3-devel)",
+      "Bash(cmake --version)",
+      "Bash(cargo info *)",
+      "Bash(curl -s https://index.crates.io/sd/l3/sdl3-src)",
+      "Bash(python3 -c \"import sys,json;print\\([json.loads\\(l\\)['vers'] for l in sys.stdin][:40]\\)\")",
+      "Read(//home/Mykolas/.cargo/registry/src/**)",
+      "Bash(sed -n 1,60p /tmp/vk-build.log | cut -c1-420)",
+      "Bash(grep -vE '^\\\\s|^warning|^$' /tmp/vk-run.log)",
+      "Bash(vulkaninfo)",
+      "Bash(awk '/supportedUsageFlags/{c++; if\\(c<=1\\){p=12}} p>0{print; p--}')",
+      "Bash(env)"
     ]
   }
 }

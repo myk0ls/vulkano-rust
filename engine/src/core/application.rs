@@ -1,5 +1,5 @@
 use crate::assets::asset_manager::{self, AssetManager};
-use crate::graphics::skybox::{HdrSkyboxImages, SkyboxImages};
+use crate::graphics::skybox::{HdrSkyboxImages, Skybox, SkyboxImages};
 use crate::input::input_manager::InputManager;
 use crate::physics::physics_engine::PhysicsEngine;
 use crate::prelude::pointlight::Pointlight;
@@ -15,10 +15,13 @@ use sdl3::event::{Event, WindowEvent};
 use sdl3::keyboard::Keycode;
 use sdl3::video::Window;
 use shipyard::{Get, IntoIter, UniqueView, View, ViewMut, World};
+use std::sync::Arc;
+use vulkano::image::view::ImageView;
 use vulkano::sync;
 use vulkano::sync::GpuFuture;
 
-use crate::graphics::renderer::{CulledDrawBuffers, Renderer};
+use crate::graphics::renderer::{CulledDrawBuffers, Renderer, RendererConfig};
+use crate::scene::scene_file::Environment;
 
 const PHYSICS_DT: f32 = 1.0 / 120.0;
 
@@ -31,18 +34,38 @@ pub trait Game {
     fn get_world_mut(&mut self) -> &mut World;
 }
 
+/// The sky and the lighting data baked from it.
+pub struct BakedEnvironment {
+    pub skybox: Skybox,
+    pub irradiance: Skybox,
+    pub prefiltered: Skybox,
+    pub brdf_lut: Arc<ImageView>,
+}
+
 pub struct Application<G: Game> {
     pub game: G,
     pub last_frame: std::time::Instant,
-    pub sdl: Sdl,
-    pub window: Window,
-    pub renderer: Renderer,
     pub physics_accumulator: f32,
+    // Fields drop in declaration order. The frame future and renderer hold the
+    // swapchain, which must be destroyed before the window and SDL shut down.
     pub previous_frame_end: Option<Box<dyn vulkano::sync::GpuFuture>>,
+    pub renderer: Renderer,
+    pub window: Window,
+    pub sdl: Sdl,
 }
 
 impl<G: Game> Application<G> {
     pub fn new(game: G, title: &str, width: u32, height: u32) -> Self {
+        Self::with_config(game, title, width, height, RendererConfig::default())
+    }
+
+    pub fn with_config(
+        game: G,
+        title: &str,
+        width: u32,
+        height: u32,
+        config: RendererConfig,
+    ) -> Self {
         let sdl = sdl3::init().unwrap();
         let video = sdl.video().unwrap();
 
@@ -53,7 +76,7 @@ impl<G: Game> Application<G> {
             .build()
             .unwrap();
 
-        let mut renderer = Renderer::new(&window);
+        let mut renderer = Renderer::with_config(&window, config);
 
         renderer.set_view(&look_at(
             &vec3(0.0, 0.0, 0.1),
@@ -75,13 +98,47 @@ impl<G: Game> Application<G> {
         }
     }
 
+    /// Add the uniques every game and tool relies on.
+    pub fn add_engine_uniques(&mut self) {
+        let world = self.game.get_world_mut();
+        world.add_unique(AssetManager::new());
+        world.add_unique(InputManager::new());
+        world.add_unique(PhysicsEngine::new());
+        world.add_unique(DirectionalLight::new([0.1, 1.0, 0.1, 1.0], [4.0, 4.0, 4.0]));
+    }
+
+    /// Load the sky and bake the image-based lighting derived from it.
+    pub fn bake_environment(&mut self, hdr_path: &str) -> BakedEnvironment {
+        let hdr = HdrSkyboxImages::from_equirect(hdr_path, 512);
+        let skybox = self.renderer.upload_hdr_skybox(hdr);
+        let irradiance = self.renderer.bake_irradiance_map(&skybox);
+        let prefiltered = self.renderer.bake_prefiltered_env(&skybox);
+        let brdf_lut = self.renderer.bake_brdf_lut();
+        BakedEnvironment {
+            skybox,
+            irradiance,
+            prefiltered,
+            brdf_lut,
+        }
+    }
+
+    /// Record every scene pass for this frame. Does nothing if the frame was skipped.
+    pub fn render_scene(&mut self, env: &mut BakedEnvironment) {
+        if !self.renderer.frame_active() {
+            return;
+        }
+        let culled = self.build_culled_draw_list();
+        self.render_shadows(culled.as_ref());
+        self.render_objects3d(culled.as_ref());
+        self.renderer
+            .ambient(&env.irradiance, &env.prefiltered, &env.brdf_lut);
+        self.render_directional();
+        self.render_pointlights();
+        self.renderer.skybox(&mut env.skybox);
+    }
+
     pub fn run(mut self) {
-        self.game.get_world_mut().add_unique(AssetManager::new());
-        self.game.get_world_mut().add_unique(InputManager::new());
-        self.game.get_world_mut().add_unique(PhysicsEngine::new());
-        self.game
-            .get_world_mut()
-            .add_unique(DirectionalLight::new([0.1, 1.0, 0.1, 1.0], [4.0, 4.0, 4.0]));
+        self.add_engine_uniques();
 
         self.game.on_init();
 
@@ -92,14 +149,14 @@ impl<G: Game> Application<G> {
 
         self.build_unified_geometry();
 
-        let hdr =
-            HdrSkyboxImages::from_equirect("data/skybox/citrus_orchard_road_puresky_4k.hdr", 512);
-        let mut skybox = self.renderer.upload_hdr_skybox(hdr);
-        let irradiance = self.renderer.bake_irradiance_map(&skybox);
-        let prefiltered = self.renderer.bake_prefiltered_env(&skybox);
-        let brdf_lut = self.renderer.bake_brdf_lut();
+        let mut environment =
+            self.bake_environment("data/skybox/citrus_orchard_road_puresky_4k.hdr");
 
         self.renderer.set_ambient([1.0, 1.0, 1.0], 0.3);
+        // A scene file loaded in on_init overrides the defaults above.
+        if let Ok(env) = self.game.get_world().get_unique::<&Environment>() {
+            self.renderer.apply_environment(&env);
+        }
 
         crate::physics::physics_engine::physics_bodies_creation_system(self.game.get_world_mut());
 
@@ -305,15 +362,7 @@ impl<G: Game> Application<G> {
             }
 
             self.renderer.start();
-            let culled = self.build_culled_draw_list();
-            self.render_shadows(culled.as_ref());
-            self.render_objects3d(culled.as_ref());
-            self.renderer.ambient(&irradiance, &prefiltered, &brdf_lut);
-            self.render_directional();
-            //self.renderer.directional(&directional_light);
-            self.render_pointlights();
-            self.renderer.skybox(&mut skybox);
-            //self.renderer.light_object(&directional_light);
+            self.render_scene(&mut environment);
             self.renderer.finish(&mut self.previous_frame_end);
 
             self.update_camera_view();
@@ -339,7 +388,7 @@ impl<G: Game> Application<G> {
         });
     }
 
-    fn build_culled_draw_list(&mut self) -> Option<CulledDrawBuffers> {
+    pub fn build_culled_draw_list(&mut self) -> Option<CulledDrawBuffers> {
         let world = self.game.get_world();
         let asset_manager = world.get_unique::<&AssetManager>().unwrap();
         let unified = asset_manager.get_unified_geometry();
@@ -435,6 +484,21 @@ impl<G: Game> Application<G> {
                 }
             }
         });
+    }
+
+    /// Upload textures for every loaded model that doesn't have them yet, then rebuild
+    /// the shared geometry and material set. Call between frames after loading models.
+    pub fn sync_loaded_models(&mut self) {
+        {
+            let world = self.game.get_world();
+            let mut assets = world.get_unique::<&mut AssetManager>().unwrap();
+            for mesh in assets.models_mut().flat_map(|m| m.meshes.iter_mut()) {
+                if mesh.texture.is_none() {
+                    self.renderer.upload_texture_to_gpu(mesh);
+                }
+            }
+        }
+        self.build_unified_geometry();
     }
 
     pub fn build_unified_geometry(&mut self) {

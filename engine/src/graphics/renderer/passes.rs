@@ -191,6 +191,8 @@ impl Renderer {
         builder
             .bind_pipeline_graphics(self.deferred_pipeline.clone())
             .unwrap()
+            .set_viewport(0, [self.viewport.clone()].into_iter().collect())
+            .unwrap()
             .bind_vertex_buffers(0, vb)
             .unwrap()
             .bind_index_buffer(ib)
@@ -302,6 +304,8 @@ impl Renderer {
             .unwrap()
             .bind_pipeline_graphics(self.ambient_pipeline.clone())
             .unwrap()
+            .set_viewport(0, [self.viewport.clone()].into_iter().collect())
+            .unwrap()
             .bind_descriptor_sets(
                 PipelineBindPoint::Graphics,
                 self.ambient_pipeline.layout().clone(),
@@ -410,6 +414,8 @@ impl Renderer {
             .as_mut()
             .unwrap()
             .bind_pipeline_graphics(self.directional_pipeline.clone())
+            .unwrap()
+            .set_viewport(0, [self.viewport.clone()].into_iter().collect())
             .unwrap()
             .bind_vertex_buffers(0, self.dummy_verts.clone())
             .unwrap()
@@ -520,6 +526,8 @@ impl Renderer {
             .unwrap()
             .bind_pipeline_graphics(self.pointlight_pipeline.clone())
             .unwrap()
+            .set_viewport(0, [self.viewport.clone()].into_iter().collect())
+            .unwrap()
             .bind_vertex_buffers(0, self.dummy_verts.clone())
             .unwrap()
             .bind_descriptor_sets(
@@ -596,6 +604,8 @@ impl Renderer {
             .as_mut()
             .unwrap()
             .bind_pipeline_graphics(self.skybox_pipeline.clone())
+            .unwrap()
+            .set_viewport(0, [self.viewport.clone()].into_iter().collect())
             .unwrap()
             .bind_vertex_buffers(0, self.dummy_verts.clone())
             .unwrap()
@@ -849,7 +859,7 @@ impl Renderer {
                 RenderPassBeginInfo {
                     clear_values: vec![None],
                     ..RenderPassBeginInfo::framebuffer(
-                        self.composite_framebuffers[self.image_index as usize].clone(),
+                        self.composite_framebuffers[self.target_index()].clone(),
                     )
                 },
                 SubpassBeginInfo {
@@ -859,6 +869,8 @@ impl Renderer {
             )
             .unwrap()
             .bind_pipeline_graphics(self.composite_pipeline.clone())
+            .unwrap()
+            .set_viewport(0, [self.viewport.clone()].into_iter().collect())
             .unwrap()
             .bind_descriptor_sets(
                 PipelineBindPoint::Graphics,

@@ -1,13 +1,12 @@
 use std::sync::Arc;
 
 use nalgebra_glm::{half_pi, perspective};
-use sdl3::video::Window;
 use vulkano::{
     Validated, VulkanError,
     buffer::{Buffer, BufferCreateInfo, BufferUsage},
     descriptor_set::{DescriptorSet, WriteDescriptorSet},
     format::Format,
-    image::{Image, ImageCreateInfo, ImageUsage, view::ImageView},
+    image::{Image, ImageCreateInfo, ImageType, ImageUsage, view::ImageView},
     memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
     pipeline::{Pipeline, graphics::viewport::Viewport},
     render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass},
@@ -21,16 +20,7 @@ impl Renderer {
         self.render_stage = super::RenderStage::NeedsRedraw;
         self.commands = None;
 
-        let window = self
-            .surface
-            .object()
-            .unwrap()
-            .downcast_ref::<Window>()
-            .unwrap();
-        let image_extent: [u32; 2] = window.size().into();
-
-        let aspect_ratio = image_extent[0] as f32 / image_extent[1] as f32;
-        self.vp.projection = perspective(aspect_ratio, half_pi(), 0.01, 1000.0);
+        let image_extent: [u32; 2] = self.window.size().into();
 
         let (new_swapchain, new_images) = match self.swapchain.recreate(SwapchainCreateInfo {
             image_extent,
@@ -41,6 +31,61 @@ impl Renderer {
             Err(e) => panic!("Failed to recreate swapchain: {:?}", e),
         };
 
+        self.swapchain = new_swapchain;
+        self.swapchain_generation += 1;
+
+        // Off-screen targets are sized by the owner of the viewport, not the window.
+        if self.offscreen.is_none() {
+            let aspect_ratio = image_extent[0] as f32 / image_extent[1] as f32;
+            self.vp.projection = perspective(aspect_ratio, half_pi(), 0.01, 1000.0);
+            self.rebuild_render_targets(&new_images);
+        }
+        self.swapchain_images = new_images;
+
+        self.render_stage = super::RenderStage::Stopped;
+    }
+
+    /// Render the scene into an image of the given size instead of the swapchain.
+    /// May be called again to resize. Not valid while a frame is being recorded.
+    pub fn set_offscreen_extent(&mut self, extent: [u32; 2]) {
+        let extent = [extent[0].max(1), extent[1].max(1)];
+        let image = Image::new(
+            self.memory_allocator.clone(),
+            ImageCreateInfo {
+                image_type: ImageType::Dim2d,
+                format: self.composite_format,
+                extent: [extent[0], extent[1], 1],
+                usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::SAMPLED,
+                ..Default::default()
+            },
+            AllocationCreateInfo::default(),
+        )
+        .unwrap();
+        self.offscreen = Some(ImageView::new_default(image.clone()).unwrap());
+        self.rebuild_render_targets(&[image]);
+    }
+
+    /// The image the scene is composited into, when rendering off-screen.
+    pub fn offscreen_view(&self) -> Option<&Arc<ImageView>> {
+        self.offscreen.as_ref()
+    }
+
+    /// Size of the images the scene is currently rendered at.
+    pub fn render_extent(&self) -> [u32; 2] {
+        let extent = self.color_buffer.image().extent();
+        [extent[0], extent[1]]
+    }
+
+    /// Framebuffer index for this frame: off-screen rendering has a single target.
+    pub(super) fn target_index(&self) -> usize {
+        if self.offscreen.is_some() {
+            0
+        } else {
+            self.image_index as usize
+        }
+    }
+
+    fn rebuild_render_targets(&mut self, images: &[Arc<vulkano::image::Image>]) {
         let (
             new_framebuffers,
             new_composite_framebuffers,
@@ -55,14 +100,13 @@ impl Renderer {
             new_fxaa_image,
         ) = Renderer::window_size_dependent_setup(
             self.memory_allocator.clone(),
-            &new_images,
+            images,
             self.render_pass.clone(),
             self.composite_render_pass.clone(),
-            self.swapchain.image_format(),
+            self.composite_format,
             &mut self.viewport,
         );
 
-        self.swapchain = new_swapchain;
         self.framebuffers = new_framebuffers;
         self.composite_framebuffers = new_composite_framebuffers;
         self.scene_image = new_scene_image;
@@ -75,39 +119,8 @@ impl Renderer {
         self.ao_blurred_image = new_ao_blurred_image;
         self.fxaa_image = new_fxaa_image;
 
-        self.vp_buffer = Buffer::from_data(
-            self.memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::UNIFORM_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            deferred_vert::VP_Data {
-                view: self.vp.view.into(),
-                projection: self.vp.projection.into(),
-            },
-        )
-        .unwrap();
-
-        let vp_layout = self
-            .deferred_pipeline
-            .layout()
-            .set_layouts()
-            .get(0)
-            .unwrap();
-        self.vp_set = DescriptorSet::new(
-            self.descriptor_set_allocator.clone(),
-            vp_layout.clone(),
-            [WriteDescriptorSet::buffer(0, self.vp_buffer.clone())],
-            [],
-        )
-        .unwrap();
-
-        self.render_stage = super::RenderStage::Stopped;
+        let view = self.vp.view;
+        self.set_view(&view);
     }
 
     pub(super) fn window_size_dependent_setup(

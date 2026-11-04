@@ -420,6 +420,12 @@ impl Renderer {
     }
 
     pub fn build_bindless_material_set(&mut self, unified: &UnifiedGeometry) {
+        // Vulkan buffers cannot be empty; an empty scene simply has no material set.
+        if unified.material_data.is_empty() {
+            self.bindless_material_set = None;
+            return;
+        }
+
         let material_buffer = Buffer::from_iter(
             self.memory_allocator.clone(),
             BufferCreateInfo {

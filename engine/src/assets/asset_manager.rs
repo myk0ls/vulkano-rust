@@ -146,6 +146,10 @@ impl AssetManager {
         self.models.get_mut(&handle.id)
     }
 
+    pub fn models_mut(&mut self) -> impl Iterator<Item = &mut Model> {
+        self.models.values_mut()
+    }
+
     pub fn build_unified_geometry(&mut self, memory_allocator: Arc<StandardMemoryAllocator>) {
         let mut all_vertices: Vec<NormalVertex> = Vec::new();
         let mut all_indices: Vec<u32> = Vec::new();

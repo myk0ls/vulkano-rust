@@ -18,6 +18,7 @@ use vulkano_engine::scene::components::animator::Animator;
 use vulkano_engine::scene::components::delta_time::DeltaTime;
 use vulkano_engine::scene::components::directional_light::DirectionalLight;
 use vulkano_engine::scene::components::object3d::Object3D;
+use vulkano_engine::scene::scene_file::{SceneFile, to_engine_transform};
 
 use vulkano_engine::{
     core::application::Game,
@@ -30,19 +31,48 @@ use crate::player::Player;
 
 pub struct MyApp {
     world: World,
+    scene_path: Option<String>,
 }
 
 impl MyApp {
-    pub fn new() -> Self {
+    pub fn new(scene_path: Option<String>) -> Self {
         Self {
             world: World::new(),
+            scene_path,
         }
+    }
+
+    /// Load an editor-authored scene and put the player at its `PlayerSpawn` node.
+    fn init_from_scene(&mut self, path: &str) {
+        let scene = SceneFile::load(path).unwrap_or_else(|e| panic!("{e}"));
+        scene.instantiate(&mut self.world);
+
+        let spawn = scene
+            .node_named("PlayerSpawn")
+            .and_then(|node| scene.world_poses().get(&node.id).copied())
+            .map(|pose| to_engine_transform(&pose))
+            .unwrap_or_else(|| Transform::with_pos(vec3(0.0, -2.0, 0.0)));
+
+        self.world.add_entity((
+            Player::new(),
+            Camera::new(vec3(0.0, -5.0, 0.0)),
+            spawn,
+            Velocity::new(),
+            KinematicCharacterComponent::new(),
+            RigidBodyComponent::new(RigidBodyType::KinematicVelocityBased),
+            ColliderComponent::new(SharedShape::capsule_y(1.0, 0.5)),
+        ));
     }
 }
 
 impl Game for MyApp {
     fn on_init(&mut self) {
         println!("initialized!");
+
+        if let Some(path) = self.scene_path.clone() {
+            self.init_from_scene(&path);
+            return;
+        }
 
         let horse = {
             let mut asset_manager = self.world.get_unique::<&mut AssetManager>().unwrap();

@@ -1,0 +1,7 @@
+[env]
+# shaderc-sys 0.8.3 bundles a glslang that relies on <cstdint> being included
+# transitively, which is no longer the case on GCC 15+.
+CXXFLAGS = "-include cstdint"
+# The same bundled sources declare a cmake_minimum_required older than CMake 4
+# accepts.
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"

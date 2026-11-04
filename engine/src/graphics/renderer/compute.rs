@@ -14,7 +14,7 @@ impl Renderer {
         &mut self,
         commands: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     ) {
-        let dimensions = self.swapchain.image_extent();
+        let dimensions = self.render_extent();
 
         let layout = self.ao_pipeline.layout().set_layouts().get(0).unwrap();
         let ao_set = DescriptorSet::new(
@@ -68,7 +68,7 @@ impl Renderer {
         &mut self,
         commands: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     ) {
-        let dimensions = self.swapchain.image_extent();
+        let dimensions = self.render_extent();
         let layout = self.blur_pipeline.layout().set_layouts().get(0).unwrap();
         let groups = [(dimensions[0] + 15) / 16, (dimensions[1] + 15) / 16, 1];
 
@@ -163,7 +163,7 @@ impl Renderer {
         &self,
         commands: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     ) {
-        let dimensions = self.swapchain.image_extent();
+        let dimensions = self.render_extent();
         let layout = self.fxaa_pipeline.layout().set_layouts().get(0).unwrap();
         let fxaa_set = DescriptorSet::new(
             self.descriptor_set_allocator.clone(),

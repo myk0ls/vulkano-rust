@@ -60,6 +60,7 @@ use nalgebra_glm::TVec3 as Vec3;
 use crate::assets::asset_manager::{self, UnifiedGeometry};
 use crate::assets::gltf_loader::DummyVertex;
 use crate::scene::components::pointlight::Pointlight;
+use crate::scene::scene_file::Environment;
 use crate::scene::components::transform::Transform;
 
 // ── Shader modules ─────────────────────────────────────────────────────────
@@ -308,12 +309,46 @@ pub struct Renderer {
     pub exposure: f32,
     pub fxaa_enabled: bool,
     pub shadow_softness: f32,
+
+    pub(super) composite_format: Format,
+    pub(super) offscreen: Option<Arc<ImageView>>,
+    pub(super) swapchain_images: Vec<Arc<Image>>,
+    pub(super) swapchain_generation: u64,
+
+    // Declared last so the window outlives the Vulkan surface on drop.
+    pub(super) window: Window,
 }
 
 // ── Core impl ─────────────────────────────────────────────────────────────
 
+/// Options for applications that need more than the default game setup.
+#[derive(Clone)]
+pub struct RendererConfig {
+    pub present_mode: PresentMode,
+    /// Swapchain formats to try first; falls back to the surface's first format.
+    pub preferred_swapchain_formats: Vec<Format>,
+    pub swapchain_usage: ImageUsage,
+    /// Format the scene is composited to. Defaults to the swapchain format.
+    pub composite_format: Option<Format>,
+}
+
+impl Default for RendererConfig {
+    fn default() -> Self {
+        Self {
+            present_mode: PresentMode::Immediate,
+            preferred_swapchain_formats: Vec::new(),
+            swapchain_usage: ImageUsage::COLOR_ATTACHMENT,
+            composite_format: None,
+        }
+    }
+}
+
 impl Renderer {
     pub fn new(window: &Window) -> Renderer {
+        Self::with_config(window, RendererConfig::default())
+    }
+
+    pub fn with_config(window: &Window, config: RendererConfig) -> Renderer {
         let instance = {
             let library = VulkanLibrary::new().unwrap();
             let sdl_extensions = window.vulkan_instance_extensions().unwrap();
@@ -408,15 +443,17 @@ impl Renderer {
                 .physical_device()
                 .surface_capabilities(&surface, Default::default())
                 .unwrap();
-            let usage = caps.supported_usage_flags;
             let alpha = caps.supported_composite_alpha.into_iter().next().unwrap();
-            let image_format = Some(
-                device
-                    .physical_device()
-                    .surface_formats(&surface, Default::default())
-                    .unwrap()[0]
-                    .0,
-            );
+            let surface_formats = device
+                .physical_device()
+                .surface_formats(&surface, Default::default())
+                .unwrap();
+            let image_format = config
+                .preferred_swapchain_formats
+                .iter()
+                .copied()
+                .find(|wanted| surface_formats.iter().any(|(f, _)| f == wanted))
+                .or(Some(surface_formats[0].0));
             let image_extent: [u32; 2] = window.size().into();
             let aspect_ratio = image_extent[0] as f32 / image_extent[1] as f32;
             vp.projection = perspective(aspect_ratio, half_pi(), 0.01, 1000.0);
@@ -428,14 +465,16 @@ impl Renderer {
                     min_image_count: caps.min_image_count,
                     image_format: image_format.unwrap(),
                     image_extent,
-                    image_usage: usage,
+                    image_usage: config.swapchain_usage,
                     composite_alpha: alpha,
-                    present_mode: PresentMode::Immediate,
+                    present_mode: config.present_mode,
                     ..Default::default()
                 },
             )
             .unwrap()
         };
+
+        let composite_format = config.composite_format.unwrap_or(swapchain.image_format());
 
         let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
         let descriptor_set_allocator = Arc::new(StandardDescriptorSetAllocator::new(
@@ -540,7 +579,7 @@ impl Renderer {
             device.clone(),
             attachments: {
                 color: {
-                    format: swapchain.image_format(),
+                    format: composite_format,
                     samples: 1,
                     load_op: DontCare,
                     store_op: Store,
@@ -646,6 +685,29 @@ impl Renderer {
 
         // ── Window-size images and framebuffers ────────────────────────────
 
+        // The swapchain can't be a composite target if its format differs, so such
+        // setups render off-screen from the start.
+        let mut offscreen = None;
+        let initial_targets = if composite_format == swapchain.image_format() {
+            images.clone()
+        } else {
+            let [width, height] = swapchain.image_extent();
+            let image = Image::new(
+                memory_allocator.clone(),
+                ImageCreateInfo {
+                    image_type: vulkano::image::ImageType::Dim2d,
+                    format: composite_format,
+                    extent: [width, height, 1],
+                    usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::SAMPLED,
+                    ..Default::default()
+                },
+                AllocationCreateInfo::default(),
+            )
+            .unwrap();
+            offscreen = Some(ImageView::new_default(image.clone()).unwrap());
+            vec![image]
+        };
+
         let (
             framebuffers,
             composite_framebuffers,
@@ -660,10 +722,10 @@ impl Renderer {
             fxaa_image,
         ) = Renderer::window_size_dependent_setup(
             memory_allocator.clone(),
-            &images,
+            &initial_targets,
             render_pass.clone(),
             composite_render_pass.clone(),
-            swapchain.image_format(),
+            composite_format,
             &mut viewport,
         );
 
@@ -903,6 +965,11 @@ impl Renderer {
             exposure: 1.0,
             fxaa_enabled: true,
             shadow_softness: 2.0,
+            composite_format,
+            offscreen,
+            swapchain_images: images,
+            swapchain_generation: 0,
+            window: window.clone(),
         }
     }
 
@@ -952,6 +1019,23 @@ impl Renderer {
     }
 
     pub fn finish(&mut self, previous_frame_end: &mut Option<Box<dyn GpuFuture>>) {
+        self.finish_with(previous_frame_end, |_, _| {});
+    }
+
+    /// True between a successful `start` and `finish`. False when this frame was
+    /// skipped, for example because the swapchain had to be recreated.
+    pub fn frame_active(&self) -> bool {
+        self.commands.is_some()
+    }
+
+    /// Like `finish`, but lets the caller record extra commands (such as a UI pass)
+    /// after the scene is composited. The callback receives the swapchain image
+    /// index and only runs for frames that are actually presented.
+    pub fn finish_with(
+        &mut self,
+        previous_frame_end: &mut Option<Box<dyn GpuFuture>>,
+        overlay: impl FnOnce(&mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>, u32),
+    ) {
         match self.render_stage {
             RenderStage::Directional => {}
             RenderStage::LightObject => {}
@@ -975,6 +1059,7 @@ impl Renderer {
         self.dispatch_blur(&mut commands);
         self.dispatch_fxaa(&mut commands);
         self.composite(&mut commands);
+        overlay(&mut commands, self.image_index);
 
         let command_buffer = commands.build().unwrap();
         let af = self.acquire_future.take().unwrap();
@@ -1000,6 +1085,11 @@ impl Renderer {
 
         match future {
             Ok(future) => {
+                // Wait for the GPU so frames can't queue up ahead of it; the next
+                // frame then samples input as late as possible, reducing input lag.
+                if let Err(e) = future.wait(None) {
+                    println!("Failed to wait for frame: {:?}", e);
+                }
                 *previous_frame_end = Some(Box::new(future) as Box<_>);
             }
             Err(Validated::Error(VulkanError::OutOfDate)) => {
@@ -1025,15 +1115,15 @@ impl Renderer {
             Some([0.0, 0.0].into()),
             Some(1.0.into()),
         ];
+        let framebuffer = self.framebuffers[self.target_index()].clone();
+
         self.commands
             .as_mut()
             .unwrap()
             .begin_render_pass(
                 RenderPassBeginInfo {
                     clear_values,
-                    ..RenderPassBeginInfo::framebuffer(
-                        self.framebuffers[self.image_index as usize].clone(),
-                    )
+                    ..RenderPassBeginInfo::framebuffer(framebuffer)
                 },
                 SubpassBeginInfo {
                     contents: SubpassContents::Inline,
@@ -1041,6 +1131,42 @@ impl Renderer {
                 },
             )
             .unwrap();
+    }
+
+    pub fn swapchain_images(&self) -> &[Arc<Image>] {
+        &self.swapchain_images
+    }
+
+    pub fn swapchain_format(&self) -> Format {
+        self.swapchain.image_format()
+    }
+
+    pub fn swapchain_extent(&self) -> [u32; 2] {
+        self.swapchain.image_extent()
+    }
+
+    /// Incremented whenever the swapchain images are replaced.
+    pub fn swapchain_generation(&self) -> u64 {
+        self.swapchain_generation
+    }
+
+    pub fn descriptor_set_allocator(&self) -> Arc<StandardDescriptorSetAllocator> {
+        self.descriptor_set_allocator.clone()
+    }
+
+    /// Replace the projection used by subsequent frames.
+    pub fn set_projection(&mut self, projection: &TMat4<f32>) {
+        self.vp.projection = *projection;
+    }
+
+    /// Apply the renderer-side settings of a scene's environment.
+    pub fn apply_environment(&mut self, env: &Environment) {
+        self.exposure = env.exposure;
+        self.fxaa_enabled = env.fxaa;
+        self.shadow_softness = env.shadow_softness;
+        self.ao_radius = env.ao_radius;
+        self.ao_composite_scale = env.ao_strength;
+        self.set_ambient(env.ambient_color, env.ambient_intensity);
     }
 
     pub fn set_ambient(&mut self, color: [f32; 3], intensity: f32) {

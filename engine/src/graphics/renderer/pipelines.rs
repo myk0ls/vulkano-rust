@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use vulkano::pipeline::DynamicState;
 use vulkano::{
     device::Device,
     descriptor_set::layout::DescriptorBindingFlags,
@@ -76,6 +77,8 @@ pub(super) fn create_deferred(
         None,
         GraphicsPipelineCreateInfo {
             stages: stages.into_iter().collect(),
+            // Set per pass so render targets can be resized without rebuilding pipelines.
+            dynamic_state: [DynamicState::Viewport].into_iter().collect(),
             vertex_input_state: Some(vertex_input_state),
             input_assembly_state: Some(InputAssemblyState::default()),
             viewport_state: Some(ViewportState {
@@ -148,6 +151,8 @@ pub(super) fn create_directional(
         None,
         GraphicsPipelineCreateInfo {
             stages: stages.into_iter().collect(),
+            // Set per pass so render targets can be resized without rebuilding pipelines.
+            dynamic_state: [DynamicState::Viewport].into_iter().collect(),
             vertex_input_state: Some(vertex_input_state),
             input_assembly_state: Some(InputAssemblyState::default()),
             viewport_state: Some(ViewportState {
@@ -197,6 +202,8 @@ pub(super) fn create_pointlight(
         None,
         GraphicsPipelineCreateInfo {
             stages: stages.into_iter().collect(),
+            // Set per pass so render targets can be resized without rebuilding pipelines.
+            dynamic_state: [DynamicState::Viewport].into_iter().collect(),
             vertex_input_state: Some(vertex_input_state),
             input_assembly_state: Some(InputAssemblyState::default()),
             viewport_state: Some(ViewportState {
@@ -246,6 +253,8 @@ pub(super) fn create_ambient(
         None,
         GraphicsPipelineCreateInfo {
             stages: stages.into_iter().collect(),
+            // Set per pass so render targets can be resized without rebuilding pipelines.
+            dynamic_state: [DynamicState::Viewport].into_iter().collect(),
             vertex_input_state: Some(vertex_input_state),
             input_assembly_state: Some(InputAssemblyState::default()),
             viewport_state: Some(ViewportState {
@@ -350,6 +359,8 @@ pub(super) fn create_skybox(
         None,
         GraphicsPipelineCreateInfo {
             stages: stages.into_iter().collect(),
+            // Set per pass so render targets can be resized without rebuilding pipelines.
+            dynamic_state: [DynamicState::Viewport].into_iter().collect(),
             vertex_input_state: Some(vertex_input_state),
             input_assembly_state: Some(InputAssemblyState::default()),
             viewport_state: Some(ViewportState {
@@ -541,6 +552,8 @@ pub(super) fn create_composite(
         None,
         GraphicsPipelineCreateInfo {
             stages: stages.into_iter().collect(),
+            // Set per pass so render targets can be resized without rebuilding pipelines.
+            dynamic_state: [DynamicState::Viewport].into_iter().collect(),
             vertex_input_state: Some(VertexInputState::new()),
             input_assembly_state: Some(InputAssemblyState::default()),
             viewport_state: Some(ViewportState {
