@@ -98,7 +98,8 @@ void main() {
     float roughness = pbr.g;
 
     vec3 V = normalize(camera.position - fragPos);
-    vec3 L = normalize(directional.position.xyz);
+    // directional.position is the direction the light travels; L points toward the light.
+    vec3 L = normalize(-directional.position.xyz);
     vec3 H = normalize(V + L);
 
     float NdotL = max(dot(N, L), 0.0);
@@ -113,7 +114,7 @@ void main() {
     vec3 F = F_Schlick(HdotV, F0);
 
     vec3 kD = (1.0 - F) * (1.0 - metallic);
-    vec3 specular = (D * G * F) / max(4.0 * NdotV * NdotL, 0.001);
+    vec3 specular = ((D * G * F) / max(4.0 * NdotV * NdotL, 0.001) * 0.2);
 
     vec3 radiance = directional.color;
     vec3 Lo = (kD * albedo / PI + specular) * radiance * NdotL;

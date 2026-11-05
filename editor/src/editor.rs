@@ -5,16 +5,22 @@ use std::path::PathBuf;
 
 use egui::{Align, Button, Key, KeyboardShortcut, Layout, Modifiers, RichText, Ui};
 use egui_dock::{DockArea, DockState, NodeIndex, TabViewer};
-use vulkano_engine::scene::scene_file::{NodeId, NodeKind, NodeTransform, SceneFile};
+use shipyard::World;
+use vulkano_engine::scene::scene_file::{
+    ComponentData, ComponentRegistry, EntityData, FieldValue, SceneFile,
+};
 
+use crate::assets::ModelInfo;
 use crate::document::Document;
 use crate::log::Log;
+use crate::panels::entities::EntityListState;
 use crate::panels::filesystem::FileBrowser;
-use crate::panels::scene_tree::TreeState;
+use crate::panels::inspector::InspectorState;
+use crate::panels::scripts::{SCRIPTS_DIR, ScriptLibrary};
 use crate::panels::viewport::ViewportState;
-use crate::panels::{filesystem, inspector, output, scene_tree, viewport};
+use crate::panels::{entities, filesystem, inspector, output, scripts, viewport};
 use crate::runner::GameRunner;
-use crate::sync::ModelInfo;
+use crate::settings::Settings;
 use crate::theme;
 
 const SCENES_DIR: &str = "scenes";
@@ -22,7 +28,8 @@ const SCENES_DIR: &str = "scenes";
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Tab {
     Viewport,
-    Scene,
+    Script,
+    Entities,
     FileSystem,
     Inspector,
     Output,
@@ -48,7 +55,9 @@ pub enum Action {
 }
 
 pub enum Dialog {
-    CreateNode { parent: Option<NodeId>, search: String },
+    CreateEntity { search: String },
+    NewScript { name: String },
+    DeleteScript { path: String },
     OpenScene { files: Vec<PathBuf> },
     SaveAs { name: String, then: Option<Action> },
     Unsaved { then: Action },
@@ -58,10 +67,16 @@ pub enum Dialog {
 
 pub struct Editor {
     pub doc: Document,
+    pub registry: ComponentRegistry,
+    pub scripts: ScriptLibrary,
+    pub inspector: InspectorState,
+    /// A scene waiting to replace the current one once its models have loaded.
+    pub pending_open: Option<(SceneFile, Option<PathBuf>)>,
+    pub settings: Settings,
     pub log: Log,
     pub runner: GameRunner,
     pub viewport: ViewportState,
-    pub tree: TreeState,
+    pub list: EntityListState,
     pub files: FileBrowser,
     pub models: HashMap<String, ModelInfo>,
     pub dialog: Option<Dialog>,
@@ -71,31 +86,36 @@ pub struct Editor {
     pub quit: bool,
     pub frame_ms: f32,
     pub output_autoscroll: bool,
-    pub reload_requested: bool,
     pub frame_on_load: bool,
+    rename_requested: bool,
     dock: Option<DockState<Tab>>,
 }
 
 fn default_layout() -> DockState<Tab> {
-    let mut state = DockState::new(vec![Tab::Viewport]);
+    let mut state = DockState::new(vec![Tab::Viewport, Tab::Script]);
     let surface = state.main_surface_mut();
     let [center, _inspector] = surface.split_right(NodeIndex::root(), 0.78, vec![Tab::Inspector]);
-    let [center, left] = surface.split_left(center, 0.24, vec![Tab::Scene]);
+    let [center, left] = surface.split_left(center, 0.24, vec![Tab::Entities]);
     surface.split_below(left, 0.55, vec![Tab::FileSystem]);
     surface.split_below(center, 0.78, vec![Tab::Output]);
     state
 }
 
 impl Editor {
-    pub fn new() -> Self {
+    pub fn new(settings: Settings) -> Self {
         let mut log = Log::default();
-        log.info("Vulkano Editor ready. Open a scene from the FileSystem dock, or add a node to begin.");
+        log.info("Vulkano Editor ready. Open a scene from the FileSystem dock, or add an entity to begin.");
         Self {
             doc: Document::new(),
+            registry: vulkano_game::component_registry(),
+            scripts: ScriptLibrary::new(&settings),
+            inspector: InspectorState::default(),
+            pending_open: None,
+            settings,
             log,
             runner: GameRunner::new(),
             viewport: ViewportState::new(),
-            tree: TreeState::default(),
+            list: EntityListState::default(),
             files: FileBrowser::new(),
             models: HashMap::new(),
             dialog: None,
@@ -104,8 +124,8 @@ impl Editor {
             quit: false,
             frame_ms: 0.0,
             output_autoscroll: true,
-            reload_requested: false,
             frame_on_load: false,
+            rename_requested: false,
             dock: Some(default_layout()),
         }
     }
@@ -115,16 +135,16 @@ impl Editor {
         format!("{dirty}{} - Vulkano Editor", self.doc.title())
     }
 
-    pub fn ui(&mut self, root: &mut Ui) {
+    pub fn ui(&mut self, root: &mut Ui, world: &mut World) {
         let ctx = root.ctx().clone();
 
         egui::Panel::top("menu_bar")
-            .frame(egui::Frame::new().fill(theme::DARK).inner_margin(egui::Margin::symmetric(6, 4)))
+            .frame(egui::Frame::new().fill(theme::dark()).inner_margin(egui::Margin::symmetric(6, 4)))
             .show(root, |ui| self.top_bar(ui));
 
         let mut dock = self.dock.take().unwrap_or_else(default_layout);
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(theme::DARK))
+            .frame(egui::Frame::new().fill(theme::dark()))
             .show(root, |ui| {
                 DockArea::new(&mut dock)
                     .style(theme::dock_style(&ctx))
@@ -132,20 +152,21 @@ impl Editor {
                     .show_add_buttons(false)
                     .show_leaf_close_all_buttons(false)
                     .show_leaf_collapse_buttons(false)
-                    .show_inside(ui, &mut Tabs { editor: self });
+                    .show_inside(ui, &mut Tabs { editor: self, world: &mut *world });
             });
         // The layout can be reset from a menu while the dock is taken.
         if self.dock.is_none() {
             self.dock = Some(dock);
         }
 
-        self.dialogs(&ctx);
+        self.dialogs(&ctx, world);
         self.shortcuts(&ctx);
         self.busy_overlay(&ctx);
-        self.apply_actions();
+        self.apply_actions(world);
 
         // A drag or an in-progress text edit counts as one undo step.
         let interacting = ctx.input(|i| i.pointer.any_down()) || ctx.egui_wants_keyboard_input();
+        self.doc.refresh(world, &self.registry);
         self.doc.commit_changes(interacting);
     }
 
@@ -180,7 +201,18 @@ impl Editor {
             });
             ui.menu_button("View", |ui| {
                 ui.checkbox(&mut self.viewport.show_grid, "Grid");
-                ui.checkbox(&mut self.viewport.show_icons, "Node Icons");
+                ui.checkbox(&mut self.viewport.show_icons, "Entity Icons");
+                ui.separator();
+                ui.menu_button("Theme", |ui| {
+                    for choice in theme::Theme::ALL {
+                        if ui.radio(theme::current() == choice, choice.label()).clicked() {
+                            theme::apply(ui.ctx(), choice);
+                            self.settings.theme = choice.label().to_string();
+                            self.settings.save();
+                            ui.close();
+                        }
+                    }
+                });
                 ui.separator();
                 if ui.button("Reset Dock Layout").clicked() {
                     self.dock = Some(default_layout());
@@ -206,7 +238,7 @@ impl Editor {
                 if stop.clicked() {
                     self.actions.push(Action::Stop);
                 }
-                let play_color = if running { theme::TEXT_DIM } else { theme::PLAY };
+                let play_color = if running { theme::text_dim() } else { theme::play() };
                 let play = ui
                     .add(Button::new(RichText::new("▶").color(play_color)).min_size(egui::vec2(28.0, 22.0)))
                     .on_hover_text("Save and run this scene in the game (F5)");
@@ -215,7 +247,7 @@ impl Editor {
                 }
                 ui.add_space(8.0);
                 let dirty = if self.doc.is_dirty() { " (*)" } else { "" };
-                ui.label(RichText::new(format!("{}{dirty}", self.doc.title())).color(theme::TEXT_DIM));
+                ui.label(RichText::new(format!("{}{dirty}", self.doc.title())).color(theme::text_dim()));
             });
         });
     }
@@ -275,18 +307,13 @@ impl Editor {
                 self.actions.push(Action::DuplicateSelected);
             }
             if pressed(ctrl, Key::A) {
-                self.dialog = Some(Dialog::CreateNode {
-                    parent: self.doc.selection,
-                    search: String::new(),
-                });
+                self.dialog = Some(Dialog::CreateEntity { search: String::new() });
             }
             if pressed(Modifiers::NONE, Key::Delete) {
                 self.actions.push(Action::DeleteSelected);
             }
             if pressed(Modifiers::NONE, Key::F2) {
-                if let Some(node) = self.doc.selection.and_then(|id| self.doc.node(id)) {
-                    self.tree.begin_rename(node.id, node.name.clone());
-                }
+                self.rename_requested = true;
             }
         }
     }
@@ -307,14 +334,20 @@ impl Editor {
         self.dialog = Some(Dialog::SaveAs { name, then });
     }
 
-    fn apply_actions(&mut self) {
+    fn apply_actions(&mut self, world: &mut World) {
+        if std::mem::take(&mut self.rename_requested) {
+            if let Some(entity) = self.doc.selection {
+                let name = self.doc.display_name(world, entity);
+                self.list.begin_rename(entity, name);
+            }
+        }
         for action in std::mem::take(&mut self.actions) {
-            self.apply(action, false);
+            self.apply(action, false, world);
         }
     }
 
     /// Carry out an action. `discard` means the user already agreed to lose changes.
-    fn apply(&mut self, action: Action, discard: bool) {
+    fn apply(&mut self, action: Action, discard: bool, world: &mut World) {
         let replaces_doc = matches!(action, Action::NewScene | Action::OpenScene(_) | Action::Quit);
         if replaces_doc && !discard && self.doc.is_dirty() {
             self.dialog = Some(Dialog::Unsaved { then: action });
@@ -323,15 +356,15 @@ impl Editor {
 
         match action {
             Action::NewScene => {
-                self.doc = Document::new();
+                self.doc.open(world, &self.registry, SceneFile::default(), None);
+                self.list.reset();
                 self.log.info("New scene.");
             }
             Action::OpenScene(path) => match SceneFile::load(&path) {
                 Ok(scene) => {
-                    self.log.info(format!("Opened {}.", path.display()));
-                    self.doc = Document::from_scene(scene, Some(path));
-                    self.tree.reset();
-                    self.reload_requested = true;
+                    self.log.info(format!("Opening {}.", path.display()));
+                    self.pending_open = Some((scene, Some(path)));
+                    self.list.reset();
                     self.frame_on_load = true;
                 }
                 Err(e) => self.log.error(e),
@@ -352,16 +385,16 @@ impl Editor {
                 None => self.save_as_dialog(Some(Action::Play)),
             },
             Action::Stop => self.runner.stop(&mut self.log),
-            Action::Undo => self.doc.undo(),
-            Action::Redo => self.doc.redo(),
+            Action::Undo => self.doc.undo(world, &self.registry),
+            Action::Redo => self.doc.redo(world, &self.registry),
             Action::DeleteSelected => {
-                if let Some(id) = self.doc.selection {
-                    self.doc.remove_subtree(id);
+                if let Some(entity) = self.doc.selection {
+                    self.doc.delete(world, entity);
                 }
             }
             Action::DuplicateSelected => {
-                if let Some(id) = self.doc.selection {
-                    self.doc.duplicate(id);
+                if let Some(entity) = self.doc.selection {
+                    self.doc.duplicate(world, &self.registry, entity);
                 }
             }
             Action::AddModel { path, position } => {
@@ -369,16 +402,17 @@ impl Editor {
                     .file_stem()
                     .map(|s| s.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "Model".to_string());
-                let transform = NodeTransform {
-                    position: position.unwrap_or([0.0; 3]),
-                    ..Default::default()
+                // Editor positions are Y-up; components are in the engine's space.
+                let [x, y, z] = position.unwrap_or([0.0; 3]);
+                let data = EntityData {
+                    components: vec![
+                        ComponentData::named("Transform")
+                            .with("position", FieldValue::Vec3([x, -y + 0.0, z])),
+                        ComponentData::named("Object3D").with("model", FieldValue::Text(path)),
+                    ],
                 };
-                self.doc.add_node_at(
-                    None,
-                    &name,
-                    NodeKind::Model { path, animation: None },
-                    transform,
-                );
+                let entity = self.doc.create(world, &self.registry, &name, &data);
+                self.doc.wants_animator.insert(entity);
             }
         }
     }
@@ -406,21 +440,23 @@ impl Editor {
         });
     }
 
-    fn dialogs(&mut self, ctx: &egui::Context) {
+    fn dialogs(&mut self, ctx: &egui::Context, world: &mut World) {
         let Some(mut dialog) = self.dialog.take() else {
             return;
         };
         let keep = match &mut dialog {
-            Dialog::CreateNode { parent, search } => self.create_node_dialog(ctx, *parent, search),
+            Dialog::CreateEntity { search } => self.create_entity_dialog(ctx, world, search),
+            Dialog::NewScript { name } => self.new_script_dialog(ctx, name),
+            Dialog::DeleteScript { path } => self.delete_script_dialog(ctx, path),
             Dialog::OpenScene { files } => self.open_scene_dialog(ctx, files),
             Dialog::SaveAs { name, then } => self.save_as_ui(ctx, name, then),
-            Dialog::Unsaved { then } => self.unsaved_dialog(ctx, then),
+            Dialog::Unsaved { then } => self.unsaved_dialog(ctx, world, then),
             Dialog::Shortcuts => info_dialog(ctx, "Controls & Shortcuts", shortcuts_ui),
             Dialog::About => info_dialog(ctx, "About", |ui| {
                 ui.label("Vulkano Editor");
                 ui.label(
-                    RichText::new("A scene editor for the vulkano-engine, in the style of Godot.")
-                        .color(theme::TEXT_DIM),
+                    RichText::new("An entity and component editor for the vulkano-engine, in the style of Godot.")
+                        .color(theme::text_dim()),
                 );
             }),
         };
@@ -430,47 +466,106 @@ impl Editor {
         }
     }
 
-    fn create_node_dialog(
-        &mut self,
-        ctx: &egui::Context,
-        parent: Option<NodeId>,
-        search: &mut String,
-    ) -> bool {
+    fn create_entity_dialog(&mut self, ctx: &egui::Context, world: &mut World, search: &mut String) -> bool {
         let mut keep = true;
-        let modal = egui::Modal::new(egui::Id::new("create_node")).show(ctx, |ui| {
-            ui.set_width(340.0);
-            ui.heading("Create New Node");
+        let modal = egui::Modal::new(egui::Id::new("create_entity")).show(ctx, |ui| {
+            ui.set_width(380.0);
+            ui.heading("Add Entity");
             ui.add_space(4.0);
             let field = ui.add(egui::TextEdit::singleline(search).hint_text("Search…").desired_width(f32::INFINITY));
             field.request_focus();
             ui.add_space(4.0);
 
             let query = search.to_lowercase();
+            let templates = self.registry.templates().to_vec();
             let mut first = None;
             let mut choice = None;
-            for (index, (label, description)) in NODE_TYPES.iter().enumerate() {
-                if !label.to_lowercase().contains(&query) {
+            for template in &templates {
+                if !template.name.to_lowercase().contains(&query) {
                     continue;
                 }
-                first.get_or_insert(index);
+                first.get_or_insert(template);
                 let row = ui
-                    .add(Button::selectable(false, format!("{}  {label}", scene_tree::type_icon(index))).min_size(egui::vec2(ui.available_width(), 24.0)))
-                    .on_hover_text(*description);
+                    .add(Button::selectable(false, template.name).min_size(egui::vec2(ui.available_width(), 24.0)))
+                    .on_hover_text(template.description);
                 if row.clicked() {
-                    choice = Some(index);
+                    choice = Some(template);
                 }
             }
             ui.add_space(4.0);
             if ui.input(|i| i.key_pressed(Key::Enter)) {
                 choice = first;
             }
-            if let Some(index) = choice {
-                self.doc.add_node(parent, NODE_TYPES[index].0, node_kind(index));
+            if let Some(template) = choice {
+                self.doc.create(world, &self.registry, template.name, &template.data);
                 keep = false;
             }
             if ui.button("Cancel").clicked() {
                 keep = false;
             }
+        });
+        keep && !modal.should_close()
+    }
+
+    fn new_script_dialog(&mut self, ctx: &egui::Context, name: &mut String) -> bool {
+        let mut keep = true;
+        let modal = egui::Modal::new(egui::Id::new("new_script")).show(ctx, |ui| {
+            ui.set_width(380.0);
+            ui.heading("New Script");
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(format!("{SCRIPTS_DIR}/")).color(theme::text_dim()));
+                ui.add(egui::TextEdit::singleline(name).desired_width(220.0)).request_focus();
+                ui.label(RichText::new(".rhai").color(theme::text_dim()));
+            });
+            let cleaned = name.trim();
+            let valid = !cleaned.is_empty() && !cleaned.contains(['/', '\\']) && !cleaned.starts_with('.');
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                let enter = ui.input(|i| i.key_pressed(Key::Enter));
+                if (ui.add_enabled(valid, Button::new("Create")).clicked() || enter) && valid {
+                    match self.scripts.create(cleaned) {
+                        Ok(path) => {
+                            self.log.info(format!("Created {path}."));
+                            self.files.refresh();
+                            self.scripts.open_in_editor(&path, &mut self.log);
+                            keep = false;
+                        }
+                        Err(e) => self.log.error(e),
+                    }
+                }
+                if ui.button("Cancel").clicked() {
+                    keep = false;
+                }
+            });
+        });
+        keep && !modal.should_close()
+    }
+
+    fn delete_script_dialog(&mut self, ctx: &egui::Context, path: &str) -> bool {
+        let mut keep = true;
+        let modal = egui::Modal::new(egui::Id::new("delete_script")).show(ctx, |ui| {
+            ui.set_width(380.0);
+            ui.heading("Delete Script");
+            ui.add_space(4.0);
+            ui.label(format!("Permanently delete {path}?"));
+            ui.label(RichText::new("Entities using it will report that it is missing.").color(theme::text_dim()));
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Delete").clicked() {
+                    match self.scripts.delete(path) {
+                        Ok(()) => {
+                            self.log.info(format!("Deleted {path}."));
+                            self.files.refresh();
+                        }
+                        Err(e) => self.log.error(e),
+                    }
+                    keep = false;
+                }
+                if ui.button("Cancel").clicked() {
+                    keep = false;
+                }
+            });
         });
         keep && !modal.should_close()
     }
@@ -482,7 +577,7 @@ impl Editor {
             ui.heading("Open Scene");
             ui.add_space(4.0);
             if files.is_empty() {
-                ui.label(RichText::new(format!("No scenes in {SCENES_DIR}/ yet.")).color(theme::TEXT_DIM));
+                ui.label(RichText::new(format!("No scenes in {SCENES_DIR}/ yet.")).color(theme::text_dim()));
             }
             egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
                 for file in files {
@@ -509,16 +604,16 @@ impl Editor {
             ui.heading("Save Scene As");
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("{SCENES_DIR}/")).color(theme::TEXT_DIM));
+                ui.label(RichText::new(format!("{SCENES_DIR}/")).color(theme::text_dim()));
                 ui.add(egui::TextEdit::singleline(name).desired_width(220.0)).request_focus();
-                ui.label(RichText::new(".vscene").color(theme::TEXT_DIM));
+                ui.label(RichText::new(".vscene").color(theme::text_dim()));
             });
             let cleaned = name.trim();
             let valid = !cleaned.is_empty() && !cleaned.contains(['/', '\\']) && !cleaned.starts_with('.');
             let path = PathBuf::from(SCENES_DIR).join(format!("{cleaned}.vscene"));
             let exists = valid && path.exists() && self.doc.path.as_ref() != Some(&path);
             if exists {
-                ui.label(RichText::new("This will replace the existing file.").color(theme::WARNING));
+                ui.label(RichText::new("This will replace the existing file.").color(theme::warning()));
             }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -538,7 +633,7 @@ impl Editor {
         keep && !modal.should_close()
     }
 
-    fn unsaved_dialog(&mut self, ctx: &egui::Context, then: &Action) -> bool {
+    fn unsaved_dialog(&mut self, ctx: &egui::Context, world: &mut World, then: &Action) -> bool {
         let mut keep = true;
         let modal = egui::Modal::new(egui::Id::new("unsaved")).show(ctx, |ui| {
             ui.set_width(380.0);
@@ -552,7 +647,7 @@ impl Editor {
                         Some(path) => {
                             self.save_to(path);
                             if !self.doc.is_dirty() {
-                                self.apply(then.clone(), true);
+                                self.apply(then.clone(), true, world);
                             }
                         }
                         None => self.save_as_dialog(Some(then.clone())),
@@ -560,7 +655,7 @@ impl Editor {
                     keep = false;
                 }
                 if ui.button("Don't Save").clicked() {
-                    self.apply(then.clone(), true);
+                    self.apply(then.clone(), true, world);
                     keep = false;
                 }
                 if ui.button("Cancel").clicked() {
@@ -570,27 +665,6 @@ impl Editor {
         });
         keep && !modal.should_close()
     }
-}
-
-/// The node types offered by the Create New Node dialog.
-pub const NODE_TYPES: [(&str, &str); 2] = [
-    ("Node3D", "An empty transform, for grouping or marking a place. Name one PlayerSpawn to set where the game starts."),
-    ("PointLight", "A light that shines in all directions."),
-];
-
-fn node_kind(index: usize) -> NodeKind {
-    match index {
-        0 => NodeKind::Empty,
-        _ => NodeKind::PointLight {
-            color: [1.0, 1.0, 1.0],
-            intensity: 5.0,
-            radius: 5.0,
-        },
-    }
-}
-
-pub fn add_node_of_type(doc: &mut Document, parent: Option<NodeId>, index: usize) {
-    doc.add_node(parent, NODE_TYPES[index].0, node_kind(index));
 }
 
 fn info_dialog(ctx: &egui::Context, title: &str, contents: impl FnOnce(&mut Ui)) -> bool {
@@ -621,7 +695,7 @@ fn shortcuts_ui(ui: &mut Ui) {
         ("Ctrl while using a gizmo", "Snap"),
         ("", ""),
         ("Scene", ""),
-        ("Ctrl+A", "Add a node"),
+        ("Ctrl+A", "Add an entity"),
         ("Ctrl+D  /  Del  /  F2", "Duplicate, delete, rename"),
         ("Ctrl+Z  /  Ctrl+Y", "Undo, redo"),
         ("Ctrl+S  /  Ctrl+Shift+S", "Save, save as"),
@@ -630,10 +704,10 @@ fn shortcuts_ui(ui: &mut Ui) {
     egui::Grid::new("shortcuts").num_columns(2).spacing([24.0, 4.0]).show(ui, |ui| {
         for (keys, description) in rows {
             if description.is_empty() {
-                ui.label(RichText::new(keys).strong().color(theme::ACCENT));
+                ui.label(RichText::new(keys).strong().color(theme::accent()));
             } else {
                 ui.label(keys);
-                ui.label(RichText::new(description).color(theme::TEXT_DIM));
+                ui.label(RichText::new(description).color(theme::text_dim()));
             }
             ui.end_row();
         }
@@ -642,6 +716,7 @@ fn shortcuts_ui(ui: &mut Ui) {
 
 struct Tabs<'a> {
     editor: &'a mut Editor,
+    world: &'a mut World,
 }
 
 impl TabViewer for Tabs<'_> {
@@ -653,21 +728,23 @@ impl TabViewer for Tabs<'_> {
 
     fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
         match tab {
-            Tab::Viewport => "3D",
-            Tab::Scene => "Scene",
-            Tab::FileSystem => "FileSystem",
-            Tab::Inspector => "Inspector",
-            Tab::Output => "Output",
+            Tab::Viewport => "3D".to_string(),
+            Tab::Script => "Script".to_string(),
+            Tab::Entities => "Entities".to_string(),
+            Tab::FileSystem => "FileSystem".to_string(),
+            Tab::Inspector => "Inspector".to_string(),
+            Tab::Output => "Output".to_string(),
         }
         .into()
     }
 
     fn ui(&mut self, ui: &mut Ui, tab: &mut Tab) {
         match tab {
-            Tab::Viewport => viewport::ui(ui, self.editor),
-            Tab::Scene => scene_tree::ui(ui, self.editor),
+            Tab::Viewport => viewport::ui(ui, self.editor, self.world),
+            Tab::Script => scripts::ui(ui, self.editor),
+            Tab::Entities => entities::ui(ui, self.editor, self.world),
             Tab::FileSystem => filesystem::ui(ui, self.editor),
-            Tab::Inspector => inspector::ui(ui, self.editor),
+            Tab::Inspector => inspector::ui(ui, self.editor, self.world),
             Tab::Output => output::ui(ui, self.editor),
         }
     }
@@ -685,4 +762,3 @@ impl TabViewer for Tabs<'_> {
         *tab != Tab::Viewport
     }
 }
-

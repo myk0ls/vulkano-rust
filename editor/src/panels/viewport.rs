@@ -4,12 +4,17 @@ use egui::{Button, Color32, FontId, Key, PointerButton, Pos2, Rect, Sense, Strok
 use nalgebra_glm as glm;
 use transform_gizmo_egui::math::Transform as GizmoTransform;
 use transform_gizmo_egui::{Gizmo, GizmoConfig, GizmoExt, GizmoMode, GizmoOrientation};
-use vulkano_engine::scene::scene_file::{ColliderShape, NodeId, NodeKind, WorldPose};
+use shipyard::{EntityId, World};
+use vulkano_engine::physics::physics_engine::ColliderComponent;
+use vulkano_engine::scene::components::object3d::Object3D;
+use vulkano_engine::scene::components::pointlight::Pointlight;
+use vulkano_engine::scene::components::transform::Transform;
+use vulkano_engine::scene::scene_file::Hidden;
 
-use crate::camera::{OrbitCamera, Projector, Ray};
+use crate::camera::{OrbitCamera, Pose, Projector, Ray};
 use crate::editor::{Action, Editor};
+use crate::panels::entities::entity_icon;
 use crate::panels::filesystem::ModelDrag;
-use crate::panels::scene_tree::kind_icon;
 use crate::theme;
 
 pub const SCENE_TEXTURE_ID: u64 = 1;
@@ -61,8 +66,26 @@ impl ViewportState {
     }
 }
 
-pub fn ui(ui: &mut Ui, editor: &mut Editor) {
-    toolbar(ui, editor);
+/// Where an entity is, if it has a place: from its Transform, or a light's own position.
+pub fn entity_pose(world: &World, entity: EntityId) -> Option<Pose> {
+    if let Ok(transform) = world.get::<&Transform>(entity) {
+        return Some(Pose::from_engine(&transform));
+    }
+    let light = world.get::<&Pointlight>(entity).ok()?;
+    let [x, y, z, _] = light.position;
+    Some(Pose { position: glm::vec3(x, -y, z), rotation: glm::identity(), scale: 1.0 })
+}
+
+fn set_entity_pose(world: &World, entity: EntityId, pose: &Pose) {
+    if let Ok(mut transform) = world.get::<&mut Transform>(entity) {
+        pose.apply_to(&mut transform);
+    } else if let Ok(mut light) = world.get::<&mut Pointlight>(entity) {
+        light.position = [pose.position.x, -pose.position.y + 0.0, pose.position.z, 1.0];
+    }
+}
+
+pub fn ui(ui: &mut Ui, editor: &mut Editor, world: &mut World) {
+    toolbar(ui, editor, world);
 
     let rect = ui.available_rect_before_wrap();
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
@@ -80,39 +103,40 @@ pub fn ui(ui: &mut Ui, editor: &mut Editor) {
     );
     let painter = ui.painter_at(rect);
 
-    camera_input(ui, editor, &response);
+    camera_input(ui, editor, world, &response);
 
     let projector = editor.viewport.camera.projector(rect);
-    let poses = editor.doc.scene.world_poses();
-    let visible = editor.doc.scene.effective_visibility();
 
     if editor.viewport.show_grid {
         draw_grid(&painter, &projector, &editor.viewport.camera);
     }
 
-    // World-space drawing and picking need these before the gizmo runs.
-    let mut icon_hits: Vec<(NodeId, Pos2)> = Vec::new();
+    // Entities without a model get an icon, so they can be seen and clicked.
+    let mut icon_hits: Vec<(EntityId, Pos2)> = Vec::new();
     if editor.viewport.show_icons {
-        for node in &editor.doc.scene.nodes {
-            if matches!(node.kind, NodeKind::Model { .. }) || !visible[&node.id] {
+        for entity in editor.doc.order.iter().copied() {
+            if world.get::<&Object3D>(entity).is_ok() || world.get::<&Hidden>(entity).is_ok() {
                 continue;
             }
-            if let Some(pos) = projector.point(poses[&node.id].position) {
-                let (icon, color) = kind_icon(&node.kind);
+            let Some(pose) = entity_pose(world, entity) else {
+                continue;
+            };
+            if let Some(pos) = projector.point(pose.position) {
+                let (icon, color) = entity_icon(world, entity);
                 painter.circle_filled(pos, 10.0, Color32::from_black_alpha(140));
                 painter.text(pos, egui::Align2::CENTER_CENTER, icon, FontId::proportional(13.0), color);
-                icon_hits.push((node.id, pos));
+                icon_hits.push((entity, pos));
             }
         }
     }
 
-    if let Some(id) = editor.doc.selection {
-        if let Some(pose) = poses.get(&id) {
-            draw_selection(&painter, &projector, editor, id, pose);
+    if let Some(entity) = editor.doc.selection {
+        if let Some(pose) = entity_pose(world, entity) {
+            draw_selection(&painter, &projector, editor, world, entity, &pose);
         }
     }
 
-    let gizmo_busy = gizmo_ui(ui, editor, rect);
+    let gizmo_busy = gizmo_ui(ui, editor, world, rect);
 
     // Left click selects, unless it was the gizmo's click. The nearest thing wins:
     // icons are tested here and models by the main loop against real geometry.
@@ -142,7 +166,7 @@ pub fn ui(ui: &mut Ui, editor: &mut Editor) {
     overlay_text(&painter, editor, rect);
 }
 
-fn toolbar(ui: &mut Ui, editor: &mut Editor) {
+fn toolbar(ui: &mut Ui, editor: &mut Editor, world: &World) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         let state = &mut editor.viewport;
@@ -169,12 +193,12 @@ fn toolbar(ui: &mut Ui, editor: &mut Editor) {
         ui.add_space(8.0);
         let focus = ui.add_enabled(editor.doc.selection.is_some(), Button::new("Focus"));
         if focus.on_hover_text("Frame the selection (F)").clicked() {
-            focus_selection(editor);
+            focus_selection(editor, world);
         }
     });
 }
 
-fn camera_input(ui: &Ui, editor: &mut Editor, response: &egui::Response) {
+fn camera_input(ui: &Ui, editor: &mut Editor, world: &World, response: &egui::Response) {
     let hovered = response.contains_pointer();
     let typing = ui.ctx().egui_wants_keyboard_input() || editor.is_blocked_by_dialog();
     let (pointer_delta, scroll, secondary_pressed, secondary_down, middle_down, shift, ctrl, dt) =
@@ -246,48 +270,44 @@ fn camera_input(ui: &Ui, editor: &mut Editor, response: &egui::Response) {
                 if i.key_pressed(Key::R) { state.tool = Tool::Scale; }
             });
             if ui.input(|i| i.key_pressed(Key::F)) {
-                focus_selection(editor);
+                focus_selection(editor, world);
             }
         }
     }
 }
 
-/// The center and a radius for framing a node.
-fn focus_selection(editor: &mut Editor) {
-    let Some(id) = editor.doc.selection else {
+/// Frame the selected entity.
+fn focus_selection(editor: &mut Editor, world: &World) {
+    let Some(entity) = editor.doc.selection else {
         return;
     };
-    let poses = editor.doc.scene.world_poses();
-    let (Some(node), Some(pose)) = (editor.doc.node(id), poses.get(&id)) else {
+    let Some(pose) = entity_pose(world, entity) else {
         return;
     };
-    let (center, radius) = match &node.kind {
-        NodeKind::Model { path, .. } => match editor.models.get(path) {
-            Some(info) => {
-                let middle = (info.bounds_min + info.bounds_max) * 0.5;
-                let center = pose.matrix() * glm::vec4(middle.x, middle.y, middle.z, 1.0);
-                (center.xyz(), glm::length(&(info.bounds_max - info.bounds_min)) * 0.5 * pose.scale)
-            }
-            None => (pose.position, 1.0),
-        },
-        _ => (pose.position, 1.0),
+    let model = world.get::<&Object3D>(entity).ok().and_then(|o| editor.models.get(&o.model.id).cloned());
+    let (center, radius) = match model {
+        Some(info) => {
+            let middle = (info.bounds_min + info.bounds_max) * 0.5;
+            let center = pose.matrix() * glm::vec4(middle.x, middle.y, middle.z, 1.0);
+            (center.xyz(), glm::length(&(info.bounds_max - info.bounds_min)) * 0.5 * pose.scale)
+        }
+        None => (pose.position, 1.0),
     };
     editor.viewport.camera.focus(center, radius.max(0.25));
 }
 
 /// Point the camera so the whole scene is in view.
-pub fn frame_scene(editor: &mut Editor) {
-    let poses = editor.doc.scene.world_poses();
+pub fn frame_scene(editor: &mut Editor, world: &World) {
     let mut min = glm::vec3(f32::MAX, f32::MAX, f32::MAX);
     let mut max = glm::vec3(f32::MIN, f32::MIN, f32::MIN);
-    for node in &editor.doc.scene.nodes {
-        let NodeKind::Model { path, .. } = &node.kind else {
+    for entity in editor.doc.order.iter().copied() {
+        let Ok(object) = world.get::<&Object3D>(entity) else {
             continue;
         };
-        let Some(info) = editor.models.get(path) else {
+        let (Some(info), Some(pose)) = (editor.models.get(&object.model.id), entity_pose(world, entity)) else {
             continue;
         };
-        for corner in box_corners(&poses[&node.id].matrix(), info.bounds_min, info.bounds_max) {
+        for corner in box_corners(&pose.matrix(), info.bounds_min, info.bounds_max) {
             min = glm::min2(&min, &corner);
             max = glm::max2(&max, &corner);
         }
@@ -299,7 +319,7 @@ pub fn frame_scene(editor: &mut Editor) {
     }
 }
 
-fn gizmo_ui(ui: &mut Ui, editor: &mut Editor, rect: Rect) -> bool {
+fn gizmo_ui(ui: &mut Ui, editor: &mut Editor, world: &World, rect: Rect) -> bool {
     let state = &mut editor.viewport;
     if state.freelook {
         return false;
@@ -314,11 +334,10 @@ fn gizmo_ui(ui: &mut Ui, editor: &mut Editor, rect: Rect) -> bool {
         // The engine only supports uniform scale, so don't offer per-axis handles.
         Tool::Scale => GizmoMode::ScaleUniform.into(),
     };
-    let Some(id) = editor.doc.selection else {
+    let Some(entity) = editor.doc.selection else {
         return false;
     };
-    let poses = editor.doc.scene.world_poses();
-    let Some(pose) = poses.get(&id).copied() else {
+    let Some(pose) = entity_pose(world, entity) else {
         return false;
     };
 
@@ -347,8 +366,7 @@ fn gizmo_ui(ui: &mut Ui, editor: &mut Editor, rect: Rect) -> bool {
     let hit = result.is_some();
     if let Some((_, transforms)) = result {
         if let Some(moved) = transforms.first() {
-            let world = pose_from_gizmo(moved);
-            editor.doc.set_world_pose(id, &world);
+            set_entity_pose(world, entity, &pose_from_gizmo(moved));
         }
     }
     let state = &mut editor.viewport;
@@ -369,7 +387,7 @@ fn row_matrix(m: &glm::Mat4) -> mint::RowMatrix4<f64> {
     mint::RowMatrix4 { x: row(0), y: row(1), z: row(2), w: row(3) }
 }
 
-fn gizmo_transform(pose: &WorldPose) -> GizmoTransform {
+fn gizmo_transform(pose: &Pose) -> GizmoTransform {
     let rotation = glm::mat3_to_quat(&glm::mat4_to_mat3(&pose.rotation));
     let scale = pose.scale as f64;
     GizmoTransform::from_scale_rotation_translation(
@@ -390,14 +408,14 @@ fn gizmo_transform(pose: &WorldPose) -> GizmoTransform {
     )
 }
 
-fn pose_from_gizmo(transform: &GizmoTransform) -> WorldPose {
+fn pose_from_gizmo(transform: &GizmoTransform) -> Pose {
     let q = glm::quat(
         transform.rotation.v.x as f32,
         transform.rotation.v.y as f32,
         transform.rotation.v.z as f32,
         transform.rotation.s as f32,
     );
-    WorldPose {
+    Pose {
         position: glm::vec3(
             transform.translation.x as f32,
             transform.translation.y as f32,
@@ -439,8 +457,8 @@ fn draw_grid(painter: &egui::Painter, projector: &Projector, camera: &OrbitCamer
     }
     // The axes through the origin, in their usual colours.
     let axis = |c: Color32| Stroke::new(1.5, c.linear_multiply(0.7));
-    line(painter, projector, glm::vec3(cx - extent, 0.0, 0.0), glm::vec3(cx + extent, 0.0, 0.0), axis(theme::AXIS_X));
-    line(painter, projector, glm::vec3(0.0, 0.0, cz - extent), glm::vec3(0.0, 0.0, cz + extent), axis(theme::AXIS_Z));
+    line(painter, projector, glm::vec3(cx - extent, 0.0, 0.0), glm::vec3(cx + extent, 0.0, 0.0), axis(theme::axis_x()));
+    line(painter, projector, glm::vec3(0.0, 0.0, cz - extent), glm::vec3(0.0, 0.0, cz + extent), axis(theme::axis_z()));
 }
 
 fn line(painter: &egui::Painter, projector: &Projector, a: glm::Vec3, b: glm::Vec3, stroke: Stroke) {
@@ -449,32 +467,28 @@ fn line(painter: &egui::Painter, projector: &Projector, a: glm::Vec3, b: glm::Ve
     }
 }
 
-fn draw_selection(painter: &egui::Painter, projector: &Projector, editor: &Editor, id: NodeId, pose: &WorldPose) {
-    let Some(node) = editor.doc.node(id) else {
-        return;
-    };
-    if let NodeKind::Model { path, .. } = &node.kind {
-        if let Some(info) = editor.models.get(path) {
+fn draw_selection(painter: &egui::Painter, projector: &Projector, editor: &Editor, world: &World, entity: EntityId, pose: &Pose) {
+    if let Ok(object) = world.get::<&Object3D>(entity) {
+        if let Some(info) = editor.models.get(&object.model.id) {
             draw_box_corners(painter, projector, &pose.matrix(), info.bounds_min, info.bounds_max);
         }
     }
-    if let NodeKind::PointLight { radius, .. } = &node.kind {
-        draw_circles(painter, projector, pose, *radius, Stroke::new(1.0, theme::WARNING.linear_multiply(0.7)));
+    if let Ok(light) = world.get::<&Pointlight>(entity) {
+        draw_circles(painter, projector, pose, light.radius, Stroke::new(1.0, theme::warning().linear_multiply(0.7)));
     }
-    if let Some(physics) = &node.physics {
-        let stroke = Stroke::new(1.5, Color32::from_rgb(0x6e, 0xc8, 0xf0));
-        // Colliders don't scale with the node in the physics engine.
-        let unscaled = WorldPose { scale: 1.0, ..*pose };
-        match physics.collider {
-            ColliderShape::Cuboid { half_extents: [x, y, z] } => {
-                draw_box(painter, projector, &unscaled.matrix(), glm::vec3(-x, -y, -z), glm::vec3(x, y, z), stroke);
-            }
-            ColliderShape::Ball { radius } => draw_circles(painter, projector, &unscaled, radius, stroke),
-            ColliderShape::Capsule { half_height, radius } => {
-                let up = (unscaled.rotation * glm::vec4(0.0, half_height, 0.0, 0.0)).xyz();
-                for center in [unscaled.position + up, unscaled.position - up] {
-                    draw_circles(painter, projector, &WorldPose { position: center, ..unscaled }, radius, stroke);
-                }
+    if let Ok(collider) = world.get::<&ColliderComponent>(entity) {
+        let stroke = Stroke::new(1.5, theme::collider());
+        // Colliders don't scale with the transform in the physics engine.
+        let unscaled = Pose { scale: 1.0, ..*pose };
+        if let Some(cuboid) = collider.shape.as_cuboid() {
+            let half = cuboid.half_extents;
+            draw_box(painter, projector, &unscaled.matrix(), glm::vec3(-half.x, -half.y, -half.z), glm::vec3(half.x, half.y, half.z), stroke);
+        } else if let Some(ball) = collider.shape.as_ball() {
+            draw_circles(painter, projector, &unscaled, ball.radius, stroke);
+        } else if let Some(capsule) = collider.shape.as_capsule() {
+            let up = (unscaled.rotation * glm::vec4(0.0, capsule.half_height(), 0.0, 0.0)).xyz();
+            for center in [unscaled.position + up, unscaled.position - up] {
+                draw_circles(painter, projector, &Pose { position: center, ..unscaled }, capsule.radius, stroke);
             }
         }
     }
@@ -507,7 +521,7 @@ fn draw_box(painter: &egui::Painter, projector: &Projector, matrix: &glm::Mat4, 
 /// Godot's selection look: only the corners of the bounding box.
 fn draw_box_corners(painter: &egui::Painter, projector: &Projector, matrix: &glm::Mat4, min: glm::Vec3, max: glm::Vec3) {
     let corners = box_corners(matrix, min, max);
-    let stroke = Stroke::new(2.0, theme::SELECTION_OUTLINE);
+    let stroke = Stroke::new(2.0, theme::selection_outline());
     for (a, b) in BOX_EDGES {
         let (start, end) = (corners[a], corners[b]);
         line(painter, projector, start, start + (end - start) * 0.2, stroke);
@@ -515,7 +529,7 @@ fn draw_box_corners(painter: &egui::Painter, projector: &Projector, matrix: &glm
     }
 }
 
-fn draw_circles(painter: &egui::Painter, projector: &Projector, pose: &WorldPose, radius: f32, stroke: Stroke) {
+fn draw_circles(painter: &egui::Painter, projector: &Projector, pose: &Pose, radius: f32, stroke: Stroke) {
     const SEGMENTS: usize = 40;
     for plane in 0..3 {
         let point = |i: usize| {
@@ -536,7 +550,7 @@ fn draw_circles(painter: &egui::Painter, projector: &Projector, pose: &WorldPose
 
 fn model_drop(ui: &Ui, editor: &mut Editor, response: &egui::Response, projector: &Projector, rect: Rect) {
     if response.dnd_hover_payload::<ModelDrag>().is_some() {
-        ui.painter_at(rect).rect_stroke(rect.shrink(1.0), 0.0, Stroke::new(2.0, theme::ACCENT), egui::StrokeKind::Inside);
+        ui.painter_at(rect).rect_stroke(rect.shrink(1.0), 0.0, Stroke::new(2.0, theme::accent()), egui::StrokeKind::Inside);
     }
     if let Some(payload) = response.dnd_release_payload::<ModelDrag>() {
         let position = ui
@@ -556,16 +570,16 @@ fn overlay_text(painter: &egui::Painter, editor: &Editor, rect: Rect) {
         painter.text(pos + vec2(1.0, 1.0), align, &text, font.clone(), Color32::BLACK);
         painter.text(pos, align, text, font.clone(), color);
     };
-    shadowed(rect.left_top() + vec2(8.0, 6.0), egui::Align2::LEFT_TOP, "Perspective".to_string(), theme::TEXT);
+    shadowed(rect.left_top() + vec2(8.0, 6.0), egui::Align2::LEFT_TOP, "Perspective".to_string(), theme::text());
     let fps = if editor.frame_ms > 0.0 { 1000.0 / editor.frame_ms } else { 0.0 };
     shadowed(
         rect.right_top() + vec2(-8.0, 6.0),
         egui::Align2::RIGHT_TOP,
         format!("{fps:.0} FPS  {:.1} ms", editor.frame_ms),
-        theme::TEXT_DIM,
+        theme::text_dim(),
     );
     if editor.viewport.freelook {
         let speed = format!("Fly speed: {:.1} m/s (wheel to change)", editor.viewport.camera.fly_speed);
-        shadowed(rect.left_bottom() + vec2(8.0, -8.0), egui::Align2::LEFT_BOTTOM, speed, theme::ACCENT);
+        shadowed(rect.left_bottom() + vec2(8.0, -8.0), egui::Align2::LEFT_BOTTOM, speed, theme::accent());
     }
 }

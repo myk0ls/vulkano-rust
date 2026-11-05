@@ -2,139 +2,174 @@
     environment: (
         exposure: 1.0,
         ambient_color: (1.0, 1.0, 1.0),
-        ambient_intensity: 0.3,
-        sun_direction: (0.1, -1.0, 0.1),
+        ambient_intensity: 0.5,
+        sun_direction: (0.1, 1.0, 0.1),
         sun_color: (4.0, 4.0, 4.0),
         shadow_softness: 2.0,
         fxaa: true,
         ao_radius: 0.05,
         ao_strength: 1.0,
     ),
-    nodes: [
+    entities: [
         (
-            id: 1,
-            name: "Sponza",
-            parent: None,
-            transform: (
-                position: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0),
-                scale: 1.0,
-            ),
-            visible: true,
-            kind: Model(
-                path: "data/models/sponza_atrium_3.glb",
-                animation: None,
-            ),
-            physics: None,
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("Sponza")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((0.0, 0.0, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                ),
+                (
+                    component: "Object3D",
+                    fields: {"model": Text("data/models/sponza_atrium_3.glb")},
+                ),
+            ],
         ),
         (
-            id: 2,
-            name: "Floor",
-            parent: None,
-            transform: (
-                position: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0),
-                scale: 1.0,
-            ),
-            visible: true,
-            kind: Empty,
-            physics: Some((
-                body: Fixed,
-                collider: Cuboid(half_extents: (100.0, 0.1, 100.0)),
-            )),
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("Floor")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((0.0, 0.0, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                ),
+                (
+                    component: "RigidBody",
+                    fields: {"body_type": Text("Fixed")},
+                ),
+                (
+                    component: "Collider",
+                    fields: {"half_extents": Vec3((100.0, 0.1, 100.0)), "shape": Text("Box")},
+                ),
+            ],
         ),
         (
-            id: 3,
-            name: "PlayerSpawn",
-            parent: None,
-            transform: (
-                position: (-5.0, 3.0, 0.0),
-                rotation: (0.0, 0.0, 0.0),
-                scale: 1.0,
-            ),
-            visible: true,
-            kind: Empty,
-            physics: None,
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("Player")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((-5.0, -3.0, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                ),
+                (
+                    component: "Camera",
+                    fields: {"active": Bool(true), "far": Float(1000.0), "fov": Float(80.0), "near": Float(0.1), "pitch": Float(0.0), "yaw": Float(0.0)},
+                ),
+                (
+                    component: "Velocity",
+                    fields: {},
+                ),
+                (
+                    component: "RigidBody",
+                    fields: {"body_type": Text("KinematicVelocity")},
+                ),
+                (
+                    component: "Collider",
+                    fields: {"half_height": Float(1.0), "radius": Float(0.5), "shape": Text("Capsule")},
+                ),
+                (
+                    component: "KinematicCharacter",
+                    fields: {},
+                ),
+                (
+                    component: "Player",
+                    fields: {},
+                ),
+            ],
         ),
         (
-            id: 4,
-            name: "Soldier",
-            parent: None,
-            transform: (
-                position: (-3.0, 0.0, 0.0),
-                rotation: (0.0, 90.0, 0.0),
-                scale: 1.0,
-            ),
-            visible: true,
-            kind: Model(
-                path: "data/models/SoldierRe.glb",
-                animation: Some("Walk"),
-            ),
-            physics: None,
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("Soldier")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((-3.0, 0.0, 0.0)), "rotation": Vec3((0.0, 90.0, 0.0)), "scale": Float(1.0)},
+                ),
+                (
+                    component: "Object3D",
+                    fields: {"model": Text("data/models/SoldierRe.glb")},
+                ),
+                (
+                    component: "Animator",
+                    fields: {"clip": Text("Idle"), "looping": Bool(true)},
+                ),
+                (
+                    component: "Scripts",
+                    fields: {"scripts": Scripts([(path: "scripts/spin.rhai", exports: {"something": Bool(true)})])},
+                ),
+                (
+                    component: "Soldier",
+                    fields: {"direction": Float(1.0), "is_running": Bool(false), "is_walking": Bool(false)},
+                ),
+            ],
         ),
         (
-            id: 5,
-            name: "Lights",
-            parent: None,
-            transform: (
-                position: (0.0, 1.5, 0.0),
-                rotation: (0.0, 0.0, 0.0),
-                scale: 1.0,
-            ),
-            visible: true,
-            kind: Empty,
-            physics: None,
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("GreenLight")},
+                ),
+                (
+                    component: "Pointlight",
+                    fields: {"color": Vec3((1.0, 10.0, 1.0)), "intensity": Float(5.0), "position": Vec3((0.0, -1.5, 0.0)), "radius": Float(5.0)},
+                ),
+            ],
         ),
         (
-            id: 6,
-            name: "GreenLight",
-            parent: Some(5),
-            transform: (
-                position: (0.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0),
-                scale: 1.0,
-            ),
-            visible: true,
-            kind: PointLight(
-                color: (1.0, 10.0, 1.0),
-                intensity: 5.0,
-                radius: 5.0,
-            ),
-            physics: None,
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("BlueLight")},
+                ),
+                (
+                    component: "Pointlight",
+                    fields: {"color": Vec3((1.0, 1.0, 41.0)), "intensity": Float(5.0), "position": Vec3((-7.0, -1.5, 0.0)), "radius": Float(5.0)},
+                ),
+            ],
         ),
         (
-            id: 7,
-            name: "BlueLight",
-            parent: Some(5),
-            transform: (
-                position: (-7.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0),
-                scale: 1.0,
-            ),
-            visible: true,
-            kind: PointLight(
-                color: (1.0, 1.0, 41.0),
-                intensity: 5.0,
-                radius: 5.0,
-            ),
-            physics: None,
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("RedLight")},
+                ),
+                (
+                    component: "Pointlight",
+                    fields: {"color": Vec3((10.0, 1.0, 1.0)), "intensity": Float(5.0), "position": Vec3((7.0, -1.5, 0.0)), "radius": Float(5.0)},
+                ),
+            ],
         ),
         (
-            id: 8,
-            name: "RedLight",
-            parent: Some(5),
-            transform: (
-                position: (7.0, 0.0, 0.0),
-                rotation: (0.0, 0.0, 0.0),
-                scale: 1.0,
-            ),
-            visible: true,
-            kind: PointLight(
-                color: (10.0, 1.0, 1.0),
-                intensity: 5.0,
-                radius: 5.0,
-            ),
-            physics: None,
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("Dragon")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((0.0, -1.18163, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(0.01)},
+                ),
+                (
+                    component: "Object3D",
+                    fields: {"model": Text("data/models/stanford_dragon_pbr.glb")},
+                ),
+                (
+                    component: "RigidBody",
+                    fields: {"body_type": Text("Dynamic")},
+                ),
+                (
+                    component: "Collider",
+                    fields: {"radius": Float(0.5), "shape": Text("Ball")},
+                ),
+            ],
         ),
     ],
 )

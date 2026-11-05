@@ -1,5 +1,6 @@
 pub mod movement;
 
+use vulkano_engine::scene::scene_file::{EditableComponent, Field, FieldValue};
 use shipyard::{Component, IntoIter, Unique, View, ViewMut, World};
 
 #[derive(Component)]
@@ -15,6 +16,28 @@ impl Soldier {
             direction: 1.0,
             is_running: false,
             is_walking: false,
+        }
+    }
+}
+
+impl EditableComponent for Soldier {
+    const NAME: &'static str = "Soldier";
+    fn create() -> Self {
+        Soldier::new()
+    }
+    fn fields(&self) -> Vec<Field> {
+        vec![
+            Field::new("direction", FieldValue::Float(self.direction)),
+            Field::new("is_walking", FieldValue::Bool(self.is_walking)),
+            Field::new("is_running", FieldValue::Bool(self.is_running)),
+        ]
+    }
+    fn set_field(&mut self, name: &str, value: &FieldValue) {
+        match (name, value) {
+            ("direction", FieldValue::Float(v)) => self.direction = *v,
+            ("is_walking", FieldValue::Bool(v)) => self.is_walking = *v,
+            ("is_running", FieldValue::Bool(v)) => self.is_running = *v,
+            _ => {}
         }
     }
 }

@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 serde = { workspace = true }
 ron = { workspace = true }
+rhai = { workspace = true }
 bytemuck = { workspace = true }
 vulkano = { workspace = true }
 vulkano-shaders = { workspace = true }

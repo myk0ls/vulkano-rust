@@ -44,17 +44,17 @@ void main() {
 
     // Diffuse IBL
     vec3 kD = (1.0 - F) * (1.0 - metallic);
-    vec3 irr = texture(irradiance_map, N).rgb;
+    // The environment maps are Y-up, while everything else here is in engine space.
+    vec3 irr = texture(irradiance_map, vec3(N.x, -N.y, N.z)).rgb;
     vec3 diffuse = kD * irr * albedo;
 
     // Specular IBL (split-sum)
-    vec3 prefiltered = textureLod(prefiltered_env, R, roughness * MAX_REFLECTION_LOD).rgb;
+    vec3 prefiltered = textureLod(prefiltered_env, vec3(R.x, -R.y, R.z), roughness * MAX_REFLECTION_LOD).rgb;
     vec2 brdf = texture(brdf_lut, vec2(NdotV, roughness)).rg;
     vec3 specular = prefiltered * (F * brdf.x + brdf.y);
 
-    //vec3 ibl = diffuse * ambient.intensity + specular * (ambient.intensity * 0.15); //0.15
-    vec3 ambient_contrib = ambient.color * ambient.intensity;
-    vec3 ibl = diffuse + specular; //0.15
+    // Image-based lighting has no occlusion, so this is also how much sky reaches interiors.
+    vec3 ibl = (diffuse + specular) * ambient.color * ambient.intensity;
 
     f_color = vec4(ibl, 1.0);
     //f_color = vec4(albedo * 0.2, 1.0);

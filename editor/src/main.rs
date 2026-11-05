@@ -1,8 +1,10 @@
 //! A scene editor for the engine, with a layout and controls modelled on Godot.
 //!
-//! Usage: `vulkano-editor [scene.vscene] [--script steps.txt]`, run from the project
-//! root so that `data/` and `scenes/` are found.
+//! Usage: `vulkano-editor [scene.vscene] [--automation steps.txt]`, run from the project
+//! root so that `data/`, `scenes/`, and `scripts/` are found.
 
+mod assets;
+mod automation;
 mod camera;
 mod document;
 mod editor;
@@ -11,8 +13,7 @@ mod painter;
 mod panels;
 mod platform;
 mod runner;
-mod script;
-mod sync;
+mod settings;
 mod theme;
 
 use std::time::{Duration, Instant};
@@ -51,15 +52,15 @@ impl Game for EditorWorld {
 
 struct Args {
     scene: Option<String>,
-    script: Option<String>,
+    automation: Option<String>,
 }
 
 fn parse_args() -> Args {
-    let mut args = Args { scene: None, script: None };
+    let mut args = Args { scene: None, automation: None };
     let mut iter = std::env::args().skip(1);
     while let Some(arg) = iter.next() {
-        if arg == "--script" {
-            args.script = iter.next();
+        if arg == "--automation" {
+            args.automation = iter.next();
         } else {
             args.scene = Some(arg);
         }
@@ -69,9 +70,9 @@ fn parse_args() -> Args {
 
 fn main() {
     let args = parse_args();
-    let mut script = args.script.as_deref().map(|path| {
-        script::Script::load(path).unwrap_or_else(|e| {
-            eprintln!("Could not load script: {e}");
+    let mut automation = args.automation.as_deref().map(|path| {
+        automation::Automation::load(path).unwrap_or_else(|e| {
+            eprintln!("Could not load automation steps: {e}");
             std::process::exit(2);
         })
     });
@@ -100,7 +101,8 @@ fn main() {
     let mut environment = app.bake_environment(SKY);
     app.build_unified_geometry();
 
-    let mut editor = Editor::new();
+    let settings = settings::Settings::load();
+    let mut editor = Editor::new(settings.clone());
     app.renderer.set_offscreen_extent(editor.viewport.wanted_extent);
 
     let video = app.sdl.video().unwrap();
@@ -113,19 +115,20 @@ fn main() {
     );
 
     let ctx = egui::Context::default();
-    theme::apply(&ctx);
+    theme::apply_named(&ctx, &settings.theme);
 
     if let Some(scene) = args.scene {
         editor.actions.push(Action::OpenScene(scene.into()));
     }
 
     let mut event_pump = app.sdl.event_pump().unwrap();
-    let mut scene_sync = sync::SceneSync::default();
+    let mut library = assets::ModelLibrary::default();
     let mut last_frame = Instant::now();
     let mut smoothed_ms = 0.0_f32;
     let mut title = String::new();
     let mut relative = false;
-    let mut script_failed = false;
+    let mut automation_failed = false;
+    let mut environment_applied = None;
 
     'main: loop {
         let frame_start = Instant::now();
@@ -141,9 +144,9 @@ fn main() {
             platform.handle_event(&event);
         }
 
-        if let Some(active) = &mut script {
-            if active.tick(&mut editor, &mut platform, &mut painter) {
-                script_failed = !active.failures.is_empty();
+        if let Some(active) = &mut automation {
+            if active.tick(&mut editor, app.game.get_world(), &mut platform, &mut painter) {
+                automation_failed = !active.failures.is_empty();
                 break 'main;
             }
             if let Some((width, height)) = active.resize.take() {
@@ -154,7 +157,7 @@ fn main() {
         // ── Build the UI ───────────────────────────────────────────────────────
         editor.viewport.look_delta += std::mem::take(&mut platform.relative_motion);
         let input = platform.take_input(app.window.size());
-        let output = ctx.run_ui(input, |ui| editor.ui(ui));
+        let output = ctx.run_ui(input, |ui| editor.ui(ui, app.game.get_world_mut()));
         platform.apply_output(output.platform_output);
         painter.queue_textures(output.textures_delta);
         let primitives = ctx.tessellate(output.shapes, output.pixels_per_point);
@@ -163,6 +166,7 @@ fn main() {
             break 'main;
         }
         editor.runner.poll(&mut editor.log);
+        editor.scripts.poll(&mut editor.log);
 
         // Grab the mouse while flying, as it would otherwise leave the viewport.
         if editor.viewport.freelook != relative {
@@ -190,9 +194,10 @@ fn main() {
         app.renderer.set_projection(&camera.projection(aspect));
         app.renderer.set_view(&camera.engine_view());
 
-        scene_sync.sync_values(app.game.get_world(), &editor.doc.scene);
-        if let Some(env) = scene_sync.sync_environment(app.game.get_world(), &editor.doc.scene) {
-            app.renderer.apply_environment(&env);
+        if environment_applied.as_ref() != Some(&editor.doc.environment) {
+            environment_applied = Some(editor.doc.environment.clone());
+            app.renderer.apply_environment(&editor.doc.environment);
+            app.game.get_world().add_unique(editor.doc.environment.directional_light());
         }
 
         let dt = last_frame.elapsed().as_secs_f32();
@@ -219,37 +224,50 @@ fn main() {
         }
 
         // ── Things that must happen between frames ─────────────────────────────
-        if std::mem::take(&mut editor.reload_requested) {
-            scene_sync.clear_failures();
-        }
-
         // Importing blocks, so first show one frame saying so.
-        let missing = scene_sync.missing_models(&editor.doc.scene);
-        if missing.is_empty() {
-            editor.busy = None;
-        } else if editor.busy.is_none() {
-            editor.busy = Some(format!("Importing {} model(s)…", missing.len()));
-        } else {
-            let (loaded, errors) = scene_sync.load_models(app.game.get_world(), &missing);
-            for error in errors {
-                editor.log.error(error);
-            }
-            if loaded {
-                app.sync_loaded_models();
-                editor.log.info(format!("Imported {} model(s).", missing.len()));
-            }
-            editor.models = scene_sync.models.clone();
-            editor.busy = None;
+        let mut missing = library.missing_in_world(app.game.get_world());
+        if let Some((scene, _)) = &editor.pending_open {
+            missing.extend(library.missing_in_scene(scene));
+            missing.sort();
+            missing.dedup();
         }
-        scene_sync.sync_structure(app.game.get_world_mut(), &editor.doc.scene);
-        if editor.frame_on_load && editor.busy.is_none() {
+        if !missing.is_empty() {
+            if editor.busy.is_none() {
+                editor.busy = Some(format!("Importing {} model(s)…", missing.len()));
+            } else {
+                let (loaded, errors) = library.load(app.game.get_world(), &missing);
+                for error in errors {
+                    editor.log.error(error);
+                }
+                if loaded {
+                    app.sync_loaded_models();
+                    editor.log.info(format!("Imported {} model(s).", missing.len()));
+                }
+                editor.models = library.models.clone();
+                editor.busy = None;
+            }
+        } else if editor.busy.is_none() {
+            if let Some((scene, path)) = editor.pending_open.take() {
+                let registry = std::mem::replace(
+                    &mut editor.registry,
+                    vulkano_game::component_registry(),
+                );
+                for warning in editor.doc.open(app.game.get_world_mut(), &registry, scene, path) {
+                    editor.log.error(warning);
+                }
+                editor.registry = registry;
+                library.clear_failures();
+            }
+            panels::inspector::attach_pending_animators(&mut editor, app.game.get_world_mut());
+        }
+        if editor.frame_on_load && editor.busy.is_none() && editor.pending_open.is_none() {
             editor.frame_on_load = false;
-            panels::viewport::frame_scene(&mut editor);
+            panels::viewport::frame_scene(&mut editor, app.game.get_world());
         }
 
         if let Some(ray) = editor.viewport.pending_pick.take() {
-            let hit = scene_sync.pick_model(app.game.get_world(), &editor.doc.scene, &ray);
-            editor.doc.selection = hit.map(|(id, _)| id);
+            let hit = assets::pick_model(app.game.get_world(), &ray);
+            editor.doc.selection = hit.map(|(entity, _)| entity);
         }
 
         // ── Pace the loop ──────────────────────────────────────────────────────
@@ -263,7 +281,7 @@ fn main() {
     }
 
     editor.runner.stop(&mut editor.log);
-    if script_failed {
+    if automation_failed {
         std::process::exit(1);
     }
 }

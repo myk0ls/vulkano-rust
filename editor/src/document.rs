@@ -1,28 +1,26 @@
-//! The scene being edited: its node tree, selection, and undo history.
+//! The scene being edited. Entities and components live in the shipyard `World`; this
+//! adds what an editor needs on top: list order, selection, the environment, and undo.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use nalgebra_glm as glm;
+use shipyard::{EntityId, World};
 use vulkano_engine::scene::scene_file::{
-    NodeId, NodeKind, NodeTransform, SceneFile, SceneNode, WorldPose, euler_degrees_from_matrix,
+    ComponentData, ComponentRegistry, EntityData, Environment, FieldValue, Name, SceneFile,
 };
 
 const MAX_HISTORY: usize = 200;
 
-/// Where a node ends up relative to the node it was dropped on.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum DropPlace {
-    Before(NodeId),
-    After(NodeId),
-    ChildOf(NodeId),
-    Root,
-}
-
 pub struct Document {
-    pub scene: SceneFile,
+    /// The scene's entities, in the order the Entities dock lists them.
+    pub order: Vec<EntityId>,
+    pub selection: Option<EntityId>,
+    pub environment: Environment,
     pub path: Option<PathBuf>,
-    pub selection: Option<NodeId>,
+    /// Entities whose model just changed. If the new model has a skeleton they get an
+    /// `Animator` once it has loaded.
+    pub wants_animator: HashSet<EntityId>,
+    current: SceneFile,
     saved: SceneFile,
     committed: SceneFile,
     undo_stack: Vec<SceneFile>,
@@ -31,23 +29,18 @@ pub struct Document {
 
 impl Document {
     pub fn new() -> Self {
-        Self::from_scene(SceneFile::default(), None)
-    }
-
-    pub fn from_scene(scene: SceneFile, path: Option<PathBuf>) -> Self {
         Self {
-            saved: scene.clone(),
-            committed: scene.clone(),
-            scene,
-            path,
+            order: Vec::new(),
             selection: None,
+            environment: Environment::default(),
+            path: None,
+            wants_animator: HashSet::new(),
+            current: SceneFile::default(),
+            saved: SceneFile::default(),
+            committed: SceneFile::default(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
         }
-    }
-
-    pub fn is_dirty(&self) -> bool {
-        self.scene != self.saved
     }
 
     pub fn title(&self) -> String {
@@ -60,18 +53,70 @@ impl Document {
         }
     }
 
+    pub fn is_dirty(&self) -> bool {
+        self.current != self.saved
+    }
+
+    /// Replace everything in the world with a scene from a file (or an empty one).
+    /// Returns any problems found. Its models must already be loaded.
+    pub fn open(
+        &mut self,
+        world: &mut World,
+        registry: &ComponentRegistry,
+        scene: SceneFile,
+        path: Option<PathBuf>,
+    ) -> Vec<String> {
+        for entity in self.order.drain(..) {
+            world.delete_entity(entity);
+        }
+        let warnings = self.spawn_scene(world, registry, &scene);
+        self.selection = None;
+        self.path = path;
+        self.wants_animator.clear();
+        self.refresh(world, registry);
+        self.saved = self.current.clone();
+        self.committed = self.current.clone();
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        warnings
+    }
+
+    fn spawn_scene(
+        &mut self,
+        world: &mut World,
+        registry: &ComponentRegistry,
+        scene: &SceneFile,
+    ) -> Vec<String> {
+        let mut warnings = Vec::new();
+        self.environment = scene.environment.clone();
+        for data in &scene.entities {
+            let (entity, problems) = registry.spawn(world, data);
+            self.order.push(entity);
+            warnings.extend(problems);
+        }
+        warnings
+    }
+
+    /// Re-read the scene from the world. Call once per frame, after any edits.
+    pub fn refresh(&mut self, world: &World, registry: &ComponentRegistry) {
+        self.current = SceneFile {
+            environment: self.environment.clone(),
+            entities: self.order.iter().map(|e| registry.capture(world, *e)).collect(),
+        };
+    }
+
     pub fn save_to(&mut self, path: PathBuf) -> Result<(), String> {
-        self.scene.save(&path)?;
-        self.saved = self.scene.clone();
+        self.current.save(&path)?;
+        self.saved = self.current.clone();
         self.path = Some(path);
         Ok(())
     }
 
-    /// Record the current state as an undo step if it changed. Call once per frame,
-    /// passing `interacting` while a drag is in progress so one drag is one step.
+    /// Record the current state as an undo step if it changed. Passing `interacting`
+    /// while a drag is in progress makes one drag a single step.
     pub fn commit_changes(&mut self, interacting: bool) {
-        if !interacting && self.scene != self.committed {
-            let previous = std::mem::replace(&mut self.committed, self.scene.clone());
+        if !interacting && self.current != self.committed {
+            let previous = std::mem::replace(&mut self.committed, self.current.clone());
             self.undo_stack.push(previous);
             if self.undo_stack.len() > MAX_HISTORY {
                 self.undo_stack.remove(0);
@@ -88,395 +133,286 @@ impl Document {
         !self.redo_stack.is_empty()
     }
 
-    pub fn undo(&mut self) {
+    pub fn undo(&mut self, world: &mut World, registry: &ComponentRegistry) {
         self.commit_changes(false);
         if let Some(previous) = self.undo_stack.pop() {
-            self.redo_stack.push(std::mem::replace(&mut self.scene, previous));
-            self.committed = self.scene.clone();
-            self.fix_selection();
+            self.redo_stack.push(self.current.clone());
+            self.restore(world, registry, previous);
         }
     }
 
-    pub fn redo(&mut self) {
+    pub fn redo(&mut self, world: &mut World, registry: &ComponentRegistry) {
         self.commit_changes(false);
         if let Some(next) = self.redo_stack.pop() {
-            self.undo_stack.push(std::mem::replace(&mut self.scene, next));
-            self.committed = self.scene.clone();
-            self.fix_selection();
+            self.undo_stack.push(self.current.clone());
+            self.restore(world, registry, next);
         }
     }
 
-    fn fix_selection(&mut self) {
-        if let Some(id) = self.selection {
-            if self.node(id).is_none() {
-                self.selection = None;
-            }
+    fn restore(&mut self, world: &mut World, registry: &ComponentRegistry, scene: SceneFile) {
+        // Entities are recreated, so the selection is carried over by list position.
+        let selected = self.selection.and_then(|s| self.order.iter().position(|e| *e == s));
+        for entity in self.order.drain(..) {
+            world.delete_entity(entity);
         }
+        self.spawn_scene(world, registry, &scene);
+        self.selection = selected.and_then(|i| self.order.get(i).copied());
+        self.refresh(world, registry);
+        self.committed = self.current.clone();
     }
 
-    pub fn node(&self, id: NodeId) -> Option<&SceneNode> {
-        self.scene.nodes.iter().find(|n| n.id == id)
-    }
-
-    pub fn node_mut(&mut self, id: NodeId) -> Option<&mut SceneNode> {
-        self.scene.nodes.iter_mut().find(|n| n.id == id)
-    }
-
-    pub fn children(&self, parent: Option<NodeId>) -> impl Iterator<Item = &SceneNode> {
-        self.scene.nodes.iter().filter(move |n| n.parent == parent)
-    }
-
-    fn descendants(&self, id: NodeId) -> HashSet<NodeId> {
-        let mut found = HashSet::from([id]);
-        // Parents come before children, so one pass reaches every descendant.
-        for node in &self.scene.nodes {
-            if node.parent.is_some_and(|p| found.contains(&p)) {
-                found.insert(node.id);
-            }
-        }
-        found
-    }
-
-    fn next_id(&self) -> NodeId {
-        self.scene.nodes.iter().map(|n| n.id).max().unwrap_or(0) + 1
-    }
-
-    fn unique_name(&self, parent: Option<NodeId>, wanted: &str, ignore: Option<NodeId>) -> String {
+    fn unique_name(&self, wanted: &str, world: &World, ignore: Option<EntityId>) -> String {
         let taken = |name: &str| {
-            self.children(parent)
-                .any(|n| Some(n.id) != ignore && n.name == name)
+            self.order.iter().any(|e| {
+                Some(*e) != ignore && world.get::<&Name>(*e).is_ok_and(|n| n.0 == name)
+            })
         };
         if !taken(wanted) {
             return wanted.to_string();
         }
         let base = wanted.trim_end_matches(|c: char| c.is_ascii_digit());
         let base = if base.is_empty() { wanted } else { base };
-        (2..)
-            .map(|i| format!("{base}{i}"))
-            .find(|name| !taken(name))
-            .unwrap()
+        (2..).map(|i| format!("{base}{i}")).find(|n| !taken(n)).unwrap()
     }
 
-    /// Add a node as the last child of `parent`, select it, and return its id.
-    pub fn add_node(&mut self, parent: Option<NodeId>, name: &str, kind: NodeKind) -> NodeId {
-        self.add_node_at(parent, name, kind, NodeTransform::default())
-    }
-
-    pub fn add_node_at(
+    /// Create an entity with the given components and name, and select it.
+    pub fn create(
         &mut self,
-        parent: Option<NodeId>,
+        world: &mut World,
+        registry: &ComponentRegistry,
         name: &str,
-        kind: NodeKind,
-        transform: NodeTransform,
-    ) -> NodeId {
-        let id = self.next_id();
-        let node = SceneNode {
-            id,
-            name: self.unique_name(parent, name, None),
-            parent,
-            transform,
-            visible: true,
-            kind,
-            physics: None,
-        };
-        let index = match parent {
-            Some(p) => self.subtree_end(p),
-            None => self.scene.nodes.len(),
-        };
-        self.scene.nodes.insert(index, node);
-        self.selection = Some(id);
-        id
+        data: &EntityData,
+    ) -> EntityId {
+        let mut data = data.clone();
+        data.components.retain(|c| c.component != "Name");
+        let name = self.unique_name(name, world, None);
+        data.components.insert(
+            0,
+            ComponentData::named("Name").with("name", FieldValue::Text(name)),
+        );
+        let (entity, _) = registry.spawn(world, &data);
+        self.order.push(entity);
+        self.selection = Some(entity);
+        entity
     }
 
-    /// Index just past the last node of the subtree rooted at `id`.
-    fn subtree_end(&self, id: NodeId) -> usize {
-        let members = self.descendants(id);
-        self.scene
-            .nodes
-            .iter()
-            .rposition(|n| members.contains(&n.id))
-            .map_or(self.scene.nodes.len(), |i| i + 1)
-    }
-
-    pub fn remove_subtree(&mut self, id: NodeId) {
-        let members = self.descendants(id);
-        self.scene.nodes.retain(|n| !members.contains(&n.id));
-        self.fix_selection();
-    }
-
-    /// Copy a node and everything under it, placing the copy right after the original.
-    pub fn duplicate(&mut self, id: NodeId) -> Option<NodeId> {
-        let parent = self.node(id)?.parent;
-        let members = self.descendants(id);
-        let mut next = self.next_id();
-        let mut remap = std::collections::HashMap::new();
-        for node in self.scene.nodes.iter().filter(|n| members.contains(&n.id)) {
-            remap.insert(node.id, next);
-            next += 1;
+    pub fn delete(&mut self, world: &mut World, entity: EntityId) {
+        self.order.retain(|e| *e != entity);
+        if self.selection == Some(entity) {
+            self.selection = None;
         }
-        let name = self.unique_name(parent, &self.node(id)?.name.clone(), None);
-        let copies: Vec<SceneNode> = self
-            .scene
-            .nodes
-            .iter()
-            .filter(|n| members.contains(&n.id))
-            .map(|n| {
-                let mut copy = n.clone();
-                copy.id = remap[&n.id];
-                copy.parent = n.parent.map(|p| remap.get(&p).copied().unwrap_or(p));
-                if n.id == id {
-                    copy.name = name.clone();
-                }
-                copy
-            })
-            .collect();
-        let index = self.subtree_end(id);
-        self.scene.nodes.splice(index..index, copies);
-        self.selection = Some(remap[&id]);
-        Some(remap[&id])
+        self.wants_animator.remove(&entity);
+        world.delete_entity(entity);
     }
 
-    pub fn rename(&mut self, id: NodeId, name: &str) {
+    pub fn duplicate(&mut self, world: &mut World, registry: &ComponentRegistry, entity: EntityId) {
+        let data = registry.capture(world, entity);
+        let name = data.name().unwrap_or("Entity").to_string();
+        let copy = self.create(world, registry, &name, &data);
+        // Keep the copy next to the original.
+        self.order.pop();
+        let index = self.order.iter().position(|e| *e == entity).map_or(self.order.len(), |i| i + 1);
+        self.order.insert(index, copy);
+    }
+
+    pub fn display_name(&self, world: &World, entity: EntityId) -> String {
+        match world.get::<&Name>(entity) {
+            Ok(name) => name.0.clone(),
+            Err(_) => {
+                let index = self.order.iter().position(|e| *e == entity).unwrap_or(0);
+                format!("Entity {}", index + 1)
+            }
+        }
+    }
+
+    pub fn rename(&self, world: &mut World, registry: &ComponentRegistry, entity: EntityId, name: &str) {
         let name = name.trim();
         if name.is_empty() {
             return;
         }
-        let Some(parent) = self.node(id).map(|n| n.parent) else {
+        let name = self.unique_name(name, world, Some(entity));
+        let def = registry.def("Name").unwrap();
+        if !def.has(world, entity) {
+            let _ = def.add(world, entity);
+        }
+        def.set_field(world, entity, "name", &FieldValue::Text(name));
+    }
+
+    /// Move an entity to just before the entity at `target` in the list, or to the end.
+    pub fn reorder(&mut self, entity: EntityId, target: Option<EntityId>) {
+        if target == Some(entity) {
             return;
-        };
-        let name = self.unique_name(parent, name, Some(id));
-        if let Some(node) = self.node_mut(id) {
-            node.name = name;
         }
-    }
-
-    /// Move a node in the tree, keeping where it is in the world. Returns false for
-    /// moves that aren't possible, such as dropping a node into itself.
-    pub fn move_node(&mut self, id: NodeId, place: DropPlace) -> bool {
-        let members = self.descendants(id);
-        let target = match place {
-            DropPlace::Before(t) | DropPlace::After(t) | DropPlace::ChildOf(t) => Some(t),
-            DropPlace::Root => None,
-        };
-        if target.is_some_and(|t| members.contains(&t)) {
-            return false;
-        }
-        let new_parent = match place {
-            DropPlace::ChildOf(t) => Some(t),
-            DropPlace::Before(t) | DropPlace::After(t) => match self.node(t) {
-                Some(node) => node.parent,
-                None => return false,
-            },
-            DropPlace::Root => None,
-        };
-
-        let poses = self.scene.world_poses();
-        let world = poses[&id];
-        let parent_pose = new_parent.map_or(WorldPose::IDENTITY, |p| poses[&p]);
-        let local = local_transform_from_world(&world, &parent_pose);
-
-        let mut moved: Vec<SceneNode> = Vec::new();
-        self.scene.nodes.retain(|n| {
-            let is_member = members.contains(&n.id);
-            if is_member {
-                moved.push(n.clone());
-            }
-            !is_member
-        });
-        for node in &mut moved {
-            if node.id == id {
-                node.parent = new_parent;
-                node.transform = local.clone();
-            }
-        }
-        let index = match place {
-            DropPlace::Before(t) => self.scene.nodes.iter().position(|n| n.id == t).unwrap(),
-            DropPlace::After(t) | DropPlace::ChildOf(t) => self.subtree_end(t),
-            DropPlace::Root => self.scene.nodes.len(),
-        };
-        self.scene.nodes.splice(index..index, moved);
-
-        let wanted = self.node(id).unwrap().name.clone();
-        let name = self.unique_name(new_parent, &wanted, Some(id));
-        self.node_mut(id).unwrap().name = name;
-        true
-    }
-
-    /// Set a node's transform from a world-space pose.
-    pub fn set_world_pose(&mut self, id: NodeId, world: &WorldPose) {
-        let poses = self.scene.world_poses();
-        let parent_pose = self
-            .node(id)
-            .and_then(|n| n.parent)
-            .and_then(|p| poses.get(&p).copied())
-            .unwrap_or(WorldPose::IDENTITY);
-        let local = local_transform_from_world(world, &parent_pose);
-        if let Some(node) = self.node_mut(id) {
-            node.transform = local;
-        }
-    }
-}
-
-/// The local transform that places a child at `world` under a parent at `parent`.
-pub fn local_transform_from_world(world: &WorldPose, parent: &WorldPose) -> NodeTransform {
-    let inverse_rotation = parent.rotation.transpose();
-    let scale = if parent.scale.abs() > 1e-6 { parent.scale } else { 1.0 };
-    let delta = world.position - parent.position;
-    let local = inverse_rotation * glm::vec4(delta.x, delta.y, delta.z, 0.0) / scale;
-    NodeTransform {
-        position: [local.x, local.y, local.z],
-        rotation: euler_degrees_from_matrix(&(inverse_rotation * world.rotation)),
-        scale: world.scale / scale,
+        self.order.retain(|e| *e != entity);
+        let index = target
+            .and_then(|t| self.order.iter().position(|e| *e == t))
+            .unwrap_or(self.order.len());
+        self.order.insert(index, entity);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vulkano_engine::scene::components::transform::Transform;
 
-    fn names(doc: &Document) -> Vec<&str> {
-        doc.scene.nodes.iter().map(|n| n.name.as_str()).collect()
+    fn setup() -> (Document, World, ComponentRegistry) {
+        (Document::new(), World::new(), ComponentRegistry::with_engine_components())
     }
 
-    fn sample() -> (Document, NodeId, NodeId, NodeId) {
-        let mut doc = Document::new();
-        let a = doc.add_node(None, "A", NodeKind::Empty);
-        let b = doc.add_node(Some(a), "B", NodeKind::Empty);
-        let c = doc.add_node(None, "C", NodeKind::Empty);
-        (doc, a, b, c)
+    fn with_transform() -> EntityData {
+        EntityData { components: vec![ComponentData::named("Transform")] }
     }
 
-    #[test]
-    fn sibling_names_stay_unique() {
-        let mut doc = Document::new();
-        doc.add_node(None, "Light", NodeKind::Empty);
-        let second = doc.add_node(None, "Light", NodeKind::Empty);
-        assert_eq!(doc.node(second).unwrap().name, "Light2");
-        // The same name is fine under a different parent.
-        let child = doc.add_node(Some(second), "Light", NodeKind::Empty);
-        assert_eq!(doc.node(child).unwrap().name, "Light");
+    fn sync(doc: &mut Document, world: &World, registry: &ComponentRegistry, interacting: bool) {
+        doc.refresh(world, registry);
+        doc.commit_changes(interacting);
+    }
+
+    fn names(doc: &Document, world: &World) -> Vec<String> {
+        doc.order.iter().map(|e| doc.display_name(world, *e)).collect()
     }
 
     #[test]
-    fn children_are_stored_after_parents_and_inside_their_subtree() {
-        let (mut doc, a, _, _) = sample();
-        doc.add_node(Some(a), "D", NodeKind::Empty);
-        assert_eq!(names(&doc), ["A", "B", "D", "C"]);
+    fn created_entities_are_real_world_entities() {
+        let (mut doc, mut world, registry) = setup();
+        let entity = doc.create(&mut world, &registry, "Crate", &with_transform());
+        assert!(world.get::<&Transform>(entity).is_ok());
+        assert_eq!(world.get::<&Name>(entity).unwrap().0, "Crate");
+        assert_eq!(doc.selection, Some(entity));
     }
 
     #[test]
-    fn removing_a_node_removes_its_subtree_and_selection() {
-        let (mut doc, a, b, _) = sample();
-        doc.selection = Some(b);
-        doc.remove_subtree(a);
-        assert_eq!(names(&doc), ["C"]);
+    fn names_stay_unique() {
+        let (mut doc, mut world, registry) = setup();
+        doc.create(&mut world, &registry, "Light", &with_transform());
+        doc.create(&mut world, &registry, "Light", &with_transform());
+        let third = doc.create(&mut world, &registry, "Other", &with_transform());
+        doc.rename(&mut world, &registry, third, "Light");
+        assert_eq!(names(&doc, &world), ["Light", "Light2", "Light3"]);
+    }
+
+    #[test]
+    fn deleting_removes_it_from_the_world_and_selection() {
+        let (mut doc, mut world, registry) = setup();
+        let entity = doc.create(&mut world, &registry, "A", &with_transform());
+        doc.delete(&mut world, entity);
+        assert!(doc.order.is_empty());
         assert_eq!(doc.selection, None);
+        assert!(world.get::<&Transform>(entity).is_err());
     }
 
     #[test]
-    fn duplicate_copies_the_whole_subtree_with_new_ids() {
-        let (mut doc, a, b, _) = sample();
-        let copy = doc.duplicate(a).unwrap();
-        assert_eq!(names(&doc), ["A", "B", "A2", "B", "C"]);
-        let child = doc.scene.nodes.iter().find(|n| n.parent == Some(copy)).unwrap();
-        assert_ne!(child.id, b);
-        assert_eq!(doc.selection, Some(copy));
+    fn duplicates_copy_components_and_sit_next_to_the_original() {
+        let (mut doc, mut world, registry) = setup();
+        let a = doc.create(&mut world, &registry, "A", &with_transform());
+        doc.create(&mut world, &registry, "B", &with_transform());
+        world.get::<&mut Transform>(a).unwrap().set_position(1.0, 2.0, 3.0);
+
+        doc.duplicate(&mut world, &registry, a);
+
+        assert_eq!(names(&doc, &world), ["A", "A2", "B"]);
+        let copy = doc.selection.unwrap();
+        assert_ne!(copy, a);
+        assert_eq!(world.get::<&Transform>(copy).unwrap().get_position_vector(), [1.0, 2.0, 3.0]);
     }
 
     #[test]
-    fn a_node_cannot_be_moved_into_its_own_subtree() {
-        let (mut doc, a, b, _) = sample();
-        assert!(!doc.move_node(a, DropPlace::ChildOf(b)));
-        assert!(!doc.move_node(a, DropPlace::ChildOf(a)));
-        assert_eq!(names(&doc), ["A", "B", "C"]);
+    fn reordering_only_changes_the_list() {
+        let (mut doc, mut world, registry) = setup();
+        let a = doc.create(&mut world, &registry, "A", &with_transform());
+        let b = doc.create(&mut world, &registry, "B", &with_transform());
+        let c = doc.create(&mut world, &registry, "C", &with_transform());
+        doc.reorder(c, Some(a));
+        assert_eq!(names(&doc, &world), ["C", "A", "B"]);
+        doc.reorder(c, None);
+        assert_eq!(names(&doc, &world), ["A", "B", "C"]);
+        doc.reorder(b, Some(b));
+        assert_eq!(names(&doc, &world), ["A", "B", "C"]);
     }
 
     #[test]
-    fn moves_keep_tree_order_valid() {
-        let (mut doc, a, b, c) = sample();
-        assert!(doc.move_node(a, DropPlace::ChildOf(c)));
-        assert_eq!(names(&doc), ["C", "A", "B"]);
-        assert_eq!(doc.node(a).unwrap().parent, Some(c));
-        assert_eq!(doc.node(b).unwrap().parent, Some(a));
+    fn undo_and_redo_restore_entities_and_selection() {
+        let (mut doc, mut world, registry) = setup();
+        let a = doc.create(&mut world, &registry, "A", &with_transform());
+        sync(&mut doc, &world, &registry, false);
+        world.get::<&mut Transform>(a).unwrap().set_position(5.0, 0.0, 0.0);
+        sync(&mut doc, &world, &registry, false);
 
-        assert!(doc.move_node(a, DropPlace::Before(c)));
-        assert_eq!(names(&doc), ["A", "B", "C"]);
-        assert_eq!(doc.node(a).unwrap().parent, None);
+        doc.undo(&mut world, &registry);
+        let restored = doc.selection.unwrap();
+        assert_eq!(world.get::<&Transform>(restored).unwrap().get_position_vector(), [0.0; 3]);
+
+        doc.redo(&mut world, &registry);
+        let restored = doc.selection.unwrap();
+        assert_eq!(world.get::<&Transform>(restored).unwrap().get_position_vector()[0], 5.0);
     }
 
     #[test]
-    fn reparenting_keeps_the_world_pose() {
-        let (mut doc, a, _, c) = sample();
-        doc.node_mut(c).unwrap().transform = NodeTransform {
-            position: [3.0, 1.0, 2.0],
-            rotation: [0.0, 90.0, 0.0],
-            scale: 2.0,
-        };
-        doc.node_mut(a).unwrap().transform.position = [1.0, 1.0, 1.0];
-        let before = doc.scene.world_poses()[&a];
+    fn undo_brings_back_a_deleted_entity_and_removed_components() {
+        let (mut doc, mut world, registry) = setup();
+        let a = doc.create(&mut world, &registry, "A", &with_transform());
+        sync(&mut doc, &world, &registry, false);
 
-        assert!(doc.move_node(a, DropPlace::ChildOf(c)));
+        registry.def("Transform").unwrap().remove(&mut world, a);
+        sync(&mut doc, &world, &registry, false);
+        doc.undo(&mut world, &registry);
+        assert!(world.get::<&Transform>(doc.order[0]).is_ok());
 
-        let after = doc.scene.world_poses()[&a];
-        assert!((before.matrix() - after.matrix()).norm() < 1e-4);
-    }
-
-    #[test]
-    fn undo_and_redo_restore_committed_states() {
-        let mut doc = Document::new();
-        doc.add_node(None, "A", NodeKind::Empty);
-        doc.commit_changes(false);
-        doc.add_node(None, "B", NodeKind::Empty);
-        doc.commit_changes(false);
-
-        doc.undo();
-        assert_eq!(names(&doc), ["A"]);
-        doc.undo();
-        assert!(names(&doc).is_empty());
-        assert!(!doc.can_undo());
-
-        doc.redo();
-        doc.redo();
-        assert_eq!(names(&doc), ["A", "B"]);
-        assert!(!doc.can_redo());
+        let entity = doc.order[0];
+        doc.delete(&mut world, entity);
+        sync(&mut doc, &world, &registry, false);
+        assert!(doc.order.is_empty());
+        doc.undo(&mut world, &registry);
+        assert_eq!(names(&doc, &world), ["A"]);
     }
 
     #[test]
     fn a_drag_is_a_single_undo_step() {
-        let mut doc = Document::new();
-        let a = doc.add_node(None, "A", NodeKind::Empty);
-        doc.commit_changes(false);
+        let (mut doc, mut world, registry) = setup();
+        let a = doc.create(&mut world, &registry, "A", &with_transform());
+        sync(&mut doc, &world, &registry, false);
 
         for x in 1..5 {
-            doc.node_mut(a).unwrap().transform.position[0] = x as f32;
-            doc.commit_changes(true);
+            world.get::<&mut Transform>(a).unwrap().set_position(x as f32, 0.0, 0.0);
+            sync(&mut doc, &world, &registry, true);
         }
-        doc.commit_changes(false);
+        sync(&mut doc, &world, &registry, false);
 
-        doc.undo();
-        assert_eq!(doc.node(a).unwrap().transform.position[0], 0.0);
-    }
-
-    #[test]
-    fn a_new_edit_clears_redo() {
-        let mut doc = Document::new();
-        doc.add_node(None, "A", NodeKind::Empty);
-        doc.commit_changes(false);
-        doc.undo();
-        doc.add_node(None, "B", NodeKind::Empty);
-        doc.commit_changes(false);
-        assert!(!doc.can_redo());
+        doc.undo(&mut world, &registry);
+        let entity = doc.order[0];
+        assert_eq!(world.get::<&Transform>(entity).unwrap().get_position_vector()[0], 0.0);
     }
 
     #[test]
     fn dirty_tracks_the_saved_state() {
-        let mut doc = Document::new();
+        let (mut doc, mut world, registry) = setup();
+        doc.refresh(&world, &registry);
         assert!(!doc.is_dirty());
-        doc.add_node(None, "A", NodeKind::Empty);
+        doc.create(&mut world, &registry, "A", &with_transform());
+        sync(&mut doc, &world, &registry, false);
         assert!(doc.is_dirty());
-        doc.undo();
-        doc.commit_changes(false);
-        doc.undo();
+        doc.undo(&mut world, &registry);
+        assert!(!doc.is_dirty());
+    }
+
+    #[test]
+    fn opening_a_scene_replaces_the_world_and_clears_history() {
+        let (mut doc, mut world, registry) = setup();
+        let old = doc.create(&mut world, &registry, "Old", &with_transform());
+        sync(&mut doc, &world, &registry, false);
+
+        let scene = SceneFile {
+            environment: Environment { exposure: 2.0, ..Default::default() },
+            entities: vec![with_transform(), with_transform()],
+        };
+        let warnings = doc.open(&mut world, &registry, scene, None);
+
+        assert!(warnings.is_empty());
+        assert_eq!(doc.order.len(), 2);
+        assert!(world.get::<&Transform>(old).is_err());
+        assert_eq!(doc.environment.exposure, 2.0);
+        assert!(!doc.can_undo());
         assert!(!doc.is_dirty());
     }
 }

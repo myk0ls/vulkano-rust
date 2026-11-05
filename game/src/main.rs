@@ -1,9 +1,5 @@
-mod my_game;
-mod player;
-mod soldier;
 use vulkano_engine::core::application::Application;
-
-use crate::my_game::MyApp;
+use vulkano_game::my_game::MyApp;
 
 fn main() {
     // `vulkano-game path/to/scene.vscene` runs an editor-authored scene.

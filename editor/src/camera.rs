@@ -1,10 +1,11 @@
 //! The viewport camera and the math for moving between screen and world.
 //!
-//! Everything here is plain Y-up math in scene space. Only [`OrbitCamera::engine_view`]
-//! knows about the renderer's mirrored Y axis.
+//! Everything here is plain Y-up math. Only [`OrbitCamera::engine_view`] and [`Pose`] know
+//! about the engine's mirrored Y axis.
 
 use egui::{Pos2, Rect};
 use nalgebra_glm as glm;
+use vulkano_engine::scene::components::transform::Transform;
 
 const NEAR: f32 = 0.01;
 const FAR: f32 = 1000.0;
@@ -174,10 +175,65 @@ impl Ray {
     }
 }
 
+/// A position, rotation, and scale in the editor's Y-up space, used for gizmos and
+/// overlays. Components themselves stay in the engine's space, where -Y is up.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pose {
+    pub position: glm::Vec3,
+    pub rotation: glm::Mat4,
+    pub scale: f32,
+}
+
+impl Pose {
+    pub fn from_engine(transform: &Transform) -> Self {
+        let [x, y, z] = transform.get_position_vector();
+        let flip = glm::scaling(&glm::vec3(1.0, -1.0, 1.0));
+        Self {
+            position: glm::vec3(x, -y, z),
+            rotation: flip * transform.rotation * flip,
+            scale: transform.uniform_scale,
+        }
+    }
+
+    pub fn apply_to(&self, transform: &mut Transform) {
+        let flip = glm::scaling(&glm::vec3(1.0, -1.0, 1.0));
+        transform.set_position(self.position.x, -self.position.y + 0.0, self.position.z);
+        transform.rotation = flip * self.rotation * flip;
+        transform.uniform_scale = self.scale;
+    }
+
+    pub fn matrix(&self) -> glm::Mat4 {
+        glm::translation(&self.position)
+            * self.rotation
+            * glm::scaling(&glm::vec3(self.scale, self.scale, self.scale))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use egui::pos2;
+
+    #[test]
+    fn poses_mirror_engine_transforms_and_round_trip() {
+        let mut transform = Transform::with_pos_scale(glm::vec3(1.0, -10.0, -2.0), 0.5);
+        transform.rotate(0.7, glm::vec3(0.0, 1.0, 0.0));
+        transform.rotate(0.3, glm::vec3(1.0, 0.0, 0.0));
+
+        let pose = Pose::from_engine(&transform);
+        assert_eq!(pose.position, glm::vec3(1.0, 10.0, -2.0));
+
+        // A point must land on the Y-mirror of where the transform puts it.
+        let scene = pose.matrix() * glm::vec4(1.0, 2.0, 3.0, 1.0);
+        let engine = transform.model_matrix() * glm::vec4(1.0, -2.0, 3.0, 1.0);
+        assert!((engine.x - scene.x).abs() < 1e-4);
+        assert!((engine.y + scene.y).abs() < 1e-4);
+        assert!((engine.z - scene.z).abs() < 1e-4);
+
+        let mut back = Transform::new();
+        pose.apply_to(&mut back);
+        assert!((back.model_matrix() - transform.model_matrix()).norm() < 1e-4);
+    }
 
     fn setup() -> (OrbitCamera, Projector) {
         let camera = OrbitCamera::default();

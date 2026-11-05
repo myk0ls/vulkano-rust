@@ -1,132 +1,348 @@
-//! The `.vscene` file format, shared by the editor and by games.
+//! Reflection for components, and the `.vscene` file format built on it.
 //!
-//! Scene files are Y-up with rotations in degrees (YXZ Euler order), which is what
-//! people expect from an editor. The renderer works in a Y-down space (the glTF
-//! loader negates Y), so all conversion happens in [`to_engine_transform`] and
-//! [`engine_direction`].
+//! A scene is a list of entities, each with a list of components, exactly as they exist
+//! in the shipyard `World`. All values are in the engine's own space (-Y is up), so a
+//! scene file, the editor's inspector, Rust code, and scripts all see the same numbers.
+//!
+//! To make a component usable from the editor and scene files, implement
+//! [`EditableComponent`] and add it to a [`ComponentRegistry`].
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use nalgebra_glm as glm;
 use rapier3d::prelude::{RigidBodyType, SharedShape};
 use serde::{Deserialize, Serialize};
-use shipyard::{Unique, World};
+use shipyard::{Component, EntityId, Unique, World, track};
 
-use crate::assets::asset_manager::AssetManager;
-use crate::physics::physics_engine::{ColliderComponent, RigidBodyComponent};
+use crate::assets::asset_manager::{AssetHandle, AssetManager};
+use crate::physics::physics_engine::{
+    ColliderComponent, KinematicCharacterComponent, RigidBodyComponent,
+};
+use crate::scene::components::animator::Animator;
+use crate::scene::components::camera::Camera;
 use crate::scene::components::directional_light::DirectionalLight;
 use crate::scene::components::object3d::Object3D;
 use crate::scene::components::pointlight::Pointlight;
 use crate::scene::components::transform::Transform;
+use crate::scene::components::velocity::Velocity;
+use crate::scripting::{ScriptInstance, Scripts};
 
-pub type NodeId = u64;
+/// A display name for an entity.
+#[derive(Component, Clone, Debug, PartialEq)]
+pub struct Name(pub String);
+
+/// Entities with this component are not rendered.
+#[derive(Component, Clone, Debug, PartialEq)]
+pub struct Hidden;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct NodeTransform {
-    pub position: [f32; 3],
-    /// Euler angles in degrees, applied in YXZ order.
-    pub rotation: [f32; 3],
-    /// Uniform scale: the engine's `Transform` has no per-axis scale.
-    pub scale: f32,
+pub enum FieldValue {
+    Float(f32),
+    Int(i64),
+    Bool(bool),
+    Text(String),
+    Vec3([f32; 3]),
+    Scripts(Vec<ScriptInstance>),
 }
 
-impl Default for NodeTransform {
-    fn default() -> Self {
-        Self {
-            position: [0.0; 3],
-            rotation: [0.0; 3],
-            scale: 1.0,
+impl FieldValue {
+    pub fn as_float(&self) -> Option<f32> {
+        match self {
+            Self::Float(v) => Some(*v),
+            _ => None,
+        }
+    }
+
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Self::Bool(v) => Some(*v),
+            _ => None,
+        }
+    }
+
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            Self::Text(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    pub fn as_vec3(&self) -> Option<[f32; 3]> {
+        match self {
+            Self::Vec3(v) => Some(*v),
+            _ => None,
         }
     }
 }
 
-impl NodeTransform {
-    pub fn rotation_matrix(&self) -> glm::Mat4 {
-        let [x, y, z] = self.rotation.map(f32::to_radians);
-        let mut m = glm::identity();
-        m = glm::rotate_y(&m, y);
-        m = glm::rotate_x(&m, x);
-        glm::rotate_z(&m, z)
+/// How the editor should present a field.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FieldHint {
+    None,
+    /// A number limited to this range.
+    Range(f32, f32),
+    /// Angles, shown with a degree sign.
+    Degrees,
+    /// Light energy: red, green, blue, which may exceed 1.
+    Color,
+    /// A path to a file with one of these extensions.
+    Asset(&'static [&'static str]),
+    /// One of a fixed set of strings.
+    Choice(&'static [&'static str]),
+    /// The name of an animation clip of this entity's model.
+    AnimationClip,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Field {
+    pub name: &'static str,
+    pub value: FieldValue,
+    pub hint: FieldHint,
+}
+
+impl Field {
+    pub fn new(name: &'static str, value: FieldValue) -> Self {
+        Self { name, value, hint: FieldHint::None }
     }
 
-    pub fn matrix(&self) -> glm::Mat4 {
-        let [x, y, z] = self.position;
-        glm::translation(&glm::vec3(x, y, z))
-            * self.rotation_matrix()
-            * glm::scaling(&glm::vec3(self.scale, self.scale, self.scale))
+    pub fn hinted(name: &'static str, value: FieldValue, hint: FieldHint) -> Self {
+        Self { name, value, hint }
     }
 }
 
-/// Decompose a rotation matrix into the YXZ degrees used by [`NodeTransform`].
-pub fn euler_degrees_from_matrix(r: &glm::Mat4) -> [f32; 3] {
-    let sin_x = (-r[(1, 2)]).clamp(-1.0, 1.0);
-    let x = sin_x.asin();
-    let (y, z) = if sin_x.abs() < 0.9999 {
-        (r[(0, 2)].atan2(r[(2, 2)]), r[(1, 0)].atan2(r[(1, 1)]))
-    } else {
-        // Gimbal lock: Y and Z rotate around the same axis, so keep it all in Y.
-        ((-r[(2, 0)]).atan2(r[(0, 0)]), 0.0)
-    };
-    // Avoid showing rounding noise such as -0.0 or 0.000001 in the inspector.
-    [x, y, z].map(|radians| (radians.to_degrees() * 1000.0).round() / 1000.0 + 0.0)
+/// A component that can be created, edited, and saved without knowing its type.
+pub trait EditableComponent:
+    Component<Tracking = track::Untracked> + Send + Sync + 'static
+{
+    const NAME: &'static str;
+    /// The value a newly added component starts with.
+    fn create() -> Self;
+    /// The component's editable state. May be empty for marker components.
+    fn fields(&self) -> Vec<Field> {
+        Vec::new()
+    }
+    /// Change one field. Unknown names and mismatched types are ignored, which lets
+    /// scene files outlive changes to a component's fields.
+    fn set_field(&mut self, _name: &str, _value: &FieldValue) {}
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum NodeKind {
-    /// A plain transform, useful for grouping and as a marker.
-    Empty,
-    Model {
-        path: String,
-        /// Animation clip to play on load, for skinned models.
-        animation: Option<String>,
-    },
-    PointLight {
-        color: [f32; 3],
-        intensity: f32,
-        radius: f32,
-    },
+/// Type-erased operations on one component type.
+#[derive(Clone, Copy)]
+pub struct ComponentDef {
+    pub name: &'static str,
+    add: fn(&mut World, EntityId) -> Result<(), String>,
+    remove: fn(&mut World, EntityId),
+    has: fn(&World, EntityId) -> bool,
+    fields: fn(&World, EntityId) -> Option<Vec<Field>>,
+    set_field: fn(&World, EntityId, &str, &FieldValue),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub enum BodyKind {
-    Fixed,
-    Dynamic,
-    Kinematic,
+impl ComponentDef {
+    fn of<T: EditableComponent>() -> Self {
+        Self {
+            name: T::NAME,
+            add: |world, entity| {
+                world.add_component(entity, T::create());
+                Ok(())
+            },
+            remove: |world, entity| {
+                world.delete_component::<T>(entity);
+            },
+            has: |world, entity| world.get::<&T>(entity).is_ok(),
+            fields: |world, entity| world.get::<&T>(entity).ok().map(|c| c.fields()),
+            set_field: |world, entity, name, value| {
+                if let Ok(mut component) = world.get::<&mut T>(entity) {
+                    component.set_field(name, value);
+                }
+            },
+        }
+    }
+
+    pub fn add(&self, world: &mut World, entity: EntityId) -> Result<(), String> {
+        (self.add)(world, entity)
+    }
+
+    pub fn remove(&self, world: &mut World, entity: EntityId) {
+        (self.remove)(world, entity)
+    }
+
+    pub fn has(&self, world: &World, entity: EntityId) -> bool {
+        (self.has)(world, entity)
+    }
+
+    pub fn fields(&self, world: &World, entity: EntityId) -> Option<Vec<Field>> {
+        (self.fields)(world, entity)
+    }
+
+    pub fn set_field(&self, world: &World, entity: EntityId, name: &str, value: &FieldValue) {
+        (self.set_field)(world, entity, name, value)
+    }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum ColliderShape {
-    Cuboid { half_extents: [f32; 3] },
-    Ball { radius: f32 },
-    Capsule { half_height: f32, radius: f32 },
+/// A ready-made combination of components, offered when creating an entity.
+#[derive(Clone, Debug)]
+pub struct EntityTemplate {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub data: EntityData,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct PhysicsDesc {
-    pub body: BodyKind,
-    pub collider: ColliderShape,
+pub struct ComponentRegistry {
+    defs: Vec<ComponentDef>,
+    templates: Vec<EntityTemplate>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SceneNode {
-    pub id: NodeId,
-    pub name: String,
-    pub parent: Option<NodeId>,
-    pub transform: NodeTransform,
-    pub visible: bool,
-    pub kind: NodeKind,
-    pub physics: Option<PhysicsDesc>,
+impl ComponentRegistry {
+    /// A registry containing all of the engine's own components.
+    pub fn with_engine_components() -> Self {
+        let mut registry = Self { defs: Vec::new(), templates: Vec::new() };
+        registry.register::<Name>();
+        registry.register::<Transform>();
+        registry.register::<Object3D>();
+        registry.defs.push(animator_def());
+        registry.register::<Pointlight>();
+        registry.register::<Camera>();
+        registry.register::<Velocity>();
+        registry.register::<RigidBodyComponent>();
+        registry.register::<ColliderComponent>();
+        registry.register::<KinematicCharacterComponent>();
+        registry.register::<Scripts>();
+        registry.register::<Hidden>();
+
+        let transform = ComponentData::named("Transform");
+        registry.add_template("Empty", "An entity with only a position.", vec![transform.clone()]);
+        registry.add_template(
+            "Object3D",
+            "A 3D model. Pick its file in the Inspector, or drag a model into the 3D view.",
+            vec![transform.clone(), ComponentData::named("Object3D")],
+        );
+        registry.add_template("Point Light", "A light shining in all directions.", vec![ComponentData::named("Pointlight")]);
+        registry.add_template("Camera", "A camera with a position.", vec![transform.clone(), ComponentData::named("Camera")]);
+        registry.add_template(
+            "Static Collider",
+            "A fixed box other physics objects collide with.",
+            vec![
+                transform.clone(),
+                ComponentData::named("RigidBody").with("body_type", FieldValue::Text("Fixed".into())),
+                ComponentData::named("Collider"),
+            ],
+        );
+        registry.add_template(
+            "Dynamic Body",
+            "A box that falls and collides. Add an Object3D to give it a look.",
+            vec![
+                transform,
+                ComponentData::named("RigidBody").with("body_type", FieldValue::Text("Dynamic".into())),
+                ComponentData::named("Collider"),
+            ],
+        );
+        registry
+    }
+
+    pub fn register<T: EditableComponent>(&mut self) {
+        self.defs.push(ComponentDef::of::<T>());
+    }
+
+    pub fn add_template(
+        &mut self,
+        name: &'static str,
+        description: &'static str,
+        components: Vec<ComponentData>,
+    ) {
+        self.templates.push(EntityTemplate { name, description, data: EntityData { components } });
+    }
+
+    pub fn defs(&self) -> &[ComponentDef] {
+        &self.defs
+    }
+
+    pub fn templates(&self) -> &[EntityTemplate] {
+        &self.templates
+    }
+
+    pub fn def(&self, name: &str) -> Option<&ComponentDef> {
+        self.defs.iter().find(|d| d.name == name)
+    }
+
+    /// Read an entity's state, with components in registry order.
+    pub fn capture(&self, world: &World, entity: EntityId) -> EntityData {
+        let components = self
+            .defs
+            .iter()
+            .filter_map(|def| {
+                let fields = def.fields(world, entity)?;
+                Some(ComponentData {
+                    component: def.name.to_string(),
+                    fields: fields.into_iter().map(|f| (f.name.to_string(), f.value)).collect(),
+                })
+            })
+            .collect();
+        EntityData { components }
+    }
+
+    /// Create an entity from saved state. Problems are reported rather than fatal, so one
+    /// bad component doesn't lose the rest of a scene.
+    pub fn spawn(&self, world: &mut World, data: &EntityData) -> (EntityId, Vec<String>) {
+        let entity = world.add_entity(());
+        let mut warnings = Vec::new();
+        for saved in &data.components {
+            let Some(def) = self.def(&saved.component) else {
+                warnings.push(format!("Unknown component: {}", saved.component));
+                continue;
+            };
+            if let Err(e) = def.add(world, entity) {
+                warnings.push(e);
+                continue;
+            }
+            for (name, value) in &saved.fields {
+                def.set_field(world, entity, name, value);
+            }
+        }
+        (entity, warnings)
+    }
 }
 
-/// Scene-wide look settings.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ComponentData {
+    pub component: String,
+    pub fields: BTreeMap<String, FieldValue>,
+}
+
+impl ComponentData {
+    pub fn named(component: &str) -> Self {
+        Self { component: component.to_string(), fields: BTreeMap::new() }
+    }
+
+    pub fn with(mut self, field: &str, value: FieldValue) -> Self {
+        self.fields.insert(field.to_string(), value);
+        self
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct EntityData {
+    pub components: Vec<ComponentData>,
+}
+
+impl EntityData {
+    pub fn name(&self) -> Option<&str> {
+        self.field("Name", "name")?.as_text()
+    }
+
+    pub fn field(&self, component: &str, field: &str) -> Option<&FieldValue> {
+        self.components.iter().find(|c| c.component == component)?.fields.get(field)
+    }
+}
+
+/// Scene-wide look settings, in the engine's space.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Unique)]
 #[serde(default)]
 pub struct Environment {
     pub exposure: f32,
     pub ambient_color: [f32; 3],
     pub ambient_intensity: f32,
-    /// The direction sunlight travels in (Y-up), so it normally points downward.
+    /// The direction sunlight travels in. +Y points down.
     pub sun_direction: [f32; 3],
     pub sun_color: [f32; 3],
     pub shadow_softness: f32,
@@ -140,8 +356,8 @@ impl Default for Environment {
         Self {
             exposure: 1.0,
             ambient_color: [1.0, 1.0, 1.0],
-            ambient_intensity: 0.3,
-            sun_direction: [0.1, -1.0, 0.1],
+            ambient_intensity: 0.5,
+            sun_direction: [0.1, 1.0, 0.1],
             sun_color: [4.0, 4.0, 4.0],
             shadow_softness: 2.0,
             fxaa: true,
@@ -151,92 +367,17 @@ impl Default for Environment {
     }
 }
 
+impl Environment {
+    pub fn directional_light(&self) -> DirectionalLight {
+        let [x, y, z] = self.sun_direction;
+        DirectionalLight::new([x, y, z, 1.0], self.sun_color)
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SceneFile {
     pub environment: Environment,
-    /// Parents always appear before their children, and siblings are in tree order.
-    pub nodes: Vec<SceneNode>,
-}
-
-/// A node's rotation, translation and scale in scene (Y-up) world space.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct WorldPose {
-    pub position: glm::Vec3,
-    pub rotation: glm::Mat4,
-    pub scale: f32,
-}
-
-impl WorldPose {
-    pub const IDENTITY: Self = Self {
-        position: glm::Vec3::new(0.0, 0.0, 0.0),
-        rotation: glm::Mat4::new(
-            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-        ),
-        scale: 1.0,
-    };
-
-    pub fn matrix(&self) -> glm::Mat4 {
-        glm::translation(&self.position)
-            * self.rotation
-            * glm::scaling(&glm::vec3(self.scale, self.scale, self.scale))
-    }
-
-    /// Compose a child's local transform onto this pose.
-    pub fn then(&self, local: &NodeTransform) -> Self {
-        let [x, y, z] = local.position;
-        let offset = self.rotation * glm::vec4(x, y, z, 0.0);
-        Self {
-            position: self.position + offset.xyz() * self.scale,
-            rotation: self.rotation * local.rotation_matrix(),
-            scale: self.scale * local.scale,
-        }
-    }
-}
-
-/// Convert a scene-space pose to the renderer's Y-down `Transform`.
-pub fn to_engine_transform(pose: &WorldPose) -> Transform {
-    let flip = glm::scaling(&glm::vec3(1.0, -1.0, 1.0));
-    let mut transform = Transform::new();
-    transform.set_position(pose.position.x, -pose.position.y, pose.position.z);
-    transform.rotation = flip * pose.rotation * flip;
-    transform.uniform_scale = pose.scale;
-    transform
-}
-
-/// Convert a scene-space direction or point to renderer space.
-pub fn engine_direction(v: [f32; 3]) -> [f32; 3] {
-    [v[0], -v[1], v[2]]
-}
-
-pub fn pointlight_component(
-    pose: &WorldPose,
-    color: [f32; 3],
-    intensity: f32,
-    radius: f32,
-) -> Pointlight {
-    let [x, y, z] = engine_direction(pose.position.into());
-    Pointlight::new([x, y, z, 1.0], color, intensity, radius)
-}
-
-pub fn directional_light_component(env: &Environment) -> DirectionalLight {
-    let [x, y, z] = engine_direction(env.sun_direction);
-    DirectionalLight::new([x, y, z, 1.0], env.sun_color)
-}
-
-pub fn physics_components(desc: &PhysicsDesc) -> (RigidBodyComponent, ColliderComponent) {
-    let body = match desc.body {
-        BodyKind::Fixed => RigidBodyType::Fixed,
-        BodyKind::Dynamic => RigidBodyType::Dynamic,
-        BodyKind::Kinematic => RigidBodyType::KinematicPositionBased,
-    };
-    let shape = match desc.collider {
-        ColliderShape::Cuboid { half_extents: [x, y, z] } => SharedShape::cuboid(x, y, z),
-        ColliderShape::Ball { radius } => SharedShape::ball(radius),
-        ColliderShape::Capsule { half_height, radius } => {
-            SharedShape::capsule_y(half_height, radius)
-        }
-    };
-    (RigidBodyComponent::new(body), ColliderComponent::new(shape))
+    pub entities: Vec<EntityData>,
 }
 
 impl SceneFile {
@@ -249,7 +390,7 @@ impl SceneFile {
 
     pub fn save(&self, path: impl AsRef<Path>) -> Result<(), String> {
         let path = path.as_ref();
-        let config = ron::ser::PrettyConfig::new().depth_limit(4);
+        let config = ron::ser::PrettyConfig::new().depth_limit(5);
         let text = ron::ser::to_string_pretty(self, config)
             .map_err(|e| format!("could not serialize scene: {e}"))?;
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -259,85 +400,343 @@ impl SceneFile {
         std::fs::write(path, text).map_err(|e| format!("could not write {}: {e}", path.display()))
     }
 
-    /// World pose of every node. Hidden state is not considered here.
-    pub fn world_poses(&self) -> HashMap<NodeId, WorldPose> {
-        let mut poses = HashMap::with_capacity(self.nodes.len());
-        for node in &self.nodes {
-            let parent = node
-                .parent
-                .and_then(|p| poses.get(&p).copied())
-                .unwrap_or(WorldPose::IDENTITY);
-            poses.insert(node.id, parent.then(&node.transform));
-        }
-        poses
+    /// Every model file the scene's entities use.
+    pub fn model_paths(&self) -> Vec<String> {
+        let mut paths: Vec<String> = self
+            .entities
+            .iter()
+            .filter_map(|e| e.field("Object3D", "model")?.as_text())
+            .filter(|path| !path.is_empty())
+            .map(str::to_string)
+            .collect();
+        paths.sort();
+        paths.dedup();
+        paths
     }
 
-    /// True if the node and all of its ancestors are visible.
-    pub fn effective_visibility(&self) -> HashMap<NodeId, bool> {
-        let mut visible = HashMap::with_capacity(self.nodes.len());
-        for node in &self.nodes {
-            let parent = node.parent.and_then(|p| visible.get(&p).copied()).unwrap_or(true);
-            visible.insert(node.id, parent && node.visible);
-        }
-        visible
-    }
-
-    pub fn node_named(&self, name: &str) -> Option<&SceneNode> {
-        self.nodes.iter().find(|n| n.name == name)
-    }
-
-    /// Spawn this scene into a running game's world. Call from `Game::on_init`, which
-    /// runs after the engine has added its uniques.
-    pub fn instantiate(&self, world: &mut World) {
-        let poses = self.world_poses();
-        let visible = self.effective_visibility();
-
+    /// Spawn this scene into a running game. Call from `Game::on_init`, which runs after
+    /// the engine has added its uniques. Returns any problems found.
+    pub fn instantiate(&self, world: &mut World, registry: &ComponentRegistry) -> Vec<String> {
         world.add_unique(self.environment.clone());
-        world.add_unique(directional_light_component(&self.environment));
-
-        for node in &self.nodes {
-            let pose = &poses[&node.id];
-            let shown = visible[&node.id];
-            let transform = to_engine_transform(pose);
-
-            match &node.kind {
-                NodeKind::PointLight { color, intensity, radius } => {
-                    if shown {
-                        world.add_entity(pointlight_component(pose, *color, *intensity, *radius));
-                    }
-                }
-                NodeKind::Model { path, animation } if shown => {
-                    let (handle, animator) = {
-                        let mut assets = world.get_unique::<&mut AssetManager>().unwrap();
-                        let handle = assets.load_model(path);
-                        let animator = assets.create_animator(&handle);
-                        (handle, animator)
-                    };
-                    let entity = world.add_entity((transform.clone(), Object3D::with_model(handle)));
-                    if let Some(mut animator) = animator {
-                        if let Some(clip) = animation {
-                            animator.play_by_name(clip);
-                        }
-                        world.add_component(entity, animator);
-                    }
-                    if let Some(physics) = &node.physics {
-                        world.add_component(entity, physics_components(physics));
-                    }
-                }
-                _ => {
-                    if let Some(physics) = &node.physics {
-                        let (body, collider) = physics_components(physics);
-                        world.add_entity((transform, body, collider));
-                    }
-                }
+        world.add_unique(self.environment.directional_light());
+        {
+            let mut assets = world.get_unique::<&mut AssetManager>().unwrap();
+            for path in self.model_paths() {
+                assets.load_model(&path);
             }
         }
+        let mut warnings = Vec::new();
+        for data in &self.entities {
+            warnings.extend(registry.spawn(world, data).1);
+        }
+        warnings
+    }
+}
+
+/// Build a rotation matrix from YXZ Euler angles in degrees.
+pub fn rotation_from_euler(degrees: [f32; 3]) -> glm::Mat4 {
+    let [x, y, z] = degrees.map(f32::to_radians);
+    let mut m = glm::identity();
+    m = glm::rotate_y(&m, y);
+    m = glm::rotate_x(&m, x);
+    glm::rotate_z(&m, z)
+}
+
+/// Decompose a rotation matrix into YXZ Euler angles in degrees.
+pub fn euler_from_rotation(r: &glm::Mat4) -> [f32; 3] {
+    let sin_x = (-r[(1, 2)]).clamp(-1.0, 1.0);
+    let x = sin_x.asin();
+    let (y, z) = if sin_x.abs() < 0.9999 {
+        (r[(0, 2)].atan2(r[(2, 2)]), r[(1, 0)].atan2(r[(1, 1)]))
+    } else {
+        // Gimbal lock: Y and Z rotate around the same axis, so keep it all in Y.
+        ((-r[(2, 0)]).atan2(r[(0, 0)]), 0.0)
+    };
+    // Avoid showing rounding noise such as -0.0 or 0.000001 in the inspector.
+    [x, y, z].map(|radians| (radians.to_degrees() * 1000.0).round() / 1000.0 + 0.0)
+}
+
+// ── The engine's components ───────────────────────────────────────────────────
+
+impl EditableComponent for Name {
+    const NAME: &'static str = "Name";
+    fn create() -> Self {
+        Name("Entity".to_string())
+    }
+    fn fields(&self) -> Vec<Field> {
+        vec![Field::new("name", FieldValue::Text(self.0.clone()))]
+    }
+    fn set_field(&mut self, name: &str, value: &FieldValue) {
+        if let ("name", Some(text)) = (name, value.as_text()) {
+            self.0 = text.to_string();
+        }
+    }
+}
+
+impl EditableComponent for Hidden {
+    const NAME: &'static str = "Hidden";
+    fn create() -> Self {
+        Hidden
+    }
+}
+
+impl EditableComponent for Transform {
+    const NAME: &'static str = "Transform";
+    fn create() -> Self {
+        Transform::new()
+    }
+    fn fields(&self) -> Vec<Field> {
+        vec![
+            Field::new("position", FieldValue::Vec3(self.get_position_vector())),
+            Field::hinted(
+                "rotation",
+                FieldValue::Vec3(euler_from_rotation(&self.rotation)),
+                FieldHint::Degrees,
+            ),
+            Field::hinted("scale", FieldValue::Float(self.uniform_scale), FieldHint::Range(0.0001, 100000.0)),
+        ]
+    }
+    fn set_field(&mut self, name: &str, value: &FieldValue) {
+        match (name, value) {
+            ("position", FieldValue::Vec3([x, y, z])) => self.set_position(*x, *y, *z),
+            ("rotation", FieldValue::Vec3(degrees)) => self.rotation = rotation_from_euler(*degrees),
+            ("scale", FieldValue::Float(scale)) => self.uniform_scale = *scale,
+            _ => {}
+        }
+    }
+}
+
+impl EditableComponent for Object3D {
+    const NAME: &'static str = "Object3D";
+    fn create() -> Self {
+        Object3D::with_model(AssetHandle { id: String::new() })
+    }
+    fn fields(&self) -> Vec<Field> {
+        vec![Field::hinted(
+            "model",
+            FieldValue::Text(self.model.id.clone()),
+            FieldHint::Asset(&["glb", "gltf"]),
+        )]
+    }
+    fn set_field(&mut self, name: &str, value: &FieldValue) {
+        if let ("model", Some(path)) = (name, value.as_text()) {
+            self.model.id = path.to_string();
+        }
+    }
+}
+
+impl EditableComponent for Pointlight {
+    const NAME: &'static str = "Pointlight";
+    fn create() -> Self {
+        Pointlight::new([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0], 5.0, 5.0)
+    }
+    fn fields(&self) -> Vec<Field> {
+        let [x, y, z, _] = self.position;
+        vec![
+            Field::new("position", FieldValue::Vec3([x, y, z])),
+            Field::hinted("color", FieldValue::Vec3(self.color), FieldHint::Color),
+            Field::hinted("intensity", FieldValue::Float(self.intensity), FieldHint::Range(0.0, 10000.0)),
+            Field::hinted("radius", FieldValue::Float(self.radius), FieldHint::Range(0.01, 10000.0)),
+        ]
+    }
+    fn set_field(&mut self, name: &str, value: &FieldValue) {
+        match (name, value) {
+            ("position", FieldValue::Vec3([x, y, z])) => self.position = [*x, *y, *z, 1.0],
+            ("color", FieldValue::Vec3(color)) => self.color = *color,
+            ("intensity", FieldValue::Float(v)) => self.intensity = *v,
+            ("radius", FieldValue::Float(v)) => self.radius = *v,
+            _ => {}
+        }
+    }
+}
+
+impl EditableComponent for Camera {
+    const NAME: &'static str = "Camera";
+    fn create() -> Self {
+        Camera::new(glm::vec3(0.0, 0.0, 0.0))
+    }
+    fn fields(&self) -> Vec<Field> {
+        vec![
+            Field::new("active", FieldValue::Bool(self.active)),
+            Field::hinted("fov", FieldValue::Float(self.fov), FieldHint::Range(1.0, 179.0)),
+            Field::hinted("near", FieldValue::Float(self.near), FieldHint::Range(0.001, 10000.0)),
+            Field::hinted("far", FieldValue::Float(self.far), FieldHint::Range(0.01, 100000.0)),
+            Field::new("yaw", FieldValue::Float(self.yaw)),
+            Field::new("pitch", FieldValue::Float(self.pitch)),
+        ]
+    }
+    fn set_field(&mut self, name: &str, value: &FieldValue) {
+        match (name, value) {
+            ("active", FieldValue::Bool(v)) => self.active = *v,
+            ("fov", FieldValue::Float(v)) => self.fov = *v,
+            ("near", FieldValue::Float(v)) => self.near = *v,
+            ("far", FieldValue::Float(v)) => self.far = *v,
+            ("yaw", FieldValue::Float(v)) => self.yaw = *v,
+            ("pitch", FieldValue::Float(v)) => self.pitch = *v,
+            _ => {}
+        }
+    }
+}
+
+impl EditableComponent for Velocity {
+    const NAME: &'static str = "Velocity";
+    fn create() -> Self {
+        Velocity::new()
+    }
+}
+
+impl EditableComponent for KinematicCharacterComponent {
+    const NAME: &'static str = "KinematicCharacter";
+    fn create() -> Self {
+        KinematicCharacterComponent::new()
+    }
+}
+
+const BODY_TYPES: &[&str] = &["Dynamic", "Fixed", "KinematicPosition", "KinematicVelocity"];
+
+impl EditableComponent for RigidBodyComponent {
+    const NAME: &'static str = "RigidBody";
+    fn create() -> Self {
+        RigidBodyComponent::new(RigidBodyType::Fixed)
+    }
+    fn fields(&self) -> Vec<Field> {
+        let body = match self.body_type {
+            RigidBodyType::Dynamic => "Dynamic",
+            RigidBodyType::Fixed => "Fixed",
+            RigidBodyType::KinematicPositionBased => "KinematicPosition",
+            RigidBodyType::KinematicVelocityBased => "KinematicVelocity",
+        };
+        vec![Field::hinted("body_type", FieldValue::Text(body.into()), FieldHint::Choice(BODY_TYPES))]
+    }
+    fn set_field(&mut self, name: &str, value: &FieldValue) {
+        if let ("body_type", Some(body)) = (name, value.as_text()) {
+            self.body_type = match body {
+                "Dynamic" => RigidBodyType::Dynamic,
+                "KinematicPosition" => RigidBodyType::KinematicPositionBased,
+                "KinematicVelocity" => RigidBodyType::KinematicVelocityBased,
+                _ => RigidBodyType::Fixed,
+            };
+        }
+    }
+}
+
+const COLLIDER_SHAPES: &[&str] = &["Box", "Ball", "Capsule"];
+
+impl EditableComponent for ColliderComponent {
+    const NAME: &'static str = "Collider";
+    fn create() -> Self {
+        ColliderComponent::cuboid(0.5, 0.5, 0.5)
+    }
+    fn fields(&self) -> Vec<Field> {
+        let positive = FieldHint::Range(0.001, 100000.0);
+        let shape = |name: &str| Field::hinted("shape", FieldValue::Text(name.into()), FieldHint::Choice(COLLIDER_SHAPES));
+        if let Some(ball) = self.shape.as_ball() {
+            vec![shape("Ball"), Field::hinted("radius", FieldValue::Float(ball.radius), positive)]
+        } else if let Some(capsule) = self.shape.as_capsule() {
+            vec![
+                shape("Capsule"),
+                Field::hinted("half_height", FieldValue::Float(capsule.half_height()), positive),
+                Field::hinted("radius", FieldValue::Float(capsule.radius), positive),
+            ]
+        } else if let Some(cuboid) = self.shape.as_cuboid() {
+            let half = cuboid.half_extents;
+            vec![shape("Box"), Field::new("half_extents", FieldValue::Vec3([half.x, half.y, half.z]))]
+        } else {
+            // Shapes made in code that the editor can't describe stay as they are.
+            Vec::new()
+        }
+    }
+    fn set_field(&mut self, name: &str, value: &FieldValue) {
+        // Radii and half-extents survive switching shapes where they can.
+        let radius = self.shape.as_ball().map(|b| b.radius)
+            .or_else(|| self.shape.as_capsule().map(|c| c.radius))
+            .unwrap_or(0.5);
+        let half_height = self.shape.as_capsule().map_or(0.5, |c| c.half_height());
+        self.shape = match (name, value) {
+            ("shape", FieldValue::Text(shape)) => match shape.as_str() {
+                "Ball" if self.shape.as_ball().is_none() => SharedShape::ball(radius),
+                "Capsule" if self.shape.as_capsule().is_none() => SharedShape::capsule_y(half_height, radius),
+                "Box" if self.shape.as_cuboid().is_none() => SharedShape::cuboid(0.5, 0.5, 0.5),
+                _ => return,
+            },
+            ("radius", FieldValue::Float(r)) if self.shape.as_ball().is_some() => SharedShape::ball(*r),
+            ("radius", FieldValue::Float(r)) => SharedShape::capsule_y(half_height, *r),
+            ("half_height", FieldValue::Float(h)) => SharedShape::capsule_y(*h, radius),
+            ("half_extents", FieldValue::Vec3([x, y, z])) => SharedShape::cuboid(*x, *y, *z),
+            _ => return,
+        };
+    }
+}
+
+impl EditableComponent for Scripts {
+    const NAME: &'static str = "Scripts";
+    fn create() -> Self {
+        Scripts::default()
+    }
+    fn fields(&self) -> Vec<Field> {
+        vec![Field::new("scripts", FieldValue::Scripts(self.instances.clone()))]
+    }
+    fn set_field(&mut self, name: &str, value: &FieldValue) {
+        if let ("scripts", FieldValue::Scripts(instances)) = (name, value) {
+            self.instances = instances.clone();
+        }
+    }
+}
+
+/// An `Animator` is built from its entity's model, so it can't use `EditableComponent`.
+fn animator_def() -> ComponentDef {
+    ComponentDef {
+        name: "Animator",
+        add: |world, entity| {
+            let model = world
+                .get::<&Object3D>(entity)
+                .map_err(|_| "Animator needs an Object3D on the same entity.".to_string())?
+                .model
+                .clone();
+            let animator = world
+                .get_unique::<&AssetManager>()
+                .map_err(|_| "No asset manager.".to_string())?
+                .create_animator(&model)
+                .ok_or_else(|| format!("{} has no skeleton to animate.", model.id))?;
+            world.add_component(entity, animator);
+            Ok(())
+        },
+        remove: |world, entity| {
+            world.delete_component::<Animator>(entity);
+        },
+        has: |world, entity| world.get::<&Animator>(entity).is_ok(),
+        fields: |world, entity| {
+            let animator = world.get::<&Animator>(entity).ok()?;
+            let clip = if animator.playing { animator.clip_name().unwrap_or("") } else { "" };
+            Some(vec![
+                Field::hinted("clip", FieldValue::Text(clip.to_string()), FieldHint::AnimationClip),
+                Field::new("looping", FieldValue::Bool(animator.looping)),
+            ])
+        },
+        set_field: |world, entity, name, value| {
+            if let Ok(mut animator) = world.get::<&mut Animator>(entity) {
+                match (name, value) {
+                    ("clip", FieldValue::Text(clip)) if clip.is_empty() => animator.stop(),
+                    ("clip", FieldValue::Text(clip)) => {
+                        if animator.clip_name() != Some(clip) || !animator.playing {
+                            animator.play_by_name(clip);
+                        }
+                    }
+                    ("looping", FieldValue::Bool(looping)) => animator.looping = *looping,
+                    _ => {}
+                }
+            }
+        },
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn registry() -> ComponentRegistry {
+        ComponentRegistry::with_engine_components()
+    }
 
     fn close(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-3
@@ -346,77 +745,115 @@ mod tests {
     #[test]
     fn euler_round_trips_through_matrix() {
         for rotation in [[0.0, 0.0, 0.0], [30.0, 45.0, 60.0], [-70.0, 170.0, -20.0], [10.0, -95.0, 5.0]] {
-            let t = NodeTransform { rotation, ..Default::default() };
-            let recovered = euler_degrees_from_matrix(&t.rotation_matrix());
-            let round_trip = NodeTransform { rotation: recovered, ..Default::default() };
-            let (a, b) = (t.rotation_matrix(), round_trip.rotation_matrix());
+            let matrix = rotation_from_euler(rotation);
+            let again = rotation_from_euler(euler_from_rotation(&matrix));
             for i in 0..16 {
-                assert!(close(a[i], b[i]), "{rotation:?} became {recovered:?}");
+                assert!(close(matrix[i], again[i]), "{rotation:?}");
             }
         }
     }
 
-    #[test]
-    fn child_pose_composes_with_parent() {
-        let parent = NodeTransform {
-            position: [1.0, 2.0, 3.0],
-            rotation: [0.0, 90.0, 0.0],
-            scale: 2.0,
-        };
-        let child = NodeTransform { position: [1.0, 0.0, 0.0], ..Default::default() };
-        let pose = WorldPose::IDENTITY.then(&parent).then(&child);
-
-        let expected = parent.matrix() * child.matrix();
-        for i in 0..16 {
-            assert!(close(pose.matrix()[i], expected[i]));
-        }
-        assert!(close(pose.scale, 2.0));
+    /// Spawn from saved data and read it back: nothing should change.
+    fn assert_round_trips(component: ComponentData) {
+        let registry = registry();
+        let mut world = World::new();
+        let data = EntityData { components: vec![component] };
+        let (entity, warnings) = registry.spawn(&mut world, &data);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(registry.capture(&world, entity), data);
     }
 
     #[test]
-    fn engine_transform_mirrors_y() {
-        let pose = WorldPose::IDENTITY.then(&NodeTransform {
-            position: [1.0, 10.0, -2.0],
-            rotation: [0.0, 90.0, 0.0],
-            scale: 0.5,
-        });
-        let transform = to_engine_transform(&pose);
-        assert_eq!(transform.get_position_vector(), [1.0, -10.0, -2.0]);
+    fn components_survive_a_round_trip() {
+        assert_round_trips(ComponentData::named("Name").with("name", FieldValue::Text("Crate".into())));
+        assert_round_trips(
+            ComponentData::named("Transform")
+                .with("position", FieldValue::Vec3([1.0, -2.0, 3.0]))
+                .with("rotation", FieldValue::Vec3([10.0, 20.0, 30.0]))
+                .with("scale", FieldValue::Float(0.5)),
+        );
+        assert_round_trips(ComponentData::named("Object3D").with("model", FieldValue::Text("data/a.glb".into())));
+        assert_round_trips(
+            ComponentData::named("Pointlight")
+                .with("position", FieldValue::Vec3([1.0, 2.0, 3.0]))
+                .with("color", FieldValue::Vec3([10.0, 1.0, 1.0]))
+                .with("intensity", FieldValue::Float(5.0))
+                .with("radius", FieldValue::Float(3.0)),
+        );
+        assert_round_trips(ComponentData::named("RigidBody").with("body_type", FieldValue::Text("KinematicVelocity".into())));
+        assert_round_trips(
+            ComponentData::named("Collider")
+                .with("shape", FieldValue::Text("Capsule".into()))
+                .with("half_height", FieldValue::Float(1.0))
+                .with("radius", FieldValue::Float(0.5)),
+        );
+        assert_round_trips(
+            ComponentData::named("Collider")
+                .with("shape", FieldValue::Text("Box".into()))
+                .with("half_extents", FieldValue::Vec3([100.0, 0.1, 100.0])),
+        );
+        assert_round_trips(
+            ComponentData::named("Collider")
+                .with("shape", FieldValue::Text("Ball".into()))
+                .with("radius", FieldValue::Float(0.45)),
+        );
+        assert_round_trips(ComponentData::named("Hidden"));
+    }
 
-        // A scene-space point must land on the Y-mirror of where the pose puts it.
-        let local = glm::vec4(1.0, 2.0, 3.0, 1.0);
-        let scene = pose.matrix() * local;
-        let engine = transform.model_matrix() * glm::vec4(1.0, -2.0, 3.0, 1.0);
-        assert!(close(engine.x, scene.x) && close(engine.y, -scene.y) && close(engine.z, scene.z));
+    #[test]
+    fn registry_adds_and_removes_real_components() {
+        let registry = registry();
+        let mut world = World::new();
+        let entity = world.add_entity(());
+        let def = registry.def("Transform").unwrap();
+
+        assert!(!def.has(&world, entity));
+        def.add(&mut world, entity).unwrap();
+        assert!(world.get::<&Transform>(entity).is_ok());
+
+        def.set_field(&world, entity, "position", &FieldValue::Vec3([1.0, 2.0, 3.0]));
+        assert_eq!(world.get::<&Transform>(entity).unwrap().get_position_vector(), [1.0, 2.0, 3.0]);
+
+        def.remove(&mut world, entity);
+        assert!(world.get::<&Transform>(entity).is_err());
+    }
+
+    #[test]
+    fn unknown_components_are_reported_and_the_rest_still_loads() {
+        let registry = registry();
+        let mut world = World::new();
+        let data = EntityData {
+            components: vec![ComponentData::named("NoSuchThing"), ComponentData::named("Hidden")],
+        };
+        let (entity, warnings) = registry.spawn(&mut world, &data);
+        assert_eq!(warnings.len(), 1);
+        assert!(world.get::<&Hidden>(entity).is_ok());
+    }
+
+    #[test]
+    fn an_animator_without_a_model_is_refused() {
+        let registry = registry();
+        let mut world = World::new();
+        let entity = world.add_entity(());
+        assert!(registry.def("Animator").unwrap().add(&mut world, entity).is_err());
     }
 
     #[test]
     fn scene_survives_a_save_and_load() {
         let scene = SceneFile {
             environment: Environment { exposure: 1.5, ..Default::default() },
-            nodes: vec![
-                SceneNode {
-                    id: 1,
-                    name: "Level".into(),
-                    parent: None,
-                    transform: Default::default(),
-                    visible: true,
-                    kind: NodeKind::Model { path: "data/a.glb".into(), animation: Some("Walk".into()) },
-                    physics: Some(PhysicsDesc {
-                        body: BodyKind::Fixed,
-                        collider: ColliderShape::Cuboid { half_extents: [1.0, 2.0, 3.0] },
-                    }),
-                },
-                SceneNode {
-                    id: 2,
-                    name: "Lamp".into(),
-                    parent: Some(1),
-                    transform: Default::default(),
-                    visible: false,
-                    kind: NodeKind::PointLight { color: [1.0, 0.5, 0.2], intensity: 5.0, radius: 3.0 },
-                    physics: None,
-                },
-            ],
+            entities: vec![EntityData {
+                components: vec![
+                    ComponentData::named("Name").with("name", FieldValue::Text("Lamp".into())),
+                    ComponentData::named("Scripts").with(
+                        "scripts",
+                        FieldValue::Scripts(vec![ScriptInstance {
+                            path: "scripts/spin.rhai".into(),
+                            exports: BTreeMap::from([("speed".to_string(), FieldValue::Float(2.5))]),
+                        }]),
+                    ),
+                ],
+            }],
         };
         let path = std::env::temp_dir().join(format!("vscene-test-{}.vscene", std::process::id()));
         scene.save(&path).unwrap();

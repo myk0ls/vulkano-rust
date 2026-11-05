@@ -8,7 +8,7 @@ use egui::{Color32, FontId, Pos2, RichText, Sense, Ui, vec2};
 use crate::editor::{Action, Editor};
 use crate::theme;
 
-const ROOTS: [&str; 2] = ["scenes", "data"];
+const ROOTS: [&str; 3] = ["scenes", "scripts", "data"];
 const ROW_HEIGHT: f32 = 22.0;
 
 /// Dragged from the FileSystem dock onto the viewport to add a model.
@@ -30,6 +30,23 @@ pub struct FileBrowser {
 }
 
 impl FileBrowser {
+    /// All project files with one of these extensions, as asset paths.
+    pub fn files_with_extensions(&self, extensions: &[&str]) -> Vec<String> {
+        fn walk(entry: &FileEntry, extensions: &[&str], out: &mut Vec<String>) {
+            match &entry.children {
+                Some(children) => children.iter().for_each(|c| walk(c, extensions, out)),
+                None => {
+                    if extensions.contains(&extension(&entry.path).as_str()) {
+                        out.push(asset_path(&entry.path));
+                    }
+                }
+            }
+        }
+        let mut out = Vec::new();
+        self.roots.iter().for_each(|r| walk(r, extensions, &mut out));
+        out
+    }
+
     pub fn new() -> Self {
         Self {
             roots: Vec::new(),
@@ -93,14 +110,23 @@ fn matches_filter(entry: &FileEntry, filter: &str) -> bool {
 
 fn icon(entry: &FileEntry) -> (&'static str, Color32) {
     if entry.children.is_some() {
-        return ("🗀", theme::ACCENT);
+        return ("🗀", theme::accent());
     }
     match extension(&entry.path).as_str() {
-        "vscene" => ("🎬", theme::PLAY),
-        "glb" | "gltf" => ("▣", theme::NODE_3D),
-        "hdr" | "png" | "jpg" | "jpeg" => ("🖼", theme::WARNING),
-        _ => ("🗋", theme::TEXT_DIM),
+        "vscene" => ("🎬", theme::play()),
+        "rhai" => ("🖹", theme::accent()),
+        "glb" | "gltf" => ("▣", theme::entity()),
+        "hdr" | "png" | "jpg" | "jpeg" => ("🖼", theme::warning()),
+        _ => ("🗋", theme::text_dim()),
     }
+}
+
+/// The last part of an asset path, for showing in the UI.
+pub fn file_name(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string())
 }
 
 /// A path as scene files should store it: relative, with forward slashes.
@@ -133,7 +159,7 @@ pub fn ui(ui: &mut Ui, editor: &mut Editor) {
             row(ui, editor, entry, 0, &filter);
         }
         if roots.is_empty() {
-            ui.label(RichText::new("No scenes/ or data/ folder here.").color(theme::TEXT_DIM));
+            ui.label(RichText::new("No scenes/ or data/ folder here.").color(theme::text_dim()));
         }
     });
     if editor.files.roots.is_empty() {
@@ -156,19 +182,19 @@ fn row(ui: &mut Ui, editor: &mut Editor, entry: &FileEntry, depth: usize, filter
     if ui.is_rect_visible(rect) {
         let selected = editor.files.selected.as_ref() == Some(&entry.path);
         if selected {
-            ui.painter().rect_filled(rect, 2.0, theme::SELECTED);
+            ui.painter().rect_filled(rect, 2.0, theme::selected());
         } else if response.hovered() {
-            ui.painter().rect_filled(rect, 2.0, theme::HOVER);
+            ui.painter().rect_filled(rect, 2.0, theme::hover());
         }
         let x = rect.left() + 6.0 + depth as f32 * 14.0;
         let y = rect.center().y;
         if is_folder {
             let arrow = if open { "⏷" } else { "⏵" };
-            text(ui, Pos2::new(x, y), arrow, theme::TEXT_DIM);
+            text(ui, Pos2::new(x, y), arrow, theme::text_dim());
         }
         let (glyph, color) = icon(entry);
         text(ui, Pos2::new(x + 14.0, y), glyph, color);
-        text(ui, Pos2::new(x + 34.0, y), &entry.name, theme::TEXT);
+        text(ui, Pos2::new(x + 34.0, y), &entry.name, theme::text());
     }
 
     if response.clicked() {
@@ -180,6 +206,7 @@ fn row(ui: &mut Ui, editor: &mut Editor, entry: &FileEntry, depth: usize, filter
     if response.double_clicked() {
         match extension(&entry.path).as_str() {
             "vscene" => editor.actions.push(Action::OpenScene(entry.path.clone())),
+            "rhai" => editor.scripts.open_in_editor(&asset_path(&entry.path), &mut editor.log),
             "glb" | "gltf" => editor.actions.push(Action::AddModel {
                 path: asset_path(&entry.path),
                 position: None,

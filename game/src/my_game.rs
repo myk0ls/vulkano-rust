@@ -18,7 +18,7 @@ use vulkano_engine::scene::components::animator::Animator;
 use vulkano_engine::scene::components::delta_time::DeltaTime;
 use vulkano_engine::scene::components::directional_light::DirectionalLight;
 use vulkano_engine::scene::components::object3d::Object3D;
-use vulkano_engine::scene::scene_file::{SceneFile, to_engine_transform};
+use vulkano_engine::scene::scene_file::SceneFile;
 
 use vulkano_engine::{
     core::application::Game,
@@ -42,26 +42,28 @@ impl MyApp {
         }
     }
 
-    /// Load an editor-authored scene and put the player at its `PlayerSpawn` node.
+    /// Load an editor-authored scene. Everything in it, the player included, is plain
+    /// entities and components.
     fn init_from_scene(&mut self, path: &str) {
         let scene = SceneFile::load(path).unwrap_or_else(|e| panic!("{e}"));
-        scene.instantiate(&mut self.world);
+        let registry = crate::component_registry();
+        for warning in scene.instantiate(&mut self.world, &registry) {
+            eprintln!("{path}: {warning}");
+        }
 
-        let spawn = scene
-            .node_named("PlayerSpawn")
-            .and_then(|node| scene.world_poses().get(&node.id).copied())
-            .map(|pose| to_engine_transform(&pose))
-            .unwrap_or_else(|| Transform::with_pos(vec3(0.0, -2.0, 0.0)));
-
-        self.world.add_entity((
-            Player::new(),
-            Camera::new(vec3(0.0, -5.0, 0.0)),
-            spawn,
-            Velocity::new(),
-            KinematicCharacterComponent::new(),
-            RigidBodyComponent::new(RigidBodyType::KinematicVelocityBased),
-            ColliderComponent::new(SharedShape::capsule_y(1.0, 0.5)),
-        ));
+        let has_player = self.world.run(|players: View<Player>| players.iter().count() > 0);
+        if !has_player {
+            eprintln!("{path} has no entity with a Player component; adding a default one.");
+            self.world.add_entity((
+                Player::new(),
+                Camera::new(vec3(0.0, -5.0, 0.0)),
+                Transform::with_pos(vec3(0.0, -2.0, 0.0)),
+                Velocity::new(),
+                KinematicCharacterComponent::new(),
+                RigidBodyComponent::new(RigidBodyType::KinematicVelocityBased),
+                ColliderComponent::new(SharedShape::capsule_y(1.0, 0.5)),
+            ));
+        }
     }
 }
 

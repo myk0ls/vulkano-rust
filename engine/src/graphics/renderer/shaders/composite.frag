@@ -30,7 +30,6 @@ void main() {
     vec3 exposed = sceneWithAo * pc.exposure;
     vec3 mapped = aces(exposed);
 
-    vec3 color = pow(mapped, vec3(1.0 / 2.2));
-
-    out_color = vec4(color, 1.0);
+    // The render target is sRGB, so the hardware applies gamma encoding on write.
+    out_color = vec4(mapped, 1.0);
 }

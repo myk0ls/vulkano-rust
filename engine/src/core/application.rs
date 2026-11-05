@@ -21,7 +21,8 @@ use vulkano::sync;
 use vulkano::sync::GpuFuture;
 
 use crate::graphics::renderer::{CulledDrawBuffers, Renderer, RendererConfig};
-use crate::scene::scene_file::Environment;
+use crate::scene::scene_file::{Environment, Hidden};
+use crate::scripting::ScriptRuntime;
 
 const PHYSICS_DT: f32 = 1.0 / 120.0;
 
@@ -46,6 +47,7 @@ pub struct Application<G: Game> {
     pub game: G,
     pub last_frame: std::time::Instant,
     pub physics_accumulator: f32,
+    pub scripts: ScriptRuntime,
     // Fields drop in declaration order. The frame future and renderer hold the
     // swapchain, which must be destroyed before the window and SDL shut down.
     pub previous_frame_end: Option<Box<dyn vulkano::sync::GpuFuture>>,
@@ -94,6 +96,7 @@ impl<G: Game> Application<G> {
             window,
             renderer,
             physics_accumulator: 0.0,
+            scripts: ScriptRuntime::new(),
             previous_frame_end: _previous_frame_end,
         }
     }
@@ -152,7 +155,7 @@ impl<G: Game> Application<G> {
         let mut environment =
             self.bake_environment("data/skybox/citrus_orchard_road_puresky_4k.hdr");
 
-        self.renderer.set_ambient([1.0, 1.0, 1.0], 0.3);
+        self.renderer.set_ambient([1.0, 1.0, 1.0], 0.5);
         // A scene file loaded in on_init overrides the defaults above.
         if let Ok(env) = self.game.get_world().get_unique::<&Environment>() {
             self.renderer.apply_environment(&env);
@@ -340,6 +343,7 @@ impl<G: Game> Application<G> {
             self.last_frame = std::time::Instant::now();
 
             self.game.on_update(dt);
+            self.scripts.update(self.game.get_world(), dt);
             self.update_animators(dt);
             self.game.on_render();
 
@@ -397,8 +401,13 @@ impl<G: Game> Application<G> {
         let mut all_joint_matrices: Vec<[[f32; 4]; 4]> = Vec::new();
 
         world.run(
-            |objects: View<Object3D>, transforms: View<Transform>, animators: View<Animator>| {
-                for (entity_id, (object, transform)) in (&objects, &transforms).iter().with_id() {
+            |objects: View<Object3D>,
+             transforms: View<Transform>,
+             animators: View<Animator>,
+             hidden: View<Hidden>| {
+                for (entity_id, (object, transform, _)) in
+                    (&objects, &transforms, !&hidden).iter().with_id()
+                {
                     if let Some(model) = asset_manager.get_model(&object.model) {
                         let entity_skin_offset = if let Ok(animator) = animators.get(entity_id) {
                             let offset = all_joint_matrices.len() as u32;
@@ -456,9 +465,9 @@ impl<G: Game> Application<G> {
         let world = self.game.get_world();
         let asset_manager = world.get_unique::<&AssetManager>().unwrap();
 
-        world.run(|mut pointlights: View<Pointlight>| {
-            for object in pointlights.iter() {
-                self.renderer.pointlight(&object);
+        world.run(|pointlights: View<Pointlight>, hidden: View<Hidden>| {
+            for (object, _) in (&pointlights, !&hidden).iter() {
+                self.renderer.pointlight(object);
             }
         });
     }

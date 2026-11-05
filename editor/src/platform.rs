@@ -161,8 +161,14 @@ impl Platform {
 
     pub fn apply_output(&mut self, output: egui::PlatformOutput) {
         for command in output.commands {
-            if let egui::OutputCommand::CopyText(text) = command {
-                let _ = self.video.clipboard().set_clipboard_text(&text);
+            match command {
+                egui::OutputCommand::CopyText(text) => {
+                    let _ = self.video.clipboard().set_clipboard_text(&text);
+                }
+                egui::OutputCommand::OpenUrl(url) => {
+                    let _ = std::process::Command::new("xdg-open").arg(url.url).spawn();
+                }
+                _ => {}
             }
         }
         if output.cursor_icon != self.cursor_icon || self.cursor.is_none() {

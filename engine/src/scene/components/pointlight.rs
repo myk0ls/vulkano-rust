@@ -5,7 +5,7 @@ use crate::{
     graphics::mesh::{self, Mesh},
 };
 
-#[derive(Component)]
+#[derive(Component, Clone)]
 pub struct Pointlight {
     pub position: [f32; 4],
     pub color: [f32; 3],

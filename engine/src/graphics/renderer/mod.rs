@@ -336,7 +336,8 @@ impl Default for RendererConfig {
     fn default() -> Self {
         Self {
             present_mode: PresentMode::Immediate,
-            preferred_swapchain_formats: Vec::new(),
+            // The composite shader relies on the target applying gamma encoding.
+            preferred_swapchain_formats: vec![Format::B8G8R8A8_SRGB, Format::R8G8B8A8_SRGB],
             swapchain_usage: ImageUsage::COLOR_ATTACHMENT,
             composite_format: None,
         }

@@ -66,6 +66,12 @@ void main() {
         local_tangent = tangent.xyz;
     }
 
+    // Positions are stored with Y negated, but normals and tangents come from glTF in
+    // Y-up space. Mirror them to match, so all lighting happens in one space. A mirror
+    // also reverses handedness, hence the sign change on tangent.w below.
+    local_normal.y = -local_normal.y;
+    local_tangent.y = -local_tangent.y;
+
     vec4 frag_pos = d.model * local_pos;
     gl_Position = vp_uniforms.projection * vp_uniforms.view * frag_pos;
 
@@ -73,7 +79,7 @@ void main() {
     out_color = color;
     out_normal = normalize(normal_mat * local_normal);
     out_tangent = normalize(normal_mat * local_tangent);
-    out_tangent_w = tangent.w;
+    out_tangent_w = -tangent.w;
     out_location = frag_pos;
     tex_coords = uv;
     out_material_index = d.material_index;

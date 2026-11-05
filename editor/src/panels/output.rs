@@ -27,9 +27,9 @@ pub fn ui(ui: &mut Ui, editor: &mut Editor) {
         .show_rows(ui, row_height, count, |ui, rows| {
             for entry in &editor.log.entries[rows] {
                 let color = match entry.level {
-                    Level::Info => theme::TEXT,
-                    Level::Warning => theme::WARNING,
-                    Level::Error => theme::ERROR,
+                    Level::Info => theme::text(),
+                    Level::Warning => theme::warning(),
+                    Level::Error => theme::error(),
                 };
                 ui.label(RichText::new(&entry.text).monospace().color(color));
             }
