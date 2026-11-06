@@ -16,7 +16,7 @@ use crate::log::Log;
 use crate::panels::entities::EntityListState;
 use crate::panels::filesystem::FileBrowser;
 use crate::panels::inspector::InspectorState;
-use crate::panels::scripts::{SCRIPTS_DIR, ScriptLibrary};
+use crate::panels::scripts::{FileKind, ScriptLibrary};
 use crate::panels::viewport::ViewportState;
 use crate::panels::{entities, filesystem, inspector, output, scripts, viewport};
 use crate::runner::GameRunner;
@@ -52,11 +52,16 @@ pub enum Action {
         path: String,
         position: Option<[f32; 3]>,
     },
+    AddPrefab {
+        path: String,
+        position: Option<[f32; 3]>,
+    },
 }
 
 pub enum Dialog {
     CreateEntity { search: String },
-    NewScript { name: String },
+    NewFile { kind: FileKind, name: String },
+    SavePrefab { entity: shipyard::EntityId, name: String },
     DeleteScript { path: String },
     OpenScene { files: Vec<PathBuf> },
     SaveAs { name: String, then: Option<Action> },
@@ -72,6 +77,10 @@ pub struct Editor {
     pub inspector: InspectorState,
     /// A scene waiting to replace the current one once its models have loaded.
     pub pending_open: Option<(SceneFile, Option<PathBuf>)>,
+    /// A prefab waiting to be placed, at a Y-up position, once its models have loaded.
+    pub pending_prefab: Option<(SceneFile, [f32; 3])>,
+    /// Shaders that don't compile, from the renderer.
+    pub shader_errors: Vec<(String, String)>,
     pub settings: Settings,
     pub log: Log,
     pub runner: GameRunner,
@@ -111,6 +120,8 @@ impl Editor {
             scripts: ScriptLibrary::new(&settings),
             inspector: InspectorState::default(),
             pending_open: None,
+            pending_prefab: None,
+            shader_errors: Vec::new(),
             settings,
             log,
             runner: GameRunner::new(),
@@ -202,6 +213,7 @@ impl Editor {
             ui.menu_button("View", |ui| {
                 ui.checkbox(&mut self.viewport.show_grid, "Grid");
                 ui.checkbox(&mut self.viewport.show_icons, "Entity Icons");
+                ui.checkbox(&mut self.viewport.show_game_ui, "Game UI");
                 ui.separator();
                 ui.menu_button("Theme", |ui| {
                     for choice in theme::Theme::ALL {
@@ -397,6 +409,10 @@ impl Editor {
                     self.doc.duplicate(world, &self.registry, entity);
                 }
             }
+            Action::AddPrefab { path, position } => match SceneFile::load(&path) {
+                Ok(prefab) => self.pending_prefab = Some((prefab, position.unwrap_or([0.0; 3]))),
+                Err(e) => self.log.error(e),
+            },
             Action::AddModel { path, position } => {
                 let name = std::path::Path::new(&path)
                     .file_stem()
@@ -446,7 +462,8 @@ impl Editor {
         };
         let keep = match &mut dialog {
             Dialog::CreateEntity { search } => self.create_entity_dialog(ctx, world, search),
-            Dialog::NewScript { name } => self.new_script_dialog(ctx, name),
+            Dialog::NewFile { kind, name } => self.new_file_dialog(ctx, *kind, name),
+            Dialog::SavePrefab { entity, name } => self.save_prefab_dialog(ctx, world, *entity, name),
             Dialog::DeleteScript { path } => self.delete_script_dialog(ctx, path),
             Dialog::OpenScene { files } => self.open_scene_dialog(ctx, files),
             Dialog::SaveAs { name, then } => self.save_as_ui(ctx, name, then),
@@ -507,16 +524,16 @@ impl Editor {
         keep && !modal.should_close()
     }
 
-    fn new_script_dialog(&mut self, ctx: &egui::Context, name: &mut String) -> bool {
+    fn new_file_dialog(&mut self, ctx: &egui::Context, kind: FileKind, name: &mut String) -> bool {
         let mut keep = true;
-        let modal = egui::Modal::new(egui::Id::new("new_script")).show(ctx, |ui| {
-            ui.set_width(380.0);
-            ui.heading("New Script");
+        let modal = egui::Modal::new(egui::Id::new("new_file")).show(ctx, |ui| {
+            ui.set_width(400.0);
+            ui.heading(format!("New {}", kind.label()));
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("{SCRIPTS_DIR}/")).color(theme::text_dim()));
-                ui.add(egui::TextEdit::singleline(name).desired_width(220.0)).request_focus();
-                ui.label(RichText::new(".rhai").color(theme::text_dim()));
+                ui.label(RichText::new(format!("{}/", kind.dir())).color(theme::text_dim()));
+                ui.add(egui::TextEdit::singleline(name).desired_width(200.0)).request_focus();
+                ui.label(RichText::new(format!(".{}", kind.extension())).color(theme::text_dim()));
             });
             let cleaned = name.trim();
             let valid = !cleaned.is_empty() && !cleaned.contains(['/', '\\']) && !cleaned.starts_with('.');
@@ -524,7 +541,7 @@ impl Editor {
             ui.horizontal(|ui| {
                 let enter = ui.input(|i| i.key_pressed(Key::Enter));
                 if (ui.add_enabled(valid, Button::new("Create")).clicked() || enter) && valid {
-                    match self.scripts.create(cleaned) {
+                    match self.scripts.create(kind, cleaned) {
                         Ok(path) => {
                             self.log.info(format!("Created {path}."));
                             self.files.refresh();
@@ -533,6 +550,48 @@ impl Editor {
                         }
                         Err(e) => self.log.error(e),
                     }
+                }
+                if ui.button("Cancel").clicked() {
+                    keep = false;
+                }
+            });
+        });
+        keep && !modal.should_close()
+    }
+
+    fn save_prefab_dialog(&mut self, ctx: &egui::Context, world: &World, entity: shipyard::EntityId, name: &mut String) -> bool {
+        let mut keep = true;
+        let modal = egui::Modal::new(egui::Id::new("save_prefab")).show(ctx, |ui| {
+            ui.set_width(400.0);
+            ui.heading("Save as Prefab");
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("prefabs/").color(theme::text_dim()));
+                ui.add(egui::TextEdit::singleline(name).desired_width(200.0)).request_focus();
+                ui.label(RichText::new(".vscene").color(theme::text_dim()));
+            });
+            let cleaned = name.trim();
+            let valid = !cleaned.is_empty() && !cleaned.contains(['/', '\\']) && !cleaned.starts_with('.');
+            let path = PathBuf::from("prefabs").join(format!("{cleaned}.vscene"));
+            if valid && path.exists() {
+                ui.label(RichText::new("This will replace the existing prefab.").color(theme::warning()));
+            }
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                let enter = ui.input(|i| i.key_pressed(Key::Enter));
+                if (ui.add_enabled(valid, Button::new("Save")).clicked() || enter) && valid {
+                    let prefab = SceneFile {
+                        entities: vec![self.registry.capture(world, entity)],
+                        ..Default::default()
+                    };
+                    match prefab.save(&path) {
+                        Ok(()) => {
+                            self.log.info(format!("Saved {}.", path.display()));
+                            self.files.refresh();
+                        }
+                        Err(e) => self.log.error(e),
+                    }
+                    keep = false;
                 }
                 if ui.button("Cancel").clicked() {
                     keep = false;
@@ -696,6 +755,7 @@ fn shortcuts_ui(ui: &mut Ui) {
         ("", ""),
         ("Scene", ""),
         ("Ctrl+A", "Add an entity"),
+        ("Right-click an entity", "Rename, duplicate, delete, save as prefab"),
         ("Ctrl+D  /  Del  /  F2", "Duplicate, delete, rename"),
         ("Ctrl+Z  /  Ctrl+Y", "Undo, redo"),
         ("Ctrl+S  /  Ctrl+Shift+S", "Save, save as"),
@@ -729,7 +789,7 @@ impl TabViewer for Tabs<'_> {
     fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
         match tab {
             Tab::Viewport => "3D".to_string(),
-            Tab::Script => "Script".to_string(),
+            Tab::Script => "Scripts & Shaders".to_string(),
             Tab::Entities => "Entities".to_string(),
             Tab::FileSystem => "FileSystem".to_string(),
             Tab::Inspector => "Inspector".to_string(),

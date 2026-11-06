@@ -181,38 +181,58 @@ impl Renderer {
             [
                 WriteDescriptorSet::buffer(0, culled.draw_data.clone()),
                 WriteDescriptorSet::buffer(1, culled.joint_matrices.clone()),
+                WriteDescriptorSet::buffer(2, culled.overrides.clone()),
             ],
             [],
         )
         .unwrap();
 
+        // Material shader variants are compiled (or rebuilt) before recording starts.
+        let pipelines: Vec<_> = culled
+            .ranges
+            .iter()
+            .map(|range| {
+                range
+                    .shader
+                    .as_deref()
+                    .and_then(|path| self.material_pipeline(path))
+                    .unwrap_or_else(|| self.deferred_pipeline.clone())
+            })
+            .collect();
+        let time = self.start_time.elapsed().as_secs_f32();
+        let viewport = self.viewport.clone();
+        let sets = (
+            self.vp_set.clone(),
+            self.bindless_material_set.as_ref().unwrap().clone(),
+            draw_data_set,
+        );
         let builder = self.commands.as_mut().unwrap();
 
-        builder
-            .bind_pipeline_graphics(self.deferred_pipeline.clone())
-            .unwrap()
-            .set_viewport(0, [self.viewport.clone()].into_iter().collect())
-            .unwrap()
-            .bind_vertex_buffers(0, vb)
-            .unwrap()
-            .bind_index_buffer(ib)
-            .unwrap()
-            .bind_descriptor_sets(
-                PipelineBindPoint::Graphics,
-                self.deferred_pipeline.layout().clone(),
-                0,
-                (
-                    self.vp_set.clone(),
-                    self.bindless_material_set.as_ref().unwrap().clone(),
-                    draw_data_set,
-                ),
-            )
-            .unwrap();
-
-        unsafe {
+        for (range, pipeline) in culled.ranges.iter().zip(pipelines) {
             builder
-                .draw_indexed_indirect(culled.indirect.clone())
+                .bind_pipeline_graphics(pipeline.clone())
+                .unwrap()
+                .set_viewport(0, [viewport.clone()].into_iter().collect())
+                .unwrap()
+                .bind_vertex_buffers(0, vb.clone())
+                .unwrap()
+                .bind_index_buffer(ib.clone())
+                .unwrap()
+                .bind_descriptor_sets(PipelineBindPoint::Graphics, pipeline.layout().clone(), 0, sets.clone())
+                .unwrap()
+                .push_constants(
+                    pipeline.layout().clone(),
+                    0,
+                    super::deferred_vert::DeferredPush { draw_offset: range.start, time },
+                )
                 .unwrap();
+            let commands = culled
+                .indirect
+                .clone()
+                .slice(range.start as u64..(range.start + range.count) as u64);
+            unsafe {
+                builder.draw_indexed_indirect(commands).unwrap();
+            }
         }
     }
 
@@ -663,19 +683,31 @@ impl Renderer {
     pub fn cull_pass(
         &mut self,
         unified: &UnifiedGeometry,
-        objects: &[(usize, Transform, u32)],
+        items: &mut Vec<super::DrawItem>,
         joint_matrices: &[[[f32; 4]; 4]],
+        overrides: &[asset_manager::GpuOverride],
     ) -> Option<CulledDrawBuffers> {
-        if objects.is_empty() {
+        if items.is_empty() {
             return None;
         }
 
-        let mut indirect_commands: Vec<DrawIndexedIndirectCommand> =
-            Vec::with_capacity(objects.len());
-        let mut draw_data_vec: Vec<asset_manager::DrawData> = Vec::with_capacity(objects.len());
-        let mut aabb_vec: Vec<asset_manager::GpuAABB> = Vec::with_capacity(objects.len());
+        // Group draws by material shader so each group is one indirect draw.
+        items.sort_by(|a, b| a.shader.cmp(&b.shader));
+        let mut ranges: Vec<super::DrawRange> = Vec::new();
+        for (i, item) in items.iter().enumerate() {
+            match ranges.last_mut() {
+                Some(range) if range.shader == item.shader => range.count += 1,
+                _ => ranges.push(super::DrawRange { shader: item.shader.clone(), start: i as u32, count: 1 }),
+            }
+        }
 
-        for (draw_idx, transform, skin_offset) in objects {
+        let mut indirect_commands: Vec<DrawIndexedIndirectCommand> =
+            Vec::with_capacity(items.len());
+        let mut draw_data_vec: Vec<asset_manager::DrawData> = Vec::with_capacity(items.len());
+        let mut aabb_vec: Vec<asset_manager::GpuAABB> = Vec::with_capacity(items.len());
+
+        for item in items.iter() {
+            let (draw_idx, transform, skin_offset) = (&item.draw_index, &item.transform, &item.skin_offset);
             let draw = &unified.mesh_draws[*draw_idx];
 
             indirect_commands.push(DrawIndexedIndirectCommand {
@@ -691,7 +723,8 @@ impl Renderer {
                 normals: transform.normal_matrix().into(),
                 material_index: draw.material_index,
                 skin_offset: *skin_offset,
-                _pad: [0; 2],
+                override_index: item.override_index,
+                _pad: 0,
             });
 
             aabb_vec.push(unified.aabb_data[*draw_idx]);
@@ -795,7 +828,7 @@ impl Renderer {
 
         let push_constants = super::cull_comp::PushConstants {
             planes,
-            num_draws: objects.len() as u32,
+            num_draws: items.len() as u32,
         };
 
         let commands = self.commands.as_mut().unwrap();
@@ -814,11 +847,28 @@ impl Renderer {
 
         unsafe {
             commands
-                .dispatch([(objects.len() as u32 + 63) / 64, 1, 1])
+                .dispatch([(items.len() as u32 + 63) / 64, 1, 1])
                 .unwrap();
         }
 
+        let overrides = Buffer::from_iter(
+            self.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            overrides.iter().copied(),
+        )
+        .unwrap();
+
         Some(CulledDrawBuffers {
+            overrides,
+            ranges,
             indirect: indirect_buffer,
             draw_data: draw_data_buffer,
             joint_matrices: joint_matrices_buffer,
@@ -841,7 +891,7 @@ impl Renderer {
             [
                 WriteDescriptorSet::image_view_sampler(
                     0,
-                    self.fxaa_image.clone(),
+                    self.post_output.clone().unwrap_or_else(|| self.fxaa_image.clone()),
                     self.ao_sampler.clone(),
                 ),
                 WriteDescriptorSet::image_view_sampler(

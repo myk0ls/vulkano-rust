@@ -18,7 +18,7 @@ use vulkano_engine::scene::components::animator::Animator;
 use vulkano_engine::scene::components::delta_time::DeltaTime;
 use vulkano_engine::scene::components::directional_light::DirectionalLight;
 use vulkano_engine::scene::components::object3d::Object3D;
-use vulkano_engine::scene::scene_file::SceneFile;
+use vulkano_engine::scene::scene_file::{CurrentScene, SceneFile};
 
 use vulkano_engine::{
     core::application::Game,
@@ -50,10 +50,14 @@ impl MyApp {
         for warning in scene.instantiate(&mut self.world, &registry) {
             eprintln!("{path}: {warning}");
         }
+        self.world.add_unique(CurrentScene(path.to_string()));
+        self.on_scene_loaded();
+    }
 
+    fn add_player_if_missing(&mut self) {
         let has_player = self.world.run(|players: View<Player>| players.iter().count() > 0);
         if !has_player {
-            eprintln!("{path} has no entity with a Player component; adding a default one.");
+            eprintln!("This scene has no entity with a Player component; adding a default one.");
             self.world.add_entity((
                 Player::new(),
                 Camera::new(vec3(0.0, -5.0, 0.0)),
@@ -68,6 +72,16 @@ impl MyApp {
 }
 
 impl Game for MyApp {
+    fn on_scene_loaded(&mut self) {
+        if self.scene_path.is_some() {
+            self.add_player_if_missing();
+        }
+    }
+
+    fn component_registry(&self) -> vulkano_engine::scene::scene_file::ComponentRegistry {
+        crate::component_registry()
+    }
+
     fn on_init(&mut self) {
         println!("initialized!");
 

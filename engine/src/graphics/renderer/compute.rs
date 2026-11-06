@@ -1,3 +1,6 @@
+use vulkano::format::Format;
+use vulkano::image::{Image, ImageCreateInfo, ImageType, ImageUsage, view::ImageView};
+use vulkano::memory::allocator::AllocationCreateInfo;
 use vulkano::{
     command_buffer::{
         AutoCommandBufferBuilder, PrimaryAutoCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo,
@@ -208,4 +211,89 @@ impl Renderer {
         }
     }
 
+
+    /// Run the scene's post effects, each reading the previous one's output.
+    pub(super) fn dispatch_post_effects(
+        &mut self,
+        commands: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+    ) {
+        self.post_output = None;
+        let effects: Vec<_> = self.post_effects.iter().filter(|e| e.enabled).cloned().collect();
+        if effects.is_empty() {
+            return;
+        }
+        let [width, height] = self.render_extent();
+        let stale = self
+            .post_images
+            .as_ref()
+            .is_none_or(|images| images[0].image().extent()[..2] != [width, height]);
+        if stale {
+            let make = || {
+                ImageView::new_default(
+                    Image::new(
+                        self.memory_allocator.clone(),
+                        ImageCreateInfo {
+                            image_type: ImageType::Dim2d,
+                            format: Format::R16G16B16A16_SFLOAT,
+                            extent: [width, height, 1],
+                            usage: ImageUsage::STORAGE | ImageUsage::SAMPLED,
+                            ..Default::default()
+                        },
+                        AllocationCreateInfo::default(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap()
+            };
+            self.post_images = Some([make(), make()]);
+        }
+        let images = self.post_images.clone().unwrap();
+        let time = self.start_time.elapsed().as_secs_f32();
+
+        let mut input = self.fxaa_image.clone();
+        let mut next = 0;
+        for effect in effects {
+            let Some(post) = self.post_pipeline(&effect.path) else {
+                continue; // Doesn't compile; the error is reported once.
+            };
+            let mut params = [0.0; super::custom::MAX_POST_PARAMS];
+            for (slot, param) in params.iter_mut().zip(&post.params) {
+                *slot = effect.params.get(&param.name).copied().unwrap_or(param.default);
+            }
+            let output = images[next].clone();
+            let layout = post.pipeline.layout().set_layouts()[0].clone();
+            let set = DescriptorSet::new(
+                self.descriptor_set_allocator.clone(),
+                layout,
+                [
+                    WriteDescriptorSet::image_view_sampler(0, input.clone(), self.clamp_sampler.clone()),
+                    WriteDescriptorSet::image_view(1, output.clone()),
+                ],
+                [],
+            )
+            .unwrap();
+            commands
+                .bind_pipeline_compute(post.pipeline.clone())
+                .unwrap()
+                .bind_descriptor_sets(PipelineBindPoint::Compute, post.pipeline.layout().clone(), 0, set)
+                .unwrap()
+                .push_constants(
+                    post.pipeline.layout().clone(),
+                    0,
+                    super::custom::PostPush {
+                        resolution: [width as f32, height as f32],
+                        time,
+                        _pad: 0.0,
+                        params,
+                    },
+                )
+                .unwrap();
+            unsafe {
+                commands.dispatch([width.div_ceil(16), height.div_ceil(16), 1]).unwrap();
+            }
+            input = output;
+            next = 1 - next;
+            self.post_output = Some(input.clone());
+        }
+    }
 }

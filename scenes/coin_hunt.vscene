@@ -1,0 +1,165 @@
+(
+    environment: (
+        exposure: 1.0,
+        ambient_color: (1.0, 1.0, 1.0),
+        ambient_intensity: 0.5,
+        sun_direction: (0.1, 1.0, 0.1),
+        sun_color: (4.0, 4.0, 4.0),
+        shadow_softness: 2.0,
+        fxaa: true,
+        ao_radius: 0.05,
+        ao_strength: 1.0,
+        post_effects: [
+            (
+                path: "shaders/post/vignette.glsl",
+                enabled: true,
+                params: {
+                    "strength": 0.3,
+                    "tint_red": 1.0,
+                },
+            ),
+        ],
+    ),
+    entities: [
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("Level")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((0.0, 0.0, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                ),
+                (
+                    component: "Object3D",
+                    fields: {"model": Text("data/models/sponza_atrium_3.glb")},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("Floor")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((0.0, 0.0, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                ),
+                (
+                    component: "RigidBody",
+                    fields: {"body_type": Text("Fixed")},
+                ),
+                (
+                    component: "Collider",
+                    fields: {"collision_layer": Int(1), "collision_mask": Int(65535), "half_extents": Vec3((100.0, 0.1, 100.0)), "sensor": Bool(false), "shape": Text("Box")},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("Player")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((-6.869312, -4.1064906, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                ),
+                (
+                    component: "Camera",
+                    fields: {"active": Bool(true), "far": Float(1000.0), "fov": Float(80.0), "near": Float(0.1), "pitch": Float(0.0), "yaw": Float(0.0)},
+                ),
+                (
+                    component: "Velocity",
+                    fields: {},
+                ),
+                (
+                    component: "RigidBody",
+                    fields: {"body_type": Text("KinematicVelocity")},
+                ),
+                (
+                    component: "Collider",
+                    fields: {"collision_layer": Int(2), "collision_mask": Int(65535), "half_height": Float(1.0), "radius": Float(0.5), "sensor": Bool(false), "shape": Text("Capsule")},
+                ),
+                (
+                    component: "KinematicCharacter",
+                    fields: {},
+                ),
+                (
+                    component: "Player",
+                    fields: {},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("GameManager")},
+                ),
+                (
+                    component: "Scripts",
+                    fields: {"scripts": Scripts([(path: "scripts/game_manager.rhai", exports: {})])},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("Score")},
+                ),
+                (
+                    component: "UiElement",
+                    fields: {"anchor": Text("TopLeft"), "background": Vec3((0.1, 0.1, 0.1)), "background_opacity": Float(0.0), "font_size": Float(30.0), "height": Float(44.0), "kind": Text("Label"), "layer": Int(0), "text": Text("Coins: 0 / 5"), "text_color": Vec3((1.0, 0.85, 0.35)), "value": Float(0.0), "width": Float(320.0), "x": Float(24.0), "y": Float(20.0)},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("TimeBar")},
+                ),
+                (
+                    component: "UiElement",
+                    fields: {"anchor": Text("Top"), "background": Vec3((0.05, 0.05, 0.05)), "background_opacity": Float(0.6), "font_size": Float(14.0), "height": Float(18.0), "kind": Text("ProgressBar"), "layer": Int(0), "text": Text(""), "text_color": Vec3((0.45, 0.85, 0.3)), "value": Float(1.0), "width": Float(360.0), "x": Float(0.0), "y": Float(24.0)},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("Message")},
+                ),
+                (
+                    component: "UiElement",
+                    fields: {"anchor": Text("Center"), "background": Vec3((0.05, 0.05, 0.05)), "background_opacity": Float(0.7), "font_size": Float(40.0), "height": Float(90.0), "kind": Text("Panel"), "layer": Int(1), "text": Text(""), "text_color": Vec3((1.0, 1.0, 1.0)), "value": Float(0.0), "width": Float(520.0), "x": Float(0.0), "y": Float(-40.0)},
+                ),
+                (
+                    component: "Hidden",
+                    fields: {},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("Restart")},
+                ),
+                (
+                    component: "Scripts",
+                    fields: {"scripts": Scripts([(path: "scripts/restart_button.rhai", exports: {})])},
+                ),
+                (
+                    component: "UiElement",
+                    fields: {"anchor": Text("BottomRight"), "background": Vec3((0.2, 0.25, 0.35)), "background_opacity": Float(0.85), "font_size": Float(22.0), "height": Float(52.0), "kind": Text("Button"), "layer": Int(2), "text": Text("Restart (R)"), "text_color": Vec3((1.0, 1.0, 1.0)), "value": Float(0.0), "width": Float(180.0), "x": Float(24.0), "y": Float(24.0)},
+                ),
+            ],
+        ),
+    ],
+)

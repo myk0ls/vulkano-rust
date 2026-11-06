@@ -18,9 +18,60 @@ pub struct PhysicsEngine {
     pub impulse_joint_set: ImpulseJointSet,
     pub multibody_joint_set: MultibodyJointSet,
     pub ccd_solver: CCDSolver,
-    // Optional: physics hooks and event handler
     pub physics_hooks: (),
-    pub event_handler: (),
+    /// Collision events from the last steps, until something reads them.
+    pub events: CollisionEvents,
+}
+
+/// Collects collision start/stop events during a physics step.
+#[derive(Default)]
+pub struct CollisionEvents(std::sync::Mutex<Vec<CollisionEvent>>);
+
+impl CollisionEvents {
+    pub fn drain(&self) -> Vec<CollisionEvent> {
+        std::mem::take(&mut *self.0.lock().unwrap())
+    }
+}
+
+impl EventHandler for CollisionEvents {
+    fn handle_collision_event(
+        &self,
+        _bodies: &RigidBodySet,
+        _colliders: &ColliderSet,
+        event: CollisionEvent,
+        _contact_pair: Option<&ContactPair>,
+    ) {
+        self.0.lock().unwrap().push(event);
+    }
+
+    fn handle_contact_force_event(
+        &self,
+        _dt: Real,
+        _bodies: &RigidBodySet,
+        _colliders: &ColliderSet,
+        _contact_pair: &ContactPair,
+        _total_force_magnitude: Real,
+    ) {
+    }
+}
+
+/// The entity a collider belongs to, stored in the collider's user data.
+pub fn collider_entity(physics: &PhysicsEngine, handle: ColliderHandle) -> Option<shipyard::EntityId> {
+    let data = physics.collider_set.get(handle)?.user_data;
+    shipyard::EntityId::from_inner(data as u64)
+}
+
+/// Remove an entity's body and colliders from the simulation.
+pub fn remove_body(physics: &mut PhysicsEngine, handle: RigidBodyHandle) {
+    let PhysicsEngine {
+        rigid_body_set,
+        island_manager,
+        collider_set,
+        impulse_joint_set,
+        multibody_joint_set,
+        ..
+    } = physics;
+    rigid_body_set.remove(handle, island_manager, collider_set, impulse_joint_set, multibody_joint_set, true);
 }
 
 impl PhysicsEngine {
@@ -38,7 +89,7 @@ impl PhysicsEngine {
             multibody_joint_set: MultibodyJointSet::new(),
             ccd_solver: CCDSolver::new(),
             physics_hooks: (),
-            event_handler: (),
+            events: CollisionEvents::default(),
         }
     }
 
@@ -64,8 +115,8 @@ impl PhysicsEngine {
             &mut self.impulse_joint_set,
             &mut self.multibody_joint_set,
             &mut self.ccd_solver,
-            &mut self.physics_hooks,
-            &mut self.event_handler,
+            &self.physics_hooks,
+            &self.events,
         );
     }
 }
@@ -101,6 +152,26 @@ impl RigidBodyComponent {
 pub struct ColliderComponent {
     pub handle: Option<ColliderHandle>,
     pub shape: SharedShape,
+    /// A sensor detects overlaps (for triggers and pickups) without blocking anything.
+    pub sensor: bool,
+    /// Which of the 16 layers this collider is on, as bits (layer 1 is bit 0).
+    pub collision_layer: u32,
+    /// Which layers it collides with. Two colliders interact only if each one's mask
+    /// includes the other's layer.
+    pub collision_mask: u32,
+}
+
+/// Every layer.
+pub const ALL_LAYERS: u32 = 0xFFFF;
+
+impl ColliderComponent {
+    pub fn groups(&self) -> InteractionGroups {
+        InteractionGroups::new(
+            Group::from_bits_truncate(self.collision_layer & ALL_LAYERS),
+            Group::from_bits_truncate(self.collision_mask & ALL_LAYERS),
+            InteractionTestMode::And,
+        )
+    }
 }
 
 impl ColliderComponent {
@@ -108,6 +179,9 @@ impl ColliderComponent {
         Self {
             handle: None,
             shape,
+            sensor: false,
+            collision_layer: 1,
+            collision_mask: ALL_LAYERS,
         }
     }
 
@@ -162,10 +236,11 @@ impl KinematicCharacterComponent {
     }
 }
 
+/// Create physics bodies and colliders for entities that don't have them yet. Safe to
+/// call again whenever entities are added.
 pub fn physics_bodies_creation_system(world: &mut World) {
     let mut physics = world.get_unique::<&mut PhysicsEngine>().unwrap();
-
-    let mut rigid_body_set = RigidBodySet::new();
+    let physics = &mut *physics;
 
     world.run(
         |transforms: View<Transform>,
@@ -185,7 +260,7 @@ pub fn physics_bodies_creation_system(world: &mut World) {
                         .linear_damping(1.0) // Add damping to slow down falling (0.0 = no damping, 1.0 = lots)
                         .build();
 
-                    let handle = rigid_body_set.insert(rigid_body);
+                    let handle = physics.rigid_body_set.insert(rigid_body);
                     body.handle = Some(handle);
 
                     println!("Created rigid body for entity {:?} with handle {:?}", id, handle);
@@ -198,14 +273,17 @@ pub fn physics_bodies_creation_system(world: &mut World) {
                     if let Some(body_handle) = body.handle {
                         // Create collider attached to the rigid body
                         let collider_builder = ColliderBuilder::new(collider.shape.clone())
-                            .collision_groups(InteractionGroups::new(
-                                Group::GROUP_1,
-                                Group::GROUP_1 | Group::GROUP_2,
-                                InteractionTestMode::And));
+                            .collision_groups(collider.groups())
+                            .sensor(collider.sensor)
+                            // Report every pair, including the kinematic player against
+                            // fixed triggers, which rapier skips by default.
+                            .active_events(ActiveEvents::COLLISION_EVENTS)
+                            .active_collision_types(ActiveCollisionTypes::all())
+                            .user_data(id.inner() as u128);
 
                         let handle = physics.collider_set.insert(collider_builder);
 
-                        physics.collider_set.set_parent(handle, Some(body_handle), &mut rigid_body_set);
+                        physics.collider_set.set_parent(handle, Some(body_handle), &mut physics.rigid_body_set);
                         collider.handle = Some(handle);
 
                         println!("Created collider for entity {:?} with handle {:?}", id, handle);
@@ -217,7 +295,6 @@ pub fn physics_bodies_creation_system(world: &mut World) {
                     }
                 }
             }
-            physics.rigid_body_set = rigid_body_set;
         },
     )
 }
@@ -230,15 +307,16 @@ pub fn physics_sync_in(world: &mut World) {
             // Update physics bodies from Transform components
             // Convert rendering Y (down is positive) to physics Y (up is positive)
             for (transform, body) in (&transforms, &bodies).iter() {
+                // Position-based kinematic bodies follow their Transform, which scripts
+                // move. Velocity-based ones (the player) are driven by the simulation.
                 if let Some(handle) = body.handle
-                    && (body.body_type == RigidBodyType::KinematicPositionBased
-                        || body.body_type == RigidBodyType::KinematicVelocityBased)
+                    && body.body_type == RigidBodyType::KinematicPositionBased
                 {
                     if let Some(rigid_body) = physics.rigid_body_set.get_mut(handle) {
                         let pos = transform.get_position_vector();
 
                         // Flip Y axis: rendering -Y up -> physics +Y up
-                        rigid_body.set_translation(Vector::new(pos[0], -pos[1], pos[2]), true);
+                        rigid_body.set_next_kinematic_translation(Vector::new(pos[0], -pos[1], pos[2]));
                     }
                 }
             }
@@ -259,6 +337,7 @@ pub fn physics_kinematic(world: &mut World) {
                 let body_handle = body.handle.unwrap();
                 let rigid_body = physics.rigid_body_set.get(body_handle).unwrap();
                 let collider = physics.collider_set.get(rigid_body.colliders()[0]).unwrap();
+                let character_groups = collider.collision_groups();
                 kinematic_character.cached_shape = Some(collider.shared_shape().clone());
 
                 let mut collisions = vec![];
@@ -274,7 +353,11 @@ pub fn physics_kinematic(world: &mut World) {
                             physics.narrow_phase.query_dispatcher(),
                             &physics.rigid_body_set,
                             &physics.collider_set,
-                            QueryFilter::default().exclude_rigid_body(body_handle),
+                            QueryFilter::default()
+                                .exclude_rigid_body(body_handle)
+                                // Triggers don't block movement, and layers decide what does.
+                                .exclude_sensors()
+                                .groups(character_groups),
                         ),
                         collider.shape(),
                         rigid_body.position().into(),
@@ -325,6 +408,12 @@ pub fn physics_kinematic_impulses(world: &mut World) {
                 }
 
                 let body_handle = body.handle.unwrap();
+                let character_groups = physics
+                    .rigid_body_set
+                    .get(body_handle)
+                    .and_then(|rb| rb.colliders().first())
+                    .and_then(|h| physics.collider_set.get(*h))
+                    .map_or(InteractionGroups::all(), |c| c.collision_groups());
 
                 let dispatcher = physics.narrow_phase.query_dispatcher();
 
@@ -336,7 +425,11 @@ pub fn physics_kinematic_impulses(world: &mut World) {
                             dispatcher,
                             &mut physics.rigid_body_set,
                             &mut physics.collider_set,
-                            QueryFilter::default().exclude_rigid_body(body_handle),
+                            QueryFilter::default()
+                                .exclude_rigid_body(body_handle)
+                                // Triggers don't block movement, and layers decide what does.
+                                .exclude_sensors()
+                                .groups(character_groups),
                         ),
                         kinematic_character.cached_shape.as_ref().unwrap().as_ref(),
                         80.0,

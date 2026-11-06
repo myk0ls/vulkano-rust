@@ -16,6 +16,7 @@ layout(location = 3) out vec2 tex_coords;
 layout(location = 4) flat out uint out_material_index;
 layout(location = 5) out vec3 out_tangent;
 layout(location = 6) out float out_tangent_w;
+layout(location = 7) flat out uint out_override_index;
 
 layout(set = 0, binding = 0) uniform VP_Data {
     mat4 view;
@@ -27,9 +28,16 @@ struct DrawData {
     mat4 normals;
     uint material_index;
     uint skin_offset;
-    uint _pad0;
+    uint override_index;
     uint _pad1;
 };
+
+// Draws are issued in ranges (one per material shader), and gl_DrawIDARB restarts at 0
+// for each, so the range's start is passed in.
+layout(push_constant) uniform DeferredPush {
+    uint draw_offset;
+    float time;
+} push;
 
 layout(set = 2, binding = 0) readonly buffer DrawDataBuffer {
     DrawData draws[];
@@ -40,7 +48,7 @@ layout(set = 2, binding = 1) readonly buffer JointMatrices {
 } joint_mats;
 
 void main() {
-    DrawData d = draw_data.draws[gl_DrawIDARB];
+    DrawData d = draw_data.draws[gl_DrawIDARB + push.draw_offset];
 
     vec4 local_pos;
     vec3 local_normal;
@@ -83,4 +91,5 @@ void main() {
     out_location = frag_pos;
     tex_coords = uv;
     out_material_index = d.material_index;
+    out_override_index = d.override_index;
 }

@@ -181,6 +181,10 @@ fn row(
             editor.actions.push(Action::DuplicateSelected);
             ui.close();
         }
+        if ui.button("Save as Prefab…").clicked() {
+            editor.dialog = Some(Dialog::SavePrefab { entity, name: name.to_lowercase().replace(' ', "_") });
+            ui.close();
+        }
         ui.separator();
         if ui.button("Delete").clicked() {
             editor.actions.push(Action::DeleteSelected);

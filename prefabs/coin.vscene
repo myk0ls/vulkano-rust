@@ -1,0 +1,13 @@
+(
+    entities: [
+        (components: [
+            (component: "Name", fields: {"name": Text("Coin")}),
+            (component: "Transform", fields: {"position": Vec3((0.0, 0.0, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(0.004)}),
+            (component: "Object3D", fields: {"model": Text("data/models/stanford_dragon_pbr.glb")}),
+            (component: "MaterialOverride", fields: {"tint": Vec3((1.0, 0.75, 0.2)), "emissive": Vec3((1.0, 0.6, 0.1)), "emissive_strength": Float(1.5), "override_metallic": Bool(true), "metallic": Float(1.0), "override_roughness": Bool(true), "roughness": Float(0.25), "shader": Text("shaders/materials/pulse.glsl")}),
+            (component: "RigidBody", fields: {"body_type": Text("Fixed")}),
+            (component: "Collider", fields: {"shape": Text("Ball"), "radius": Float(0.8), "sensor": Bool(true), "collision_layer": Int(4), "collision_mask": Int(2)}),
+            (component: "Scripts", fields: {"scripts": Scripts([(path: "scripts/coin.rhai", exports: {})])}),
+        ]),
+    ],
+)

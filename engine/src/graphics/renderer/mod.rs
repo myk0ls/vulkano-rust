@@ -2,7 +2,9 @@ mod compute;
 mod ibl;
 mod images;
 mod passes;
+mod custom;
 mod pipelines;
+pub use custom::{PostParam, check_material, check_post_effect, parse_post_params};
 mod upload;
 
 use std::{mem, sync::Arc};
@@ -65,13 +67,13 @@ use crate::scene::components::transform::Transform;
 
 // ── Shader modules ─────────────────────────────────────────────────────────
 
-mod deferred_vert {
+pub(crate) mod deferred_vert {
     vulkano_shaders::shader! {
         ty: "vertex",
         path: "src/graphics/renderer/shaders/deferred.vert",
     }
 }
-mod deferred_frag {
+pub(crate) mod deferred_frag {
     vulkano_shaders::shader! {
         ty: "fragment",
         path: "src/graphics/renderer/shaders/deferred.frag",
@@ -236,7 +238,26 @@ impl VP {
     }
 }
 
+/// One draw call's worth of a frame's draws, all using the same material shader.
+pub struct DrawRange {
+    pub shader: Option<String>,
+    pub start: u32,
+    pub count: u32,
+}
+
+/// What `cull_pass` needs to know about one draw.
+pub struct DrawItem {
+    pub draw_index: usize,
+    pub transform: Transform,
+    pub skin_offset: u32,
+    pub override_index: u32,
+    /// A material shader file, or None for the standard material.
+    pub shader: Option<String>,
+}
+
 pub struct CulledDrawBuffers {
+    pub overrides: Subbuffer<[asset_manager::GpuOverride]>,
+    pub ranges: Vec<DrawRange>,
     pub indirect: Subbuffer<[DrawIndexedIndirectCommand]>,
     pub draw_data: Subbuffer<[asset_manager::DrawData]>,
     pub joint_matrices: Subbuffer<[[[f32; 4]; 4]]>,
@@ -311,6 +332,12 @@ pub struct Renderer {
     pub shadow_softness: f32,
 
     pub(super) composite_format: Format,
+    pub(super) custom: custom::CustomShaders,
+    pub(super) post_effects: Vec<crate::scene::scene_file::PostEffect>,
+    pub(super) post_images: Option<[Arc<ImageView>; 2]>,
+    /// The image composite reads this frame: the last post effect's output, if any ran.
+    pub(super) post_output: Option<Arc<ImageView>>,
+    pub(super) start_time: std::time::Instant,
     pub(super) offscreen: Option<Arc<ImageView>>,
     pub(super) swapchain_images: Vec<Arc<Image>>,
     pub(super) swapchain_generation: u64,
@@ -338,7 +365,8 @@ impl Default for RendererConfig {
             present_mode: PresentMode::Immediate,
             // The composite shader relies on the target applying gamma encoding.
             preferred_swapchain_formats: vec![Format::B8G8R8A8_SRGB, Format::R8G8B8A8_SRGB],
-            swapchain_usage: ImageUsage::COLOR_ATTACHMENT,
+            // TRANSFER_SRC allows screenshots.
+            swapchain_usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC,
             composite_format: None,
         }
     }
@@ -551,7 +579,7 @@ impl Renderer {
             },
             passes: [
                 {
-                    color: [color, normals, frag_location, specular],
+                    color: [color, normals, frag_location, specular, final_color],
                     depth_stencil: {depth},
                     input: []
                 },
@@ -967,6 +995,11 @@ impl Renderer {
             fxaa_enabled: true,
             shadow_softness: 2.0,
             composite_format,
+            custom: Default::default(),
+            post_effects: Vec::new(),
+            post_images: None,
+            post_output: None,
+            start_time: std::time::Instant::now(),
             offscreen,
             swapchain_images: images,
             swapchain_generation: 0,
@@ -1059,6 +1092,7 @@ impl Renderer {
         self.dispatch_ao(&mut commands);
         self.dispatch_blur(&mut commands);
         self.dispatch_fxaa(&mut commands);
+        self.dispatch_post_effects(&mut commands);
         self.composite(&mut commands);
         overlay(&mut commands, self.image_index);
 
@@ -1153,6 +1187,13 @@ impl Renderer {
 
     pub fn descriptor_set_allocator(&self) -> Arc<StandardDescriptorSetAllocator> {
         self.descriptor_set_allocator.clone()
+    }
+
+    /// Post effects to run after anti-aliasing, in order. Cheap to call every frame.
+    pub fn set_post_effects(&mut self, effects: &[crate::scene::scene_file::PostEffect]) {
+        if self.post_effects.as_slice() != effects {
+            self.post_effects = effects.to_vec();
+        }
     }
 
     /// Replace the projection used by subsequent frames.

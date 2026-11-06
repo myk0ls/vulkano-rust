@@ -238,6 +238,34 @@ impl Document {
         def.set_field(world, entity, "name", &FieldValue::Text(name));
     }
 
+    /// Place a prefab's entities, offset by `offset` (engine space). Selects the first.
+    pub fn place_prefab(
+        &mut self,
+        world: &mut World,
+        registry: &ComponentRegistry,
+        prefab: &SceneFile,
+        offset: [f32; 3],
+    ) -> Vec<String> {
+        let mut warnings = Vec::new();
+        let mut first = None;
+        for data in &prefab.entities {
+            let (entity, problems) = registry.spawn(world, data);
+            warnings.extend(problems);
+            if let Ok(mut transform) = world.get::<&mut vulkano_engine::scene::components::transform::Transform>(entity) {
+                let [x, y, z] = transform.get_position_vector();
+                transform.set_position(x + offset[0], y + offset[1], z + offset[2]);
+            }
+            self.order.push(entity);
+            first.get_or_insert(entity);
+            // Copies keep unique names, so scripts can still find each one.
+            if let Ok(name) = world.get::<&Name>(entity).map(|n| n.0.clone()) {
+                self.rename(world, registry, entity, &name);
+            }
+        }
+        self.selection = first.or(self.selection);
+        warnings
+    }
+
     /// Move an entity to just before the entity at `target` in the list, or to the end.
     pub fn reorder(&mut self, entity: EntityId, target: Option<EntityId>) {
         if target == Some(entity) {

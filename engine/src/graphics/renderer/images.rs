@@ -292,7 +292,7 @@ impl Renderer {
                 allocator.clone(),
                 ImageCreateInfo {
                     image_type: vulkano::image::ImageType::Dim2d,
-                    format: Format::R8G8B8A8_UNORM,
+                    format: Format::R16G16B16A16_SFLOAT,
                     extent: [dimensions[0], dimensions[1], 1],
                     usage: ImageUsage::STORAGE | ImageUsage::SAMPLED,
                     ..Default::default()

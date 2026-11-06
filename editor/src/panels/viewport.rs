@@ -35,6 +35,8 @@ pub struct ViewportState {
     pub snap: bool,
     pub show_grid: bool,
     pub show_icons: bool,
+    pub show_game_ui: bool,
+    ui_drag: bool,
     /// The size the viewport currently occupies, for sizing the render target.
     pub wanted_extent: [u32; 2],
     /// Set while the right mouse button is flying the camera.
@@ -56,6 +58,8 @@ impl ViewportState {
             snap: false,
             show_grid: true,
             show_icons: true,
+            show_game_ui: true,
+            ui_drag: false,
             wanted_extent: [1280, 720],
             freelook: false,
             look_delta: egui::Vec2::ZERO,
@@ -136,6 +140,17 @@ pub fn ui(ui: &mut Ui, editor: &mut Editor, world: &mut World) {
         }
     }
 
+    // The game's UI, as it will look in a window of this size.
+    let mut ui_rects = Vec::new();
+    if editor.viewport.show_game_ui {
+        let mut overlay = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+        ui_rects = vulkano_engine::ui::draw(&mut overlay, rect, world, false).rects;
+        if let Some((_, selected)) = ui_rects.iter().find(|(e, _)| Some(*e) == editor.doc.selection) {
+            painter.rect_stroke(*selected, 2.0, Stroke::new(2.0, theme::selection_outline()), egui::StrokeKind::Outside);
+        }
+    }
+    let dragged_ui = drag_ui_element(ui, editor, world, &ui_rects);
+
     let gizmo_busy = gizmo_ui(ui, editor, world, rect);
 
     // Left click selects, unless it was the gizmo's click. The nearest thing wins:
@@ -144,12 +159,17 @@ pub fn ui(ui: &mut Ui, editor: &mut Editor, world: &mut World) {
     // This reads raw input because the gizmo places its own widget under the pointer,
     // which takes clicks away from `response`.
     let clicked = ui.input(|i| i.pointer.primary_clicked());
-    if clicked && !gizmo_busy {
+    if clicked && !gizmo_busy && !dragged_ui {
         let pointer = ui.input(|i| i.pointer.interact_pos());
         let on_top = pointer.is_some_and(|p| {
             rect.contains(p) && ui.ctx().layer_id_at(p) == Some(ui.layer_id())
         });
-        if let Some(pointer) = pointer.filter(|_| on_top) {
+        let ui_hit = pointer
+            .filter(|_| on_top)
+            .and_then(|p| ui_rects.iter().rev().find(|(_, r)| r.contains(p)).map(|(e, _)| *e));
+        if let Some(entity) = ui_hit {
+            editor.doc.selection = Some(entity);
+        } else if let Some(pointer) = pointer.filter(|_| on_top) {
             let icon = icon_hits
                 .iter()
                 .map(|(id, pos)| (*id, pos.distance(pointer)))
@@ -164,6 +184,35 @@ pub fn ui(ui: &mut Ui, editor: &mut Editor, world: &mut World) {
 
     model_drop(ui, editor, &response, &projector, rect);
     overlay_text(&painter, editor, rect);
+}
+
+/// Dragging the selected UI element moves it. Returns true while it's being dragged.
+fn drag_ui_element(ui: &Ui, editor: &mut Editor, world: &World, rects: &[(EntityId, Rect)]) -> bool {
+    let Some(entity) = editor.doc.selection else {
+        return false;
+    };
+    let Some((_, rect)) = rects.iter().find(|(e, _)| *e == entity) else {
+        return false;
+    };
+    let (pressed, down, delta, origin) = ui.input(|i| {
+        (i.pointer.primary_pressed(), i.pointer.primary_down(), i.pointer.delta(), i.pointer.press_origin())
+    });
+    if pressed {
+        editor.viewport.ui_drag = origin.is_some_and(|p| rect.contains(p));
+    }
+    if !down {
+        let was = editor.viewport.ui_drag;
+        editor.viewport.ui_drag = false;
+        return was;
+    }
+    if editor.viewport.ui_drag && delta != egui::Vec2::ZERO {
+        if let Ok(mut element) = world.get::<&mut vulkano_engine::ui::UiElement>(entity) {
+            let direction = element.offset_direction();
+            element.x += delta.x * direction.x;
+            element.y += delta.y * direction.y;
+        }
+    }
+    editor.viewport.ui_drag
 }
 
 fn toolbar(ui: &mut Ui, editor: &mut Editor, world: &World) {
@@ -557,10 +606,12 @@ fn model_drop(ui: &Ui, editor: &mut Editor, response: &egui::Response, projector
             .input(|i| i.pointer.interact_pos())
             .and_then(|p| projector.ray(p).ground_point())
             .map(|p| [p.x, p.y, p.z]);
-        editor.actions.push(Action::AddModel {
-            path: payload.0.clone(),
-            position,
-        });
+        let path = payload.0.clone();
+        if path.ends_with(".vscene") {
+            editor.actions.push(Action::AddPrefab { path, position });
+        } else {
+            editor.actions.push(Action::AddModel { path, position });
+        }
     }
 }
 

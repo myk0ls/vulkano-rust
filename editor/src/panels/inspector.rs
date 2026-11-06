@@ -35,7 +35,10 @@ pub fn ui(ui: &mut Ui, editor: &mut Editor, world: &mut World) {
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         match editor.doc.selection {
             Some(entity) => entity_ui(ui, editor, world, entity),
-            None => environment_ui(ui, &mut editor.doc.environment),
+            None => {
+                environment_ui(ui, &mut editor.doc.environment);
+                post_effects_ui(ui, editor);
+            }
         }
     });
 }
@@ -155,6 +158,29 @@ fn value_ui(
             }
             ui.add(drag).changed().then_some(FieldValue::Float(v))
         }
+        (FieldValue::Int(current), FieldHint::Layers) => {
+            let names = layer_names();
+            let mut bits = *current as u32;
+            let mut changed = false;
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
+                for row in 0..2 {
+                    ui.horizontal(|ui| {
+                        for column in 0..8 {
+                            let layer = row * 8 + column;
+                            let on = bits & (1 << layer) != 0;
+                            let button = egui::Button::selectable(on, format!("{}", layer + 1)).min_size(egui::vec2(22.0, 18.0));
+                            let tip = names.get(layer).filter(|n| !n.is_empty()).cloned().unwrap_or_else(|| format!("Layer {}", layer + 1));
+                            if ui.add(button).on_hover_text(tip).clicked() {
+                                bits ^= 1 << layer;
+                                changed = true;
+                            }
+                        }
+                    });
+                }
+            });
+            changed.then_some(FieldValue::Int(bits as i64))
+        }
         (FieldValue::Int(current), _) => {
             let mut v = *current;
             ui.add(DragValue::new(&mut v)).changed().then_some(FieldValue::Int(v))
@@ -264,7 +290,13 @@ fn field_row(
         _ => Vec::new(),
     };
     let assets: Vec<String> = match field.hint {
-        FieldHint::Asset(extensions) => editor.files.files_with_extensions(extensions),
+        // Shader fields list material shaders, not post effects.
+        FieldHint::Asset(extensions) => editor
+            .files
+            .files_with_extensions(extensions)
+            .into_iter()
+            .filter(|path| !extensions.contains(&"glsl") || !path.contains("/post/"))
+            .collect(),
         _ => Vec::new(),
     };
 
@@ -284,6 +316,12 @@ fn field_row(
         );
         result = value_ui(ui, &value, field.hint, &clips, &assets);
     });
+
+    if let (FieldHint::Asset(_), FieldValue::Text(path)) = (field.hint, &field.value) {
+        if let Some((_, error)) = editor.shader_errors.iter().find(|(p, _)| p == path) {
+            ui.label(RichText::new(error).color(theme::error()).monospace().small());
+        }
+    }
 
     // Models can also be dragged here from the FileSystem dock.
     if matches!(field.hint, FieldHint::Asset(_)) {
@@ -382,7 +420,7 @@ fn scripts_ui(
             }
             ui.separator();
             if ui.selectable_label(false, "New Script…").clicked() {
-                editor.dialog = Some(Dialog::NewScript { name: String::new() });
+                editor.dialog = Some(Dialog::NewFile { kind: crate::panels::scripts::FileKind::Script, name: String::new() });
             }
         });
     if let Some(path) = attach {
@@ -475,6 +513,87 @@ fn environment_ui(ui: &mut Ui, env: &mut Environment) {
         });
         float(ui, "AO Radius", &mut env.ao_radius, 0.002, 0.0, 5.0);
         float(ui, "AO Strength", &mut env.ao_strength, 0.01, 0.0, 1.0);
+    });
+}
+
+/// Optional names for the 16 collision layers: line N of layers.txt names layer N.
+fn layer_names() -> Vec<String> {
+    std::fs::read_to_string("layers.txt")
+        .map(|text| text.lines().map(|l| l.trim().to_string()).collect())
+        .unwrap_or_default()
+}
+
+fn post_effects_ui(ui: &mut Ui, editor: &mut Editor) {
+    egui::CollapsingHeader::new(RichText::new("Post Effects").strong()).default_open(true).show(ui, |ui| {
+        let mut remove = None;
+        let mut swap = None;
+        let count = editor.doc.environment.post_effects.len();
+        for index in 0..count {
+            let path = editor.doc.environment.post_effects[index].path.clone();
+            let params = editor.scripts.post_params(&path);
+            let error = editor.shader_errors.iter().find(|(p, _)| *p == path).map(|(_, e)| e.clone());
+            let effect = &mut editor.doc.environment.post_effects[index];
+            ui.push_id(index, |ui| {
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut effect.enabled, "");
+                    ui.label(RichText::new(filesystem::file_name(&path)).strong().color(theme::accent()));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("✖").on_hover_text("Remove").clicked() {
+                            remove = Some(index);
+                        }
+                        if index + 1 < count && ui.small_button("⏷").on_hover_text("Run later").clicked() {
+                            swap = Some(index);
+                        }
+                        if index > 0 && ui.small_button("⏶").on_hover_text("Run earlier").clicked() {
+                            swap = Some(index - 1);
+                        }
+                    });
+                });
+                if let Some(error) = error {
+                    ui.label(RichText::new(error).color(theme::error()).monospace().small());
+                }
+                for param in params {
+                    let value = effect.params.get(&param.name).copied().unwrap_or(param.default);
+                    let mut edited = value;
+                    property(ui, &pretty(&param.name), |ui| {
+                        ui.add(egui::Slider::new(&mut edited, param.min..=param.max));
+                    });
+                    if edited != value {
+                        effect.params.insert(param.name.clone(), edited);
+                    }
+                }
+            });
+            ui.add_space(2.0);
+        }
+        if let Some(index) = remove {
+            editor.doc.environment.post_effects.remove(index);
+        }
+        if let Some(index) = swap {
+            editor.doc.environment.post_effects.swap(index, index + 1);
+        }
+        let available = editor.scripts.files_of(crate::panels::scripts::FileKind::PostEffect);
+        let mut added = None;
+        egui::ComboBox::from_id_salt("add_post_effect")
+            .selected_text("✚ Add Post Effect")
+            .width(ui.available_width().min(240.0))
+            .show_ui(ui, |ui| {
+                for path in &available {
+                    if ui.selectable_label(false, filesystem::file_name(path)).clicked() {
+                        added = Some(path.clone());
+                    }
+                }
+                ui.separator();
+                if ui.selectable_label(false, "New Post Effect…").clicked() {
+                    editor.dialog = Some(Dialog::NewFile { kind: crate::panels::scripts::FileKind::PostEffect, name: String::new() });
+                }
+            });
+        if let Some(path) = added {
+            editor.doc.environment.post_effects.push(vulkano_engine::scene::scene_file::PostEffect {
+                path,
+                enabled: true,
+                params: Default::default(),
+            });
+        }
     });
 }
 

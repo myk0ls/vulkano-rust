@@ -8,6 +8,7 @@ layout(location = 3) in vec2 in_tex_coords;
 layout(location = 4) flat in uint in_material_index;
 layout(location = 5) in vec3 in_tangent;
 layout(location = 6) in float in_tangent_w;
+layout(location = 7) flat in uint in_override_index;
 
 // Must match GpuMaterial in asset_manager.rs (std430, 5x 4-byte fields = 20 bytes each)
 struct Material {
@@ -28,6 +29,38 @@ layout(location = 0) out vec4 f_color;
 layout(location = 1) out vec4 f_normal;
 layout(location = 2) out vec4 f_location;
 layout(location = 3) out vec2 f_pbr; // [metallic, roughness]
+// Light the surface gives off itself, written straight into the lit image.
+layout(location = 4) out vec4 f_emissive;
+
+// Per-entity changes from a MaterialOverride component. Index 0 changes nothing.
+struct Override {
+    vec4 tint;       // rgb multiplies albedo
+    vec4 emissive;   // rgb, already multiplied by strength
+    vec4 pbr;        // x = metallic, y = roughness; negative keeps the material's own
+};
+
+layout(set = 2, binding = 2) readonly buffer Overrides {
+    Override data[];
+} overrides;
+
+layout(push_constant) uniform DeferredPush {
+    uint draw_offset;
+    float time;
+} push;
+
+// What a material shader can read and change.
+struct Surface {
+    vec3 albedo;
+    vec3 normal;          // world space; -Y is up
+    vec3 emissive;
+    float metallic;
+    float roughness;
+    vec2 uv;
+    vec3 world_position;  // -Y is up
+    float time;           // seconds since start
+};
+
+// @material
 
 void main() {
     Material mat = materials.data[in_material_index];
@@ -66,8 +99,23 @@ void main() {
     }
     roughness = max(roughness, 0.4); // floor for models with missing PBR data
 
-    f_color = vec4(albedo.rgb, 1.0);
-    f_normal = vec4(finalNormal, 1.0);
+    Override o = overrides.data[in_override_index];
+    Surface s;
+    s.albedo = albedo.rgb * o.tint.rgb;
+    s.normal = finalNormal;
+    s.emissive = o.emissive.rgb;
+    s.metallic = o.pbr.x >= 0.0 ? o.pbr.x : metallic;
+    s.roughness = o.pbr.y >= 0.0 ? o.pbr.y : roughness;
+    s.uv = in_tex_coords;
+    s.world_position = in_location.xyz;
+    s.time = push.time;
+#ifdef CUSTOM_MATERIAL
+    material(s);
+#endif
+
+    f_color = vec4(s.albedo, 1.0);
+    f_normal = vec4(normalize(s.normal), 1.0);
     f_location = in_location;
-    f_pbr = vec2(metallic, roughness);
+    f_pbr = vec2(clamp(s.metallic, 0.0, 1.0), clamp(s.roughness, 0.04, 1.0));
+    f_emissive = vec4(s.emissive, 1.0);
 }

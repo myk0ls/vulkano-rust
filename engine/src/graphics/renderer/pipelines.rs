@@ -44,10 +44,21 @@ pub(super) fn create_deferred(
     viewport: Viewport,
     deferred_pass: Subpass,
 ) -> Arc<GraphicsPipeline> {
+    let fs = deferred_frag::load(device.clone()).unwrap().entry_point("main").unwrap();
+    create_deferred_with(device, viewport, deferred_pass, fs, None)
+}
+
+/// The G-buffer pipeline with a given fragment shader. Material shader variants pass the
+/// base pipeline's layout, so descriptor sets work with all of them.
+pub(super) fn create_deferred_with(
+    device: Arc<Device>,
+    viewport: Viewport,
+    deferred_pass: Subpass,
+    fs: vulkano::shader::EntryPoint,
+    shared_layout: Option<Arc<PipelineLayout>>,
+) -> Arc<GraphicsPipeline> {
     let vs = deferred_vert::load(device.clone()).unwrap();
-    let fs = deferred_frag::load(device.clone()).unwrap();
     let vs = vs.entry_point("main").unwrap();
-    let fs = fs.entry_point("main").unwrap();
 
     let vertex_input_state = NormalVertex::per_vertex().definition(&vs).unwrap();
     let stages = [
@@ -64,13 +75,15 @@ pub(super) fn create_deferred(
         }
     }
 
-    let layout = PipelineLayout::new(
-        device.clone(),
-        layout_create_info
-            .into_pipeline_layout_create_info(device.clone())
-            .unwrap(),
-    )
-    .unwrap();
+    let layout = shared_layout.unwrap_or_else(|| {
+        PipelineLayout::new(
+            device.clone(),
+            layout_create_info
+                .into_pipeline_layout_create_info(device.clone())
+                .unwrap(),
+        )
+        .unwrap()
+    });
 
     GraphicsPipeline::new(
         device.clone(),

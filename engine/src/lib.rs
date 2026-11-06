@@ -6,6 +6,7 @@ pub mod input;
 pub mod physics;
 pub mod scene;
 pub mod scripting;
+pub mod ui;
 
 // You can also create convenience re-exports
 pub mod prelude {

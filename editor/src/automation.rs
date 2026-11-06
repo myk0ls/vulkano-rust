@@ -34,9 +34,9 @@ use egui::{Event, Key, Modifiers, PointerButton, Pos2, pos2};
 use shipyard::{EntityId, World};
 
 use crate::editor::Editor;
-use crate::painter::Painter;
+use vulkano_engine::ui::painter::Painter;
 use crate::panels::viewport::entity_pose;
-use crate::platform::Platform;
+use vulkano_engine::ui::platform::Platform;
 
 pub struct Automation {
     steps: Vec<String>,
@@ -87,7 +87,7 @@ impl Automation {
             return false;
         }
         // Long imports must not race the steps.
-        if editor.busy.is_some() || editor.pending_open.is_some() {
+        if editor.busy.is_some() || editor.pending_open.is_some() || editor.pending_prefab.is_some() {
             return false;
         }
         let Some(line) = self.steps.get(self.next).cloned() else {

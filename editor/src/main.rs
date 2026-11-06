@@ -9,12 +9,12 @@ mod camera;
 mod document;
 mod editor;
 mod log;
-mod painter;
 mod panels;
-mod platform;
 mod runner;
 mod settings;
 mod theme;
+
+use vulkano_engine::ui::{painter, platform};
 
 use std::time::{Duration, Instant};
 
@@ -108,7 +108,7 @@ fn main() {
     let video = app.sdl.video().unwrap();
     video.text_input().start(&app.window);
     let mut platform = platform::Platform::new(video);
-    let mut painter = painter::Painter::new(&app.renderer);
+    let mut painter = painter::Painter::with_clear(&app.renderer, true);
     painter.set_user_texture(
         SCENE_TEXTURE_ID,
         app.renderer.offscreen_view().unwrap().clone(),
@@ -194,6 +194,8 @@ fn main() {
         app.renderer.set_projection(&camera.projection(aspect));
         app.renderer.set_view(&camera.engine_view());
 
+        app.renderer.set_post_effects(&editor.doc.environment.post_effects);
+        editor.shader_errors = app.renderer.shader_errors();
         if environment_applied.as_ref() != Some(&editor.doc.environment) {
             environment_applied = Some(editor.doc.environment.clone());
             app.renderer.apply_environment(&editor.doc.environment);
@@ -226,6 +228,9 @@ fn main() {
         // ── Things that must happen between frames ─────────────────────────────
         // Importing blocks, so first show one frame saying so.
         let mut missing = library.missing_in_world(app.game.get_world());
+        if let Some((prefab, _)) = &editor.pending_prefab {
+            missing.extend(library.missing_in_scene(prefab));
+        }
         if let Some((scene, _)) = &editor.pending_open {
             missing.extend(library.missing_in_scene(scene));
             missing.sort();
@@ -257,6 +262,12 @@ fn main() {
                 }
                 editor.registry = registry;
                 library.clear_failures();
+            }
+            if let Some((prefab, [x, y, z])) = editor.pending_prefab.take() {
+                // Editor positions are Y-up; the engine's are not.
+                for warning in editor.doc.place_prefab(app.game.get_world_mut(), &editor.registry, &prefab, [x, -y + 0.0, z]) {
+                    editor.log.error(warning);
+                }
             }
             panels::inspector::attach_pending_animators(&mut editor, app.game.get_world_mut());
         }

@@ -33,7 +33,7 @@ use vulkano::pipeline::{
     PipelineShaderStageCreateInfo,
 };
 use vulkano::render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass};
-use vulkano_engine::prelude::Renderer;
+use crate::graphics::renderer::Renderer;
 
 mod vs {
     vulkano_shaders::shader! {
@@ -126,6 +126,7 @@ pub struct Painter {
     textures: HashMap<TextureId, UiTexture>,
     pending_deltas: Vec<TexturesDelta>,
     target_is_srgb: bool,
+    clear: bool,
     extent: [u32; 2],
     /// Screenshot requested for the next presented frame, and one awaiting readback.
     capture_request: Option<String>,
@@ -133,25 +134,34 @@ pub struct Painter {
 }
 
 impl Painter {
+    /// A painter that draws the UI over whatever the frame already shows, as a game does.
     pub fn new(renderer: &Renderer) -> Self {
+        Self::with_clear(renderer, false)
+    }
+
+    /// With `clear`, the UI pass starts from a blank image. The editor uses this because
+    /// its UI covers the whole window; a game must not, or it erases the scene.
+    pub fn with_clear(renderer: &Renderer, clear: bool) -> Self {
         let device = renderer.device.clone();
         let format = renderer.swapchain_format();
 
-        let render_pass = vulkano::single_pass_renderpass!(
-            device.clone(),
-            attachments: {
-                color: {
-                    format: format,
-                    samples: 1,
-                    load_op: Clear,
-                    store_op: Store,
+        let render_pass = if clear {
+            vulkano::single_pass_renderpass!(
+                device.clone(),
+                attachments: {
+                    color: { format: format, samples: 1, load_op: Clear, store_op: Store },
                 },
-            },
-            pass: {
-                color: [color],
-                depth_stencil: {},
-            }
-        )
+                pass: { color: [color], depth_stencil: {} }
+            )
+        } else {
+            vulkano::single_pass_renderpass!(
+                device.clone(),
+                attachments: {
+                    color: { format: format, samples: 1, load_op: Load, store_op: Store },
+                },
+                pass: { color: [color], depth_stencil: {} }
+            )
+        }
         .unwrap();
 
         let vs = vs::load(device.clone()).unwrap().entry_point("main").unwrap();
@@ -239,6 +249,7 @@ impl Painter {
             buffers,
             textures: HashMap::new(),
             pending_deltas: Vec::new(),
+            clear,
             target_is_srgb: format.numeric_format_color()
                 == Some(vulkano::format::NumericFormat::SRGB),
             extent: renderer.swapchain_extent(),
@@ -413,7 +424,7 @@ impl Painter {
         commands
             .begin_render_pass(
                 RenderPassBeginInfo {
-                    clear_values: vec![Some([0.1, 0.11, 0.14, 1.0].into())],
+                    clear_values: vec![self.clear.then(|| [0.1, 0.11, 0.14, 1.0].into())],
                     ..RenderPassBeginInfo::framebuffer(framebuffer)
                 },
                 SubpassBeginInfo {

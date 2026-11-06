@@ -22,11 +22,13 @@ use crate::physics::physics_engine::{
 use crate::scene::components::animator::Animator;
 use crate::scene::components::camera::Camera;
 use crate::scene::components::directional_light::DirectionalLight;
+use crate::scene::components::material_override::MaterialOverride;
 use crate::scene::components::object3d::Object3D;
 use crate::scene::components::pointlight::Pointlight;
 use crate::scene::components::transform::Transform;
 use crate::scene::components::velocity::Velocity;
-use crate::scripting::{ScriptInstance, Scripts};
+use crate::scripting::{Groups, ScriptInstance, Scripts};
+use crate::ui::UiElement;
 
 /// A display name for an entity.
 #[derive(Component, Clone, Debug, PartialEq)]
@@ -92,6 +94,8 @@ pub enum FieldHint {
     Choice(&'static [&'static str]),
     /// The name of an animation clip of this entity's model.
     AnimationClip,
+    /// 16 collision layers as bits, shown as toggles.
+    Layers,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -201,6 +205,7 @@ impl ComponentRegistry {
         registry.register::<Transform>();
         registry.register::<Object3D>();
         registry.defs.push(animator_def());
+        registry.register::<MaterialOverride>();
         registry.register::<Pointlight>();
         registry.register::<Camera>();
         registry.register::<Velocity>();
@@ -208,6 +213,8 @@ impl ComponentRegistry {
         registry.register::<ColliderComponent>();
         registry.register::<KinematicCharacterComponent>();
         registry.register::<Scripts>();
+        registry.register::<Groups>();
+        registry.register::<UiElement>();
         registry.register::<Hidden>();
 
         let transform = ComponentData::named("Transform");
@@ -219,6 +226,24 @@ impl ComponentRegistry {
         );
         registry.add_template("Point Light", "A light shining in all directions.", vec![ComponentData::named("Pointlight")]);
         registry.add_template("Camera", "A camera with a position.", vec![transform.clone(), ComponentData::named("Camera")]);
+        registry.add_template("UI Label", "Text on the screen. Scripts can change it with set_text.", vec![ComponentData::named("UiElement")]);
+        registry.add_template(
+            "UI Button",
+            "A clickable button. Its scripts' on_pressed() runs when clicked, and it emits \"pressed\".",
+            vec![ComponentData::named("UiElement")
+                .with("kind", FieldValue::Text("Button".into()))
+                .with("text", FieldValue::Text("Button".into()))
+                .with("background_opacity", FieldValue::Float(0.8))],
+        );
+        registry.add_template(
+            "UI Progress Bar",
+            "A bar filled by its value, for health, loading, and timers.",
+            vec![ComponentData::named("UiElement")
+                .with("kind", FieldValue::Text("ProgressBar".into()))
+                .with("text", FieldValue::Text(String::new()))
+                .with("text_color", FieldValue::Vec3([0.4, 0.9, 0.3]))
+                .with("height", FieldValue::Float(24.0))],
+        );
         registry.add_template(
             "Static Collider",
             "A fixed box other physics objects collide with.",
@@ -335,6 +360,15 @@ impl EntityData {
     }
 }
 
+/// A post-processing shader applied to the whole image.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PostEffect {
+    pub path: String,
+    pub enabled: bool,
+    /// Values for the shader's `@param`s. Missing ones use the shader's default.
+    pub params: BTreeMap<String, f32>,
+}
+
 /// Scene-wide look settings, in the engine's space.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Unique)]
 #[serde(default)]
@@ -349,6 +383,8 @@ pub struct Environment {
     pub fxaa: bool,
     pub ao_radius: f32,
     pub ao_strength: f32,
+    /// Run after anti-aliasing and before tone mapping, in order.
+    pub post_effects: Vec<PostEffect>,
 }
 
 impl Default for Environment {
@@ -363,6 +399,7 @@ impl Default for Environment {
             fxaa: true,
             ao_radius: 0.05,
             ao_strength: 1.0,
+            post_effects: Vec::new(),
         }
     }
 }
@@ -376,6 +413,8 @@ impl Environment {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SceneFile {
+    /// Prefabs don't need one.
+    #[serde(default)]
     pub environment: Environment,
     pub entities: Vec<EntityData>,
 }
@@ -525,6 +564,39 @@ impl EditableComponent for Object3D {
     }
 }
 
+impl EditableComponent for MaterialOverride {
+    const NAME: &'static str = "MaterialOverride";
+    fn create() -> Self {
+        MaterialOverride::default()
+    }
+    fn fields(&self) -> Vec<Field> {
+        let unit = FieldHint::Range(0.0, 1.0);
+        vec![
+            Field::hinted("tint", FieldValue::Vec3(self.tint), FieldHint::Color),
+            Field::hinted("emissive", FieldValue::Vec3(self.emissive), FieldHint::Color),
+            Field::hinted("emissive_strength", FieldValue::Float(self.emissive_strength), FieldHint::Range(0.0, 1000.0)),
+            Field::new("override_metallic", FieldValue::Bool(self.override_metallic)),
+            Field::hinted("metallic", FieldValue::Float(self.metallic), unit),
+            Field::new("override_roughness", FieldValue::Bool(self.override_roughness)),
+            Field::hinted("roughness", FieldValue::Float(self.roughness), unit),
+            Field::hinted("shader", FieldValue::Text(self.shader.clone()), FieldHint::Asset(&["glsl"])),
+        ]
+    }
+    fn set_field(&mut self, name: &str, value: &FieldValue) {
+        match (name, value) {
+            ("tint", FieldValue::Vec3(v)) => self.tint = *v,
+            ("emissive", FieldValue::Vec3(v)) => self.emissive = *v,
+            ("emissive_strength", FieldValue::Float(v)) => self.emissive_strength = *v,
+            ("override_metallic", FieldValue::Bool(v)) => self.override_metallic = *v,
+            ("metallic", FieldValue::Float(v)) => self.metallic = *v,
+            ("override_roughness", FieldValue::Bool(v)) => self.override_roughness = *v,
+            ("roughness", FieldValue::Float(v)) => self.roughness = *v,
+            ("shader", FieldValue::Text(v)) => self.shader = v.clone(),
+            _ => {}
+        }
+    }
+}
+
 impl EditableComponent for Pointlight {
     const NAME: &'static str = "Pointlight";
     fn create() -> Self {
@@ -629,8 +701,33 @@ impl EditableComponent for ColliderComponent {
     }
     fn fields(&self) -> Vec<Field> {
         let positive = FieldHint::Range(0.001, 100000.0);
+        let fields = self.shape_fields(positive);
+        fields
+    }
+    fn set_field(&mut self, name: &str, value: &FieldValue) {
+        match (name, value) {
+            ("sensor", FieldValue::Bool(sensor)) => {
+                self.sensor = *sensor;
+                return;
+            }
+            ("collision_layer", FieldValue::Int(bits)) => {
+                self.collision_layer = (*bits as u32) & crate::physics::physics_engine::ALL_LAYERS;
+                return;
+            }
+            ("collision_mask", FieldValue::Int(bits)) => {
+                self.collision_mask = (*bits as u32) & crate::physics::physics_engine::ALL_LAYERS;
+                return;
+            }
+            _ => {}
+        }
+        self.set_shape_field(name, value);
+    }
+}
+
+impl ColliderComponent {
+    fn shape_fields(&self, positive: FieldHint) -> Vec<Field> {
         let shape = |name: &str| Field::hinted("shape", FieldValue::Text(name.into()), FieldHint::Choice(COLLIDER_SHAPES));
-        if let Some(ball) = self.shape.as_ball() {
+        let fields = if let Some(ball) = self.shape.as_ball() {
             vec![shape("Ball"), Field::hinted("radius", FieldValue::Float(ball.radius), positive)]
         } else if let Some(capsule) = self.shape.as_capsule() {
             vec![
@@ -644,9 +741,14 @@ impl EditableComponent for ColliderComponent {
         } else {
             // Shapes made in code that the editor can't describe stay as they are.
             Vec::new()
-        }
+        };
+        let mut fields = fields;
+        fields.push(Field::new("sensor", FieldValue::Bool(self.sensor)));
+        fields.push(Field::hinted("collision_layer", FieldValue::Int(self.collision_layer as i64), FieldHint::Layers));
+        fields.push(Field::hinted("collision_mask", FieldValue::Int(self.collision_mask as i64), FieldHint::Layers));
+        fields
     }
-    fn set_field(&mut self, name: &str, value: &FieldValue) {
+    fn set_shape_field(&mut self, name: &str, value: &FieldValue) {
         // Radii and half-extents survive switching shapes where they can.
         let radius = self.shape.as_ball().map(|b| b.radius)
             .or_else(|| self.shape.as_capsule().map(|c| c.radius))
@@ -682,6 +784,72 @@ impl EditableComponent for Scripts {
         }
     }
 }
+
+impl EditableComponent for Groups {
+    const NAME: &'static str = "Groups";
+    fn create() -> Self {
+        Groups::default()
+    }
+    fn fields(&self) -> Vec<Field> {
+        vec![Field::new("groups", FieldValue::Text(self.names.join(", ")))]
+    }
+    fn set_field(&mut self, name: &str, value: &FieldValue) {
+        if let ("groups", Some(text)) = (name, value.as_text()) {
+            self.names = text
+                .split(',')
+                .map(|n| n.trim().to_string())
+                .filter(|n| !n.is_empty())
+                .collect();
+        }
+    }
+}
+
+impl EditableComponent for UiElement {
+    const NAME: &'static str = "UiElement";
+    fn create() -> Self {
+        UiElement::default()
+    }
+    fn fields(&self) -> Vec<Field> {
+        let size = FieldHint::Range(1.0, 10000.0);
+        vec![
+            Field::hinted("kind", FieldValue::Text(self.kind.clone()), FieldHint::Choice(crate::ui::KINDS)),
+            Field::hinted("anchor", FieldValue::Text(self.anchor.clone()), FieldHint::Choice(crate::ui::ANCHORS)),
+            Field::new("x", FieldValue::Float(self.x)),
+            Field::new("y", FieldValue::Float(self.y)),
+            Field::hinted("width", FieldValue::Float(self.width), size),
+            Field::hinted("height", FieldValue::Float(self.height), size),
+            Field::new("text", FieldValue::Text(self.text.clone())),
+            Field::hinted("font_size", FieldValue::Float(self.font_size), FieldHint::Range(4.0, 400.0)),
+            Field::hinted("text_color", FieldValue::Vec3(self.text_color), FieldHint::Color),
+            Field::hinted("background", FieldValue::Vec3(self.background), FieldHint::Color),
+            Field::hinted("background_opacity", FieldValue::Float(self.background_opacity), FieldHint::Range(0.0, 1.0)),
+            Field::hinted("value", FieldValue::Float(self.value), FieldHint::Range(0.0, 1.0)),
+            Field::new("layer", FieldValue::Int(self.layer)),
+        ]
+    }
+    fn set_field(&mut self, name: &str, value: &FieldValue) {
+        match (name, value) {
+            ("kind", FieldValue::Text(v)) => self.kind = v.clone(),
+            ("anchor", FieldValue::Text(v)) => self.anchor = v.clone(),
+            ("x", FieldValue::Float(v)) => self.x = *v,
+            ("y", FieldValue::Float(v)) => self.y = *v,
+            ("width", FieldValue::Float(v)) => self.width = *v,
+            ("height", FieldValue::Float(v)) => self.height = *v,
+            ("text", FieldValue::Text(v)) => self.text = v.clone(),
+            ("font_size", FieldValue::Float(v)) => self.font_size = *v,
+            ("text_color", FieldValue::Vec3(v)) => self.text_color = *v,
+            ("background", FieldValue::Vec3(v)) => self.background = *v,
+            ("background_opacity", FieldValue::Float(v)) => self.background_opacity = *v,
+            ("value", FieldValue::Float(v)) => self.value = *v,
+            ("layer", FieldValue::Int(v)) => self.layer = *v,
+            _ => {}
+        }
+    }
+}
+
+/// The scene file a running game loaded, so scripts can reload it.
+#[derive(Unique, Clone, Debug, PartialEq)]
+pub struct CurrentScene(pub String);
 
 /// An `Animator` is built from its entity's model, so it can't use `EditableComponent`.
 fn animator_def() -> ComponentDef {
@@ -785,17 +953,26 @@ mod tests {
             ComponentData::named("Collider")
                 .with("shape", FieldValue::Text("Capsule".into()))
                 .with("half_height", FieldValue::Float(1.0))
-                .with("radius", FieldValue::Float(0.5)),
+                .with("radius", FieldValue::Float(0.5))
+                .with("sensor", FieldValue::Bool(false))
+                .with("collision_layer", FieldValue::Int(1))
+                .with("collision_mask", FieldValue::Int(0xFFFF)),
         );
         assert_round_trips(
             ComponentData::named("Collider")
                 .with("shape", FieldValue::Text("Box".into()))
-                .with("half_extents", FieldValue::Vec3([100.0, 0.1, 100.0])),
+                .with("half_extents", FieldValue::Vec3([100.0, 0.1, 100.0]))
+                .with("sensor", FieldValue::Bool(false))
+                .with("collision_layer", FieldValue::Int(1))
+                .with("collision_mask", FieldValue::Int(0xFFFF)),
         );
         assert_round_trips(
             ComponentData::named("Collider")
                 .with("shape", FieldValue::Text("Ball".into()))
-                .with("radius", FieldValue::Float(0.45)),
+                .with("radius", FieldValue::Float(0.45))
+                .with("sensor", FieldValue::Bool(false))
+                .with("collision_layer", FieldValue::Int(1))
+                .with("collision_mask", FieldValue::Int(0xFFFF)),
         );
         assert_round_trips(ComponentData::named("Hidden"));
     }

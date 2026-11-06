@@ -82,6 +82,28 @@ fn on_update(dt) {                      // optional: runs every frame
 
 Numbers, booleans, strings, and arrays of three numbers can be exported. `this` holds the exported values and anything else the script keeps between frames. Scripts run when you press Play, not while editing. Saving in your editor updates the Inspector right away. The Script tab lists every function scripts can call, and is where you can set which editor they open with; Zed, VS Code, and Sublime Text are found automatically.
 
+### Signals, groups, and more
+
+Scripts can find and change any entity, spawn prefabs with `instantiate`, connect to signals (`connect(coin, "collected", "on_coin")`, `emit("collected")`), call whole groups (`call_group("enemies", "alert")`), run timers (`after(2.0, "explode")`), respond to collisions (`fn on_collision(other)`) and UI buttons (`fn on_pressed()`), raycast, read input, and change scenes. The Scripts & Shaders tab lists everything.
+
+### Materials and post effects
+
+- A `MaterialOverride` component tints a model, changes its metallic and roughness, makes it glow, or runs a material shader: a GLSL file in `shaders/materials/` with `void material(inout Surface s)`.
+- Post effects are GLSL files in `shaders/post/` with `vec4 effect(vec2 uv)`, run as compute shaders after anti-aliasing. Add them under Environment > Post Effects; `// @param name default min max` lines become sliders.
+- Shaders compile when the game or editor starts and rebuild when you save them. Errors appear in the editor.
+
+### Game UI
+
+UI Label, UI Button, and UI Progress Bar entities (a `UiElement` component) are drawn over the game and previewed in the 3D view, where they can be dragged. Scripts change them with `e.set_text(...)`; buttons call `on_pressed()`.
+
+### Collision layers
+
+Each `Collider` has a layer and a mask (16 layers). Two colliders interact only if each one's mask includes the other's layer. Name layers in `layers.txt`, one per line.
+
+### Example game
+
+`scenes/coin_hunt.vscene` is a small game using all of the above: collect the glowing coins before time runs out.
+
 `--automation steps.txt` replays UI actions and checks results for automated testing; see `editor/src/automation.rs`.
 
 ## Screenshots

@@ -12,7 +12,7 @@ nalgebra-glm = { workspace = true }
 sdl3 = { workspace = true }
 shipyard = { workspace = true }
 image = { workspace = true }
-egui = "0.36"
+egui = { workspace = true }
 egui_dock = "0.21"
 transform-gizmo-egui = "0.11"
 mint = "0.5"

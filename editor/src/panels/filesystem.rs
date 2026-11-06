@@ -8,10 +8,10 @@ use egui::{Color32, FontId, Pos2, RichText, Sense, Ui, vec2};
 use crate::editor::{Action, Editor};
 use crate::theme;
 
-const ROOTS: [&str; 3] = ["scenes", "scripts", "data"];
+const ROOTS: [&str; 5] = ["scenes", "prefabs", "scripts", "shaders", "data"];
 const ROW_HEIGHT: f32 = 22.0;
 
-/// Dragged from the FileSystem dock onto the viewport to add a model.
+/// Dragged from the FileSystem dock: a model, prefab, or other file.
 #[derive(Clone)]
 pub struct ModelDrag(pub String);
 
@@ -115,6 +115,7 @@ fn icon(entry: &FileEntry) -> (&'static str, Color32) {
     match extension(&entry.path).as_str() {
         "vscene" => ("🎬", theme::play()),
         "rhai" => ("🖹", theme::accent()),
+        "glsl" => ("🖹", theme::collider()),
         "glb" | "gltf" => ("▣", theme::entity()),
         "hdr" | "png" | "jpg" | "jpeg" => ("🖼", theme::warning()),
         _ => ("🗋", theme::text_dim()),
@@ -173,7 +174,7 @@ fn row(ui: &mut Ui, editor: &mut Editor, entry: &FileEntry, depth: usize, filter
     }
     let is_folder = entry.children.is_some();
     let open = !filter.is_empty() || editor.files.expanded.contains(&entry.path);
-    let model = is_model(&entry.path);
+    let model = is_model(&entry.path) || extension(&entry.path) == "vscene";
 
     let sense = if model { Sense::click_and_drag() } else { Sense::click() };
     let (rect, response) =
@@ -206,7 +207,7 @@ fn row(ui: &mut Ui, editor: &mut Editor, entry: &FileEntry, depth: usize, filter
     if response.double_clicked() {
         match extension(&entry.path).as_str() {
             "vscene" => editor.actions.push(Action::OpenScene(entry.path.clone())),
-            "rhai" => editor.scripts.open_in_editor(&asset_path(&entry.path), &mut editor.log),
+            "rhai" | "glsl" => editor.scripts.open_in_editor(&asset_path(&entry.path), &mut editor.log),
             "glb" | "gltf" => editor.actions.push(Action::AddModel {
                 path: asset_path(&entry.path),
                 position: None,
@@ -216,7 +217,12 @@ fn row(ui: &mut Ui, editor: &mut Editor, entry: &FileEntry, depth: usize, filter
     }
     if model {
         response.dnd_set_drag_payload(ModelDrag(asset_path(&entry.path)));
-        response.clone().on_hover_text("Double-click or drag into the 3D view to add");
+        let tip = if is_model(&entry.path) {
+            "Double-click or drag into the 3D view to add"
+        } else {
+            "Double-click to open; drag into the 3D view to place it as a prefab"
+        };
+        response.clone().on_hover_text(tip);
     }
 
     if open {

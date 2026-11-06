@@ -79,7 +79,28 @@ pub struct DrawData {
     pub material_index: u32,
     /// Byte offset into the joint matrix SSBO for this draw's skeleton. NO_SKIN if not animated.
     pub skin_offset: u32,
-    pub _pad: [u32; 2],
+    /// Index into the material override buffer; 0 means no override.
+    pub override_index: u32,
+    pub _pad: u32,
+}
+
+/// Per-entity material changes, as the G-buffer shader reads them. Index 0 of the
+/// buffer is always the identity, used by entities without a MaterialOverride.
+#[derive(Clone, Copy, BufferContents, Debug, PartialEq)]
+#[repr(C)]
+pub struct GpuOverride {
+    pub tint: [f32; 4],
+    pub emissive: [f32; 4],
+    /// x = metallic, y = roughness; negative keeps the material's own value.
+    pub pbr: [f32; 4],
+}
+
+impl GpuOverride {
+    pub const NONE: Self = Self {
+        tint: [1.0, 1.0, 1.0, 1.0],
+        emissive: [0.0; 4],
+        pbr: [-1.0, -1.0, 0.0, 0.0],
+    };
 }
 
 #[derive(Clone)]
