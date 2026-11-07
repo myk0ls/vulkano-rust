@@ -13,6 +13,7 @@ use vulkano_engine::scripting::ScriptInstance;
 use crate::editor::{Dialog, Editor};
 use crate::panels::entities::entity_icon;
 use crate::panels::filesystem::{self, ModelDrag};
+use crate::panels::{Picked, search_combo};
 use crate::theme;
 
 const LABEL_WIDTH: f32 = 96.0;
@@ -23,6 +24,8 @@ const LABEL_WIDTH: f32 = 96.0;
 #[derive(Default)]
 pub struct InspectorState {
     euler: Option<EulerEdit>,
+    /// Components added in this session, in order, per entity. They're listed last.
+    pub added: std::collections::HashMap<EntityId, Vec<&'static str>>,
 }
 
 struct EulerEdit {
@@ -111,18 +114,14 @@ fn value_ui(
         }
         (FieldValue::Text(current), FieldHint::AnimationClip) => {
             let shown = if current.is_empty() { "[none]" } else { current.as_str() };
-            let mut picked = None;
-            egui::ComboBox::from_id_salt(ui.next_auto_id()).selected_text(shown).show_ui(ui, |ui| {
-                if ui.selectable_label(current.is_empty(), "[none]").clicked() {
-                    picked = Some(FieldValue::Text(String::new()));
-                }
-                for clip in clips {
-                    if ui.selectable_label(current == clip, clip).clicked() {
-                        picked = Some(FieldValue::Text(clip.clone()));
-                    }
-                }
-            });
-            picked
+            let mut labels = vec!["[none]".to_string()];
+            labels.extend(clips.iter().cloned());
+            let at = labels.iter().position(|l| l == current).or(current.is_empty().then_some(0));
+            match search_combo(ui, ui.next_auto_id(), shown, 160.0, &labels, at, None) {
+                Some(Picked::Item(0)) => Some(FieldValue::Text(String::new())),
+                Some(Picked::Item(i)) => Some(FieldValue::Text(labels[i].clone())),
+                _ => None,
+            }
         }
         (FieldValue::Text(current), FieldHint::Asset(_)) => {
             let shown = if current.is_empty() {
@@ -130,19 +129,13 @@ fn value_ui(
             } else {
                 filesystem::file_name(current)
             };
-            let mut picked = None;
-            egui::ComboBox::from_id_salt(ui.next_auto_id())
-                .selected_text(shown)
-                .truncate()
-                .width(ui.available_width().min(220.0))
-                .show_ui(ui, |ui| {
-                    for asset in assets {
-                        if ui.selectable_label(current == asset, filesystem::file_name(asset)).clicked() {
-                            picked = Some(FieldValue::Text(asset.clone()));
-                        }
-                    }
-                });
-            picked
+            let labels: Vec<String> = assets.iter().map(|a| filesystem::file_name(a)).collect();
+            let at = assets.iter().position(|a| a == current);
+            let width = ui.available_width().min(220.0);
+            match search_combo(ui, ui.next_auto_id(), &shown, width, &labels, at, None) {
+                Some(Picked::Item(i)) => Some(FieldValue::Text(assets[i].clone())),
+                _ => None,
+            }
         }
         (FieldValue::Text(current), _) => {
             let mut text = current.clone();
@@ -220,7 +213,10 @@ fn entity_ui(ui: &mut Ui, editor: &mut Editor, world: &mut World, entity: Entity
     let mut remove = None;
     let mut model_changed = false;
 
-    for def in defs.iter().filter(|d| d.has(world, entity)) {
+    let mut present: Vec<ComponentDef> = defs.iter().filter(|d| d.has(world, entity)).copied().collect();
+    let added = editor.inspector.added.get(&entity).cloned().unwrap_or_default();
+    present.sort_by_key(|d| added.iter().position(|n| *n == d.name).map_or(0, |i| i + 1));
+    for def in present.iter() {
         let id = ui.make_persistent_id(("component", def.name));
         egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
             .show_header(ui, |ui| {
@@ -353,21 +349,15 @@ fn remember_euler(
 }
 
 fn add_component_ui(ui: &mut Ui, editor: &mut Editor, world: &mut World, entity: EntityId, defs: &[ComponentDef]) {
-    let mut chosen = None;
-    egui::ComboBox::from_id_salt("add_component")
-        .selected_text("✚ Add Component")
-        .width(ui.available_width().min(240.0))
-        .height(480.0)
-        .show_ui(ui, |ui| {
-            for def in defs.iter().filter(|d| !d.has(world, entity)) {
-                if ui.selectable_label(false, def.name).clicked() {
-                    chosen = Some(*def);
-                }
-            }
-        });
-    if let Some(def) = chosen {
-        if let Err(e) = def.add(world, entity) {
-            editor.log.error(e);
+    let available: Vec<ComponentDef> = defs.iter().filter(|d| !d.has(world, entity)).copied().collect();
+    let labels: Vec<String> = available.iter().map(|d| d.name.to_string()).collect();
+    let width = ui.available_width().min(240.0);
+    if let Some(Picked::Item(i)) = search_combo(ui, "add_component", "✚ Add Component", width, &labels, None, None) {
+        let def = available[i];
+        match def.add(world, entity) {
+            // New components go to the bottom of the list, where the user is looking.
+            Ok(()) => editor.inspector.added.entry(entity).or_default().push(def.name),
+            Err(e) => editor.log.error(e),
         }
     }
 }
@@ -409,20 +399,16 @@ fn scripts_ui(
 
     // Attach an existing script, or start a new one.
     let mut attach = None;
-    egui::ComboBox::from_id_salt("attach_script")
-        .selected_text("✚ Attach Script")
-        .width(ui.available_width().min(240.0))
-        .show_ui(ui, |ui| {
-            for path in editor.scripts.files().to_vec() {
-                if ui.selectable_label(false, filesystem::file_name(&path)).clicked() {
-                    attach = Some(path);
-                }
-            }
-            ui.separator();
-            if ui.selectable_label(false, "New Script…").clicked() {
-                editor.dialog = Some(Dialog::NewFile { kind: crate::panels::scripts::FileKind::Script, name: String::new() });
-            }
-        });
+    let files = editor.scripts.files().to_vec();
+    let labels: Vec<String> = files.iter().map(|f| filesystem::file_name(f)).collect();
+    let width = ui.available_width().min(240.0);
+    match search_combo(ui, "attach_script", "✚ Attach Script", width, &labels, None, Some("New Script…")) {
+        Some(Picked::Item(i)) => attach = Some(files[i].clone()),
+        Some(Picked::Extra) => {
+            editor.dialog = Some(Dialog::NewFile { kind: crate::panels::scripts::FileKind::Script, name: String::new() });
+        }
+        None => {}
+    }
     if let Some(path) = attach {
         instances.push(ScriptInstance { path, ..Default::default() });
         changed = true;
@@ -573,20 +559,15 @@ fn post_effects_ui(ui: &mut Ui, editor: &mut Editor) {
         }
         let available = editor.scripts.files_of(crate::panels::scripts::FileKind::PostEffect);
         let mut added = None;
-        egui::ComboBox::from_id_salt("add_post_effect")
-            .selected_text("✚ Add Post Effect")
-            .width(ui.available_width().min(240.0))
-            .show_ui(ui, |ui| {
-                for path in &available {
-                    if ui.selectable_label(false, filesystem::file_name(path)).clicked() {
-                        added = Some(path.clone());
-                    }
-                }
-                ui.separator();
-                if ui.selectable_label(false, "New Post Effect…").clicked() {
-                    editor.dialog = Some(Dialog::NewFile { kind: crate::panels::scripts::FileKind::PostEffect, name: String::new() });
-                }
-            });
+        let labels: Vec<String> = available.iter().map(|f| filesystem::file_name(f)).collect();
+        let width = ui.available_width().min(240.0);
+        match search_combo(ui, "add_post_effect", "✚ Add Post Effect", width, &labels, None, Some("New Post Effect…")) {
+            Some(Picked::Item(i)) => added = Some(available[i].clone()),
+            Some(Picked::Extra) => {
+                editor.dialog = Some(Dialog::NewFile { kind: crate::panels::scripts::FileKind::PostEffect, name: String::new() });
+            }
+            None => {}
+        }
         if let Some(path) = added {
             editor.doc.environment.post_effects.push(vulkano_engine::scene::scene_file::PostEffect {
                 path,

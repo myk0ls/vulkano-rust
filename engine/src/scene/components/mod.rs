@@ -1,3 +1,4 @@
+pub mod animation_events;
 pub mod animator;
 pub mod camera;
 pub mod delta_time;
@@ -5,5 +6,6 @@ pub mod directional_light;
 pub mod material_override;
 pub mod object3d;
 pub mod pointlight;
+pub mod shape3d;
 pub mod transform;
 pub mod velocity;

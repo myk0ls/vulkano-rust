@@ -9,6 +9,7 @@
         fxaa: true,
         ao_radius: 0.05,
         ao_strength: 1.0,
+        post_effects: [],
     ),
     entities: [
         (
@@ -43,7 +44,7 @@
                 ),
                 (
                     component: "Collider",
-                    fields: {"half_extents": Vec3((100.0, 0.1, 100.0)), "shape": Text("Box")},
+                    fields: {"collision_layer": Int(1), "collision_mask": Int(65535), "half_extents": Vec3((100.0, 0.1, 100.0)), "sensor": Bool(false), "shape": Text("Box")},
                 ),
             ],
         ),
@@ -71,7 +72,7 @@
                 ),
                 (
                     component: "Collider",
-                    fields: {"half_height": Float(1.0), "radius": Float(0.5), "shape": Text("Capsule")},
+                    fields: {"collision_layer": Int(1), "collision_mask": Int(65535), "half_height": Float(1.0), "radius": Float(0.5), "sensor": Bool(false), "shape": Text("Capsule")},
                 ),
                 (
                     component: "KinematicCharacter",
@@ -99,7 +100,7 @@
                 ),
                 (
                     component: "Animator",
-                    fields: {"clip": Text("Idle"), "looping": Bool(true)},
+                    fields: {"clip": Text("Run"), "looping": Bool(true)},
                 ),
                 (
                     component: "Scripts",
@@ -121,6 +122,10 @@
                     component: "Pointlight",
                     fields: {"color": Vec3((1.0, 10.0, 1.0)), "intensity": Float(5.0), "position": Vec3((0.0, -1.5, 0.0)), "radius": Float(5.0)},
                 ),
+                (
+                    component: "Hidden",
+                    fields: {},
+                ),
             ],
         ),
         (
@@ -133,6 +138,10 @@
                     component: "Pointlight",
                     fields: {"color": Vec3((1.0, 1.0, 41.0)), "intensity": Float(5.0), "position": Vec3((-7.0, -1.5, 0.0)), "radius": Float(5.0)},
                 ),
+                (
+                    component: "Hidden",
+                    fields: {},
+                ),
             ],
         ),
         (
@@ -144,6 +153,10 @@
                 (
                     component: "Pointlight",
                     fields: {"color": Vec3((10.0, 1.0, 1.0)), "intensity": Float(5.0), "position": Vec3((7.0, -1.5, 0.0)), "radius": Float(5.0)},
+                ),
+                (
+                    component: "Hidden",
+                    fields: {},
                 ),
             ],
         ),
@@ -167,7 +180,7 @@
                 ),
                 (
                     component: "Collider",
-                    fields: {"radius": Float(0.5), "shape": Text("Ball")},
+                    fields: {"collision_layer": Int(1), "collision_mask": Int(65535), "radius": Float(0.5), "sensor": Bool(false), "shape": Text("Ball")},
                 ),
             ],
         ),

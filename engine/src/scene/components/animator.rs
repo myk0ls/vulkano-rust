@@ -72,6 +72,25 @@ impl Animator {
             }
         }
 
+        self.apply_pose();
+    }
+
+    /// Jump to a time in the current clip and pose the skeleton there, playing or not.
+    pub fn seek(&mut self, time: f32) {
+        if self.clips.is_empty() {
+            return;
+        }
+        let duration = self.clips[self.current_clip].duration;
+        self.current_time = time.clamp(0.0, duration.max(0.0));
+        self.apply_pose();
+    }
+
+    pub fn duration(&self) -> f32 {
+        self.clips.get(self.current_clip).map_or(0.0, |c| c.duration)
+    }
+
+    fn apply_pose(&mut self) {
+        let duration = self.clips[self.current_clip].duration;
         let time = self.current_time;
         let loop_dur = if self.looping { Some(duration) } else { None };
         let updates: Vec<(usize, NodeUpdate)> = self.clips[self.current_clip]

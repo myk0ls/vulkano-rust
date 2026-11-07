@@ -26,7 +26,6 @@ use crate::scene::components::material_override::MaterialOverride;
 use crate::scene::scene_file::{ComponentRegistry, CurrentScene, Environment, Hidden, SceneFile};
 use crate::scripting::ScriptRuntime;
 
-const PHYSICS_DT: f32 = 1.0 / 120.0;
 
 pub trait Game {
     fn on_init(&mut self);
@@ -169,6 +168,7 @@ impl<G: Game> Application<G> {
         let mut event_pump = self.sdl.event_pump().unwrap();
 
         //uploads all the object3d samplers before the real operation
+        crate::scene::components::shape3d::shape3d_system(self.game.get_world_mut());
         self.upload_samplers_objects3d();
 
         self.build_unified_geometry();
@@ -393,6 +393,9 @@ impl<G: Game> Application<G> {
             self.last_frame = std::time::Instant::now();
 
             self.game.on_update(dt);
+            if crate::scene::components::shape3d::shape3d_system(self.game.get_world_mut()) {
+                self.sync_loaded_models();
+            }
             self.scripts.update(self.game.get_world_mut(), dt);
             if self.handle_script_requests(&mut environment) {
                 break 'running;
@@ -406,18 +409,11 @@ impl<G: Game> Application<G> {
                 .unwrap()
                 .cleanup_finished();
 
-            self.physics_accumulator += dt;
-
-            while self.physics_accumulator >= PHYSICS_DT {
-                crate::physics::physics_engine::physics_sync_in(self.game.get_world_mut());
-                crate::physics::physics_engine::physics_kinematic(self.game.get_world_mut());
-                crate::physics::physics_engine::physics_kinematic_impulses(
-                    self.game.get_world_mut(),
-                );
-                crate::physics::physics_engine::physics_step(self.game.get_world_mut());
-                crate::physics::physics_engine::physics_sync_out(self.game.get_world_mut());
-                self.physics_accumulator -= PHYSICS_DT;
-            }
+            crate::physics::physics_engine::physics_frame(
+                self.game.get_world_mut(),
+                dt,
+                &mut self.physics_accumulator,
+            );
 
             if let Ok(env) = self.game.get_world().get_unique::<&Environment>() {
                 self.renderer.set_post_effects(&env.post_effects);
@@ -625,13 +621,25 @@ impl<G: Game> Application<G> {
     }
 
     pub fn update_animators(&mut self, delta_time: f32) {
-        self.game
-            .get_world_mut()
-            .run(|mut animators: ViewMut<Animator>| {
-                for animator in (&mut animators).iter() {
+        let mut calls: Vec<(shipyard::EntityId, String)> = Vec::new();
+        self.game.get_world_mut().run(
+            |mut animators: ViewMut<Animator>, events: View<crate::scene::components::animation_events::AnimationEvents>| {
+                for (entity, animator) in (&mut animators).iter().with_id() {
+                    let clip = animator.clip_name().unwrap_or("").to_string();
+                    let before = animator.current_time;
+                    let was_playing = animator.playing;
                     animator.update(delta_time);
+                    if let (true, Ok(events)) = (was_playing, events.get(entity)) {
+                        for function in events.crossed(&clip, before, animator.current_time) {
+                            calls.push((entity, function));
+                        }
+                    }
                 }
-            });
+            },
+        );
+        for (entity, function) in calls {
+            self.scripts.call(entity, &function);
+        }
     }
 
     pub fn render_shadows(&mut self, culled: Option<&CulledDrawBuffers>) {

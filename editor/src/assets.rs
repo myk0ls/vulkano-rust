@@ -61,7 +61,7 @@ impl ModelLibrary {
         let mut loaded = false;
         let mut errors = Vec::new();
         for path in paths {
-            if !std::path::Path::new(path).is_file() {
+            if !vulkano_engine::assets::shapes::is_shape(path) && !std::path::Path::new(path).is_file() {
                 errors.push(format!("Model not found: {path}"));
                 self.failed.insert(path.clone());
                 continue;

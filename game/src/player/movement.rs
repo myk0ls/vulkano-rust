@@ -10,7 +10,6 @@ use vulkano_engine::scene::components::delta_time::DeltaTime;
 use crate::player::{MOVE_SPEED, Player};
 
 const JUMP_FORCE: f32 = 6.0;
-const GRAVITY: f32 = 20.0;
 
 pub fn player_movement(
     players: View<Player>,
@@ -50,25 +49,17 @@ pub fn player_movement(
             speed = MOVE_SPEED * 0.5;
         }
 
-        //direction.y -= 0.981 * dt;
         direction.y = 0.0;
-
         if direction.magnitude() > 0.0 {
-            direction = direction.normalize() * speed * dt;
+            direction = direction.normalize() * speed;
         }
 
         if kinematic_character.grounded && input_manager.pressed_keys.contains(&Keycode::Space) {
             kinematic_character.vertical_velocity = JUMP_FORCE;
         }
 
-        // Apply gravity
-        kinematic_character.vertical_velocity -= GRAVITY * dt;
-
-        kinematic_character.desired_movement = Vec3::new(
-            direction.x,
-            kinematic_character.vertical_velocity * dt,
-            direction.z,
-        );
-        // println!("{}", kinematic_character.desired_movement);
+        // A velocity in m/s: the physics step moves the character and applies gravity
+        // at its own fixed rate, so movement doesn't depend on the frame rate.
+        kinematic_character.desired_velocity = Vec3::new(direction.x, 0.0, direction.z);
     }
 }

@@ -24,6 +24,8 @@ use crate::scene::components::camera::Camera;
 use crate::scene::components::directional_light::DirectionalLight;
 use crate::scene::components::material_override::MaterialOverride;
 use crate::scene::components::object3d::Object3D;
+use crate::scene::components::shape3d::Shape3D;
+use crate::scene::components::animation_events::AnimationEvents;
 use crate::scene::components::pointlight::Pointlight;
 use crate::scene::components::transform::Transform;
 use crate::scene::components::velocity::Velocity;
@@ -203,8 +205,10 @@ impl ComponentRegistry {
         let mut registry = Self { defs: Vec::new(), templates: Vec::new() };
         registry.register::<Name>();
         registry.register::<Transform>();
+        registry.register::<Shape3D>();
         registry.register::<Object3D>();
         registry.defs.push(animator_def());
+        registry.register::<AnimationEvents>();
         registry.register::<MaterialOverride>();
         registry.register::<Pointlight>();
         registry.register::<Camera>();
@@ -224,6 +228,16 @@ impl ComponentRegistry {
             "A 3D model. Pick its file in the Inspector, or drag a model into the 3D view.",
             vec![transform.clone(), ComponentData::named("Object3D")],
         );
+        for shape in crate::assets::shapes::SHAPES {
+            registry.add_template(
+                shape,
+                "A simple shape with a matching collider. Size and collision are in its Shape3D.",
+                vec![
+                    transform.clone(),
+                    ComponentData::named("Shape3D").with("shape", FieldValue::Text(shape.to_string())),
+                ],
+            );
+        }
         registry.add_template("Point Light", "A light shining in all directions.", vec![ComponentData::named("Pointlight")]);
         registry.add_template("Camera", "A camera with a position.", vec![transform.clone(), ComponentData::named("Camera")]);
         registry.add_template("UI Label", "Text on the screen. Scripts can change it with set_text.", vec![ComponentData::named("UiElement")]);
@@ -597,6 +611,43 @@ impl EditableComponent for MaterialOverride {
     }
 }
 
+impl EditableComponent for Shape3D {
+    const NAME: &'static str = "Shape3D";
+    fn create() -> Self {
+        Shape3D::default()
+    }
+    fn fields(&self) -> Vec<Field> {
+        vec![
+            Field::hinted("shape", FieldValue::Text(self.shape.clone()), FieldHint::Choice(crate::assets::shapes::SHAPES)),
+            Field::new("size", FieldValue::Vec3(self.size)),
+            Field::new("collision", FieldValue::Bool(self.collision)),
+        ]
+    }
+    fn set_field(&mut self, name: &str, value: &FieldValue) {
+        match (name, value) {
+            ("shape", FieldValue::Text(v)) => self.shape = v.clone(),
+            ("size", FieldValue::Vec3(v)) => self.size = v.map(|c| c.max(0.01)),
+            ("collision", FieldValue::Bool(v)) => self.collision = *v,
+            _ => {}
+        }
+    }
+}
+
+impl EditableComponent for AnimationEvents {
+    const NAME: &'static str = "AnimationEvents";
+    fn create() -> Self {
+        AnimationEvents::default()
+    }
+    fn fields(&self) -> Vec<Field> {
+        vec![Field::new("events", FieldValue::Text(self.to_text()))]
+    }
+    fn set_field(&mut self, name: &str, value: &FieldValue) {
+        if let ("events", FieldValue::Text(text)) = (name, value) {
+            *self = AnimationEvents::from_text(text);
+        }
+    }
+}
+
 impl EditableComponent for Pointlight {
     const NAME: &'static str = "Pointlight";
     fn create() -> Self {
@@ -692,7 +743,7 @@ impl EditableComponent for RigidBodyComponent {
     }
 }
 
-const COLLIDER_SHAPES: &[&str] = &["Box", "Ball", "Capsule"];
+const COLLIDER_SHAPES: &[&str] = &["Box", "Ball", "Capsule", "Cylinder"];
 
 impl EditableComponent for ColliderComponent {
     const NAME: &'static str = "Collider";
@@ -734,6 +785,12 @@ impl ColliderComponent {
                 shape("Capsule"),
                 Field::hinted("half_height", FieldValue::Float(capsule.half_height()), positive),
                 Field::hinted("radius", FieldValue::Float(capsule.radius), positive),
+            ]
+        } else if let Some(cylinder) = self.shape.as_cylinder() {
+            vec![
+                shape("Cylinder"),
+                Field::hinted("half_height", FieldValue::Float(cylinder.half_height), positive),
+                Field::hinted("radius", FieldValue::Float(cylinder.radius), positive),
             ]
         } else if let Some(cuboid) = self.shape.as_cuboid() {
             let half = cuboid.half_extents;

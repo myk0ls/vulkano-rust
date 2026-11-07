@@ -327,6 +327,14 @@ impl ScriptRuntime {
             .push_back(Pending::Event { source, name: name.to_string(), args });
     }
 
+    /// Call a function on every script of an entity, during the next update.
+    pub fn call(&mut self, target: EntityId, function: &str) {
+        self.context
+            .borrow_mut()
+            .pending
+            .push_back(Pending::Call { target, function: function.to_string(), args: Vec::new() });
+    }
+
     fn load(&mut self, path: &str) -> Option<&LoadedScript> {
         if !self.loaded.contains_key(path) {
             let result = std::fs::read_to_string(path)
@@ -792,7 +800,10 @@ mod tests {
         }
 
         fn file(&mut self, name: &str, contents: &str) -> String {
-            let path = std::env::temp_dir().join(format!("rhai-v2-{}-{name}", std::process::id()));
+            // Tests run in parallel and reuse entity names, so every file gets a unique name.
+            static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!("rhai-v2-{}-{n}-{name}", std::process::id()));
             std::fs::write(&path, contents).unwrap();
             self.files.push(path.clone());
             path.to_string_lossy().into_owned()

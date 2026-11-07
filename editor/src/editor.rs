@@ -33,6 +33,7 @@ pub enum Tab {
     FileSystem,
     Inspector,
     Output,
+    Animation,
 }
 
 #[derive(Clone, Debug)]
@@ -82,6 +83,9 @@ pub struct Editor {
     /// Shaders that don't compile, from the renderer.
     pub shader_errors: Vec<(String, String)>,
     pub settings: Settings,
+    /// Shape models were created and need uploading.
+    pub shapes_changed: bool,
+    pub animation: crate::panels::animation::AnimationState,
     pub log: Log,
     pub runner: GameRunner,
     pub viewport: ViewportState,
@@ -106,7 +110,7 @@ fn default_layout() -> DockState<Tab> {
     let [center, _inspector] = surface.split_right(NodeIndex::root(), 0.78, vec![Tab::Inspector]);
     let [center, left] = surface.split_left(center, 0.24, vec![Tab::Entities]);
     surface.split_below(left, 0.55, vec![Tab::FileSystem]);
-    surface.split_below(center, 0.78, vec![Tab::Output]);
+    surface.split_below(center, 0.74, vec![Tab::Output, Tab::Animation]);
     state
 }
 
@@ -123,6 +127,8 @@ impl Editor {
             pending_prefab: None,
             shader_errors: Vec::new(),
             settings,
+            shapes_changed: false,
+            animation: Default::default(),
             log,
             runner: GameRunner::new(),
             viewport: ViewportState::new(),
@@ -177,6 +183,9 @@ impl Editor {
 
         // A drag or an in-progress text edit counts as one undo step.
         let interacting = ctx.input(|i| i.pointer.any_down()) || ctx.egui_wants_keyboard_input();
+        // Shapes derive their model and collider. Doing it before taking the undo
+        // snapshot keeps every snapshot consistent, so undo never fights with it.
+        self.shapes_changed |= vulkano_engine::scene::components::shape3d::shape3d_system(world);
         self.doc.refresh(world, &self.registry);
         self.doc.commit_changes(interacting);
     }
@@ -794,6 +803,7 @@ impl TabViewer for Tabs<'_> {
             Tab::FileSystem => "FileSystem".to_string(),
             Tab::Inspector => "Inspector".to_string(),
             Tab::Output => "Output".to_string(),
+            Tab::Animation => "Animation".to_string(),
         }
         .into()
     }
@@ -806,6 +816,7 @@ impl TabViewer for Tabs<'_> {
             Tab::FileSystem => filesystem::ui(ui, self.editor),
             Tab::Inspector => inspector::ui(ui, self.editor, self.world),
             Tab::Output => output::ui(ui, self.editor),
+            Tab::Animation => crate::panels::animation::ui(ui, self.editor, self.world),
         }
     }
 

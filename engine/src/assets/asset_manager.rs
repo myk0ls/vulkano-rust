@@ -130,6 +130,19 @@ impl AssetManager {
     }
 
     pub fn load_model(&mut self, filepath: &str) -> AssetHandle {
+        if !self.models.contains_key(filepath) && crate::assets::shapes::is_shape(filepath) {
+            let meshes = crate::assets::shapes::generate(filepath).unwrap_or_default();
+            self.models.insert(
+                filepath.to_string(),
+                Model {
+                    meshes,
+                    draw_range: 0..0,
+                    node_tree: NodeTree { nodes: Vec::new(), roots: Vec::new() },
+                    skins: Vec::new(),
+                    animations: Vec::new(),
+                },
+            );
+        }
         if !self.models.contains_key(filepath) {
             let loader = LoaderGLTF::new(filepath, [0.0, 0.0, 0.0]);
             let new_model = Model {

@@ -204,7 +204,14 @@ fn main() {
 
         let dt = last_frame.elapsed().as_secs_f32();
         last_frame = Instant::now();
-        app.update_animators(dt);
+        if !editor.animation.paused {
+            app.update_animators(dt);
+        }
+        // Animation events call scripts, which only run in the game.
+        app.scripts.reset();
+        if std::mem::take(&mut editor.shapes_changed) {
+            app.sync_loaded_models();
+        }
 
         // ── Draw ───────────────────────────────────────────────────────────────
         app.previous_frame_end.as_mut().unwrap().cleanup_finished();

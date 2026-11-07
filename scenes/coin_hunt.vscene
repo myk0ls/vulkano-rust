@@ -3,7 +3,7 @@
         exposure: 1.0,
         ambient_color: (1.0, 1.0, 1.0),
         ambient_intensity: 0.5,
-        sun_direction: (0.1, 1.0, 0.1),
+        sun_direction: (8.85, 2.87, 0.1),
         sun_color: (4.0, 4.0, 4.0),
         shadow_softness: 2.0,
         fxaa: true,
@@ -158,6 +158,18 @@
                 (
                     component: "UiElement",
                     fields: {"anchor": Text("BottomRight"), "background": Vec3((0.2, 0.25, 0.35)), "background_opacity": Float(0.85), "font_size": Float(22.0), "height": Float(52.0), "kind": Text("Button"), "layer": Int(2), "text": Text("Restart (R)"), "text_color": Vec3((1.0, 1.0, 1.0)), "value": Float(0.0), "width": Float(180.0), "x": Float(24.0), "y": Float(24.0)},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("Point Light")},
+                ),
+                (
+                    component: "Pointlight",
+                    fields: {"color": Vec3((2.35, 4.32, 0.7)), "intensity": Float(37.8), "position": Vec3((0.0, -1.2183561, 0.0)), "radius": Float(3.12)},
                 ),
             ],
         ),
