@@ -431,6 +431,10 @@ impl<G: Game> Application<G> {
                     println!("Screenshot: {result:?}");
                 }
             }
+            // The view comes from this frame's input and (interpolated) physics, so it must
+            // be set before rendering; afterwards, every frame showed the previous frame's
+            // camera, a whole frame of extra input lag.
+            self.update_camera_view();
             let primitives = self.build_ui();
             self.renderer.start();
             self.render_scene(&mut environment);
@@ -445,8 +449,6 @@ impl<G: Game> Application<G> {
                 }
                 _ => self.renderer.finish(&mut self.previous_frame_end),
             }
-
-            self.update_camera_view();
         }
     }
 
