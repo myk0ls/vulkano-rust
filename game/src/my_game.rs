@@ -83,7 +83,6 @@ impl Game for MyApp {
     }
 
     fn on_init(&mut self) {
-        println!("initialized!");
 
         if let Some(path) = self.scene_path.clone() {
             self.init_from_scene(&path);

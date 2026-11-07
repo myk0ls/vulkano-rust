@@ -10,8 +10,19 @@ use crate::log::{Level, Log};
 
 pub struct GameRunner {
     child: Option<Child>,
-    sender: Sender<(Level, String)>,
-    receiver: Receiver<(Level, String)>,
+    /// True from Play until cargo reports the build finished (or the process ends).
+    building: bool,
+    /// Crates compiled so far in this build, for the progress hint.
+    built_crates: usize,
+    sender: Sender<Message>,
+    receiver: Receiver<Message>,
+}
+
+/// What the output-reading threads send back.
+enum Message {
+    Log(Level, String),
+    CrateBuilt,
+    BuildFinished,
 }
 
 impl GameRunner {
@@ -19,6 +30,8 @@ impl GameRunner {
         let (sender, receiver) = channel();
         Self {
             child: None,
+            building: false,
+            built_crates: 0,
             sender,
             receiver,
         }
@@ -26,6 +39,11 @@ impl GameRunner {
 
     pub fn is_running(&self) -> bool {
         self.child.is_some()
+    }
+
+    /// Whether cargo is still compiling, and how many crates it has compiled so far.
+    pub fn build_progress(&self) -> Option<usize> {
+        (self.child.is_some() && self.building).then_some(self.built_crates)
     }
 
     pub fn start(&mut self, scene: &Path, log: &mut Log) {
@@ -49,6 +67,8 @@ impl GameRunner {
                     self.forward(err, Level::Warning);
                 }
                 self.child = Some(child);
+                self.building = true;
+                self.built_crates = 0;
             }
             Err(e) => log.error(format!("Could not start cargo: {e}")),
         }
@@ -58,12 +78,14 @@ impl GameRunner {
         let sender = self.sender.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(stream).lines().map_while(Result::ok) {
-                let (level, line) = match classify(&line) {
-                    Line::Game => (level, line),
-                    Line::BuildError(text) => (Level::Error, text),
+                let message = match classify(&line) {
+                    Line::Game => Message::Log(level, line),
+                    Line::BuildError(text) => Message::Log(Level::Error, text),
+                    Line::CrateBuilt => Message::CrateBuilt,
+                    Line::BuildFinished => Message::BuildFinished,
                     Line::BuildNoise => continue,
                 };
-                if sender.send((level, line)).is_err() {
+                if sender.send(message).is_err() {
                     break;
                 }
             }
@@ -80,12 +102,17 @@ impl GameRunner {
 
     /// Forward the game's output to the log and notice when it exits.
     pub fn poll(&mut self, log: &mut Log) {
-        while let Ok((level, line)) = self.receiver.try_recv() {
-            log.push(level, format!("[game] {line}"));
+        while let Ok(message) = self.receiver.try_recv() {
+            match message {
+                Message::Log(level, line) => log.push(level, format!("[game] {line}")),
+                Message::CrateBuilt => self.built_crates += 1,
+                Message::BuildFinished => self.building = false,
+            }
         }
         if let Some(child) = &mut self.child {
             if let Ok(Some(status)) = child.try_wait() {
                 self.child = None;
+                self.building = false;
                 if status.success() {
                     log.info("Game exited.");
                 } else {
@@ -99,6 +126,8 @@ impl GameRunner {
 enum Line {
     Game,
     BuildError(String),
+    CrateBuilt,
+    BuildFinished,
     BuildNoise,
 }
 
@@ -113,6 +142,14 @@ fn classify(line: &str) -> Line {
     let Some(reason) = message.get("reason").and_then(|r| r.as_str()) else {
         return Line::Game;
     };
+    match reason {
+        "build-finished" => return Line::BuildFinished,
+        // Only crates that were actually compiled count; cached ones are "fresh".
+        "compiler-artifact" if message.get("fresh").and_then(|f| f.as_bool()) == Some(false) => {
+            return Line::CrateBuilt;
+        }
+        _ => {}
+    }
     let diagnostic = message.get("message");
     let is_error = reason == "compiler-message"
         && diagnostic.and_then(|d| d.get("level")).and_then(|l| l.as_str()) == Some("error");
@@ -137,7 +174,9 @@ mod tests {
     fn build_warnings_are_dropped_and_errors_kept() {
         let warning = r#"{"reason":"compiler-message","message":{"level":"warning","rendered":"unused"}}"#;
         assert!(matches!(classify(warning), Line::BuildNoise));
-        assert!(matches!(classify(r#"{"reason":"compiler-artifact"}"#), Line::BuildNoise));
+        assert!(matches!(classify(r#"{"reason":"compiler-artifact","fresh":true}"#), Line::BuildNoise));
+        assert!(matches!(classify(r#"{"reason":"compiler-artifact","fresh":false}"#), Line::CrateBuilt));
+        assert!(matches!(classify(r#"{"reason":"build-finished","success":true}"#), Line::BuildFinished));
         let error = r#"{"reason":"compiler-message","message":{"level":"error","rendered":"bad code\n"}}"#;
         assert!(matches!(classify(error), Line::BuildError(text) if text == "bad code"));
     }

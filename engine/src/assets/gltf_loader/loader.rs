@@ -177,10 +177,6 @@ fn collect_meshes(
 
         let material = load_material(&primitive.material(), images);
 
-        println!(
-            "  mesh primitive: {} verts, skinned={}",
-            count, is_skinned
-        );
         meshes.push(Mesh {
             vertices,
             indices,

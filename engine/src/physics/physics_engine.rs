@@ -24,7 +24,7 @@ pub struct PhysicsEngine {
 
 /// The length of one physics step. Application runs this many per second of game time,
 /// and both rapier and the character controller integrate with it.
-pub const PHYSICS_DT: f32 = 1.0 / 120.0;
+pub const PHYSICS_DT: f32 = 1.0 / 60.0;
 
 /// Collects collision start/stop events during a physics step.
 #[derive(Default)]
@@ -265,7 +265,7 @@ pub fn physics_bodies_creation_system(world: &mut World) {
          mut bodies: ViewMut<RigidBodyComponent>,
          mut colliders: ViewMut<ColliderComponent>| {
             // Create rigid bodies for entities that have RigidBodyComponent but no handle yet
-            for (id, (transform, body)) in (&transforms, &mut bodies).iter().with_id() {
+            for (transform, body) in (&transforms, &mut bodies).iter() {
                 if body.handle.is_none() {
                     let pos = transform.get_position_vector();
                     // The engine's rotation mirrored into physics space (+Y up), as an
@@ -290,7 +290,6 @@ pub fn physics_bodies_creation_system(world: &mut World) {
                     let handle = physics.rigid_body_set.insert(rigid_body);
                     body.handle = Some(handle);
 
-                    println!("Created rigid body for entity {:?} with handle {:?}", id, handle);
                 }
             }
 
@@ -313,7 +312,6 @@ pub fn physics_bodies_creation_system(world: &mut World) {
                         physics.collider_set.set_parent(handle, Some(body_handle), &mut physics.rigid_body_set);
                         collider.handle = Some(handle);
 
-                        println!("Created collider for entity {:?} with handle {:?}", id, handle);
                     } else {
                         println!(
                             "Warning: Entity {:?} has ColliderComponent but no RigidBodyComponent handle",

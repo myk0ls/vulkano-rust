@@ -39,6 +39,27 @@ impl Renderer {
             Some(c) => c,
         };
 
+        if !self.sun_shadows {
+            let (vb, ib) = (
+                unified.vertex_buffer.as_ref().unwrap().clone(),
+                unified.index_buffer.as_ref().unwrap().clone(),
+            );
+            let layout = self.shadow_pipeline.layout().set_layouts()[1].clone();
+            let draw_data_set = DescriptorSet::new(
+                self.descriptor_set_allocator.clone(),
+                layout,
+                [
+                    WriteDescriptorSet::buffer(0, culled.draw_data.clone()),
+                    WriteDescriptorSet::buffer(1, culled.joint_matrices.clone()),
+                ],
+                [],
+            )
+            .unwrap();
+            self.local_shadow_passes(culled, vb, ib, draw_data_set);
+            self.begin_main_render_pass();
+            return;
+        }
+
         let light_space_matrix = Renderer::compute_light_space_matrix(light.position);
 
         let light_space_buffer = Buffer::from_data(
@@ -114,15 +135,17 @@ impl Renderer {
             .unwrap()
             .bind_pipeline_graphics(self.shadow_pipeline.clone())
             .unwrap()
-            .bind_vertex_buffers(0, vb)
+            .set_viewport(0, [shadow_viewport(super::SHADOW_MAP_SIZE)].into_iter().collect())
             .unwrap()
-            .bind_index_buffer(ib)
+            .bind_vertex_buffers(0, vb.clone())
+            .unwrap()
+            .bind_index_buffer(ib.clone())
             .unwrap()
             .bind_descriptor_sets(
                 PipelineBindPoint::Graphics,
                 self.shadow_pipeline.layout().clone(),
                 0,
-                (light_space_set, draw_data_set),
+                (light_space_set, draw_data_set.clone()),
             )
             .unwrap();
 
@@ -140,7 +163,74 @@ impl Renderer {
             .end_render_pass(SubpassEndInfo::default())
             .unwrap();
 
+        self.local_shadow_passes(culled, vb, ib, draw_data_set);
         self.begin_main_render_pass();
+    }
+
+    /// Render the scene's depth from each shadow-casting point and spot light.
+    fn local_shadow_passes(
+        &mut self,
+        culled: &CulledDrawBuffers,
+        vb: Subbuffer<[crate::assets::gltf_loader::NormalVertex]>,
+        ib: Subbuffer<[u32]>,
+        draw_data_set: Arc<DescriptorSet>,
+    ) {
+        let jobs: Vec<(u32, nalgebra_glm::Mat4)> = self
+            .local_slots
+            .iter()
+            .flatten()
+            .flat_map(|slot| slot.matrices.iter().enumerate().map(|(i, m)| (slot.layer + i as u32, *m)))
+            .collect();
+        for (layer, matrix) in jobs {
+            let buffer = Buffer::from_data(
+                self.memory_allocator.clone(),
+                BufferCreateInfo { usage: BufferUsage::UNIFORM_BUFFER, ..Default::default() },
+                AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                    ..Default::default()
+                },
+                shadows_vert::LightSpaceMatrix { lightSpaceMatrix: matrix.into() },
+            )
+            .unwrap();
+            let layout = self.shadow_pipeline.layout().set_layouts()[0].clone();
+            let set = DescriptorSet::new(
+                self.descriptor_set_allocator.clone(),
+                layout,
+                [WriteDescriptorSet::buffer(0, buffer)],
+                [],
+            )
+            .unwrap();
+            let framebuffer = self.local_shadow_framebuffers[layer as usize].clone();
+            let commands = self.commands.as_mut().unwrap();
+            commands
+                .begin_render_pass(
+                    RenderPassBeginInfo {
+                        clear_values: vec![Some(1.0f32.into())],
+                        ..RenderPassBeginInfo::framebuffer(framebuffer)
+                    },
+                    SubpassBeginInfo { contents: SubpassContents::Inline, ..Default::default() },
+                )
+                .unwrap()
+                .bind_pipeline_graphics(self.shadow_pipeline.clone())
+                .unwrap()
+                .set_viewport(0, [shadow_viewport(super::LOCAL_SHADOW_SIZE)].into_iter().collect())
+                .unwrap()
+                .bind_vertex_buffers(0, vb.clone())
+                .unwrap()
+                .bind_index_buffer(ib.clone())
+                .unwrap()
+                .bind_descriptor_sets(
+                    PipelineBindPoint::Graphics,
+                    self.shadow_pipeline.layout().clone(),
+                    0,
+                    (set, draw_data_set.clone()),
+                )
+                .unwrap();
+            unsafe {
+                commands.draw_indexed_indirect(culled.indirect.clone()).unwrap();
+            }
+            commands.end_render_pass(SubpassEndInfo::default()).unwrap();
+        }
     }
 
     pub fn geometry(&mut self, unified: &UnifiedGeometry, culled: Option<&CulledDrawBuffers>) {
@@ -451,6 +541,7 @@ impl Renderer {
                 0,
                 directional_frag::PushConstants {
                     shadowRadius: self.shadow_softness,
+                    shadowsEnabled: if self.sun_shadows { 1.0 } else { 0.0 },
                 },
             )
             .unwrap();
@@ -464,7 +555,12 @@ impl Renderer {
         }
     }
 
-    pub fn pointlight(&mut self, light: &Pointlight) {
+    /// Draw the point or spot light at `index` of this frame's local lights.
+    pub fn local_light(&mut self, index: usize) {
+        let Some(light) = self.local_lights.get(index).cloned() else {
+            return;
+        };
+        let slot = self.local_slots.get(index).cloned().flatten();
         match self.render_stage {
             RenderStage::Ambient => {
                 self.render_stage = RenderStage::Directional;
@@ -511,11 +607,34 @@ impl Renderer {
                     | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
                 ..Default::default()
             },
-            pointlight_frag::PointLight_Data {
-                position: light.position.into(),
-                color: light.color.into(),
-                intensity: light.intensity.into(),
-                radius: light.radius.into(),
+            {
+                let [x, y, z] = light.position;
+                let (direction, params) = match light.spot {
+                    Some((d, inner, outer)) => {
+                        let outer = outer.max(0.1);
+                        let inner = inner.min(outer - 0.05).max(0.0);
+                        ([d[0], d[1], d[2], outer.to_radians().cos()], [inner.to_radians().cos(), 1.0, 0.0, 0.0])
+                    }
+                    None => ([0.0, 1.0, 0.0, -1.0], [1.0, 0.0, 0.0, 0.0]),
+                };
+                let mut params = params;
+                let mut matrices = [[[0.0f32; 4]; 4]; 6];
+                if let Some(slot) = &slot {
+                    params[2] = if light.spot.is_some() { 1.0 } else { 2.0 };
+                    params[3] = slot.layer as f32;
+                    for (out, m) in matrices.iter_mut().zip(&slot.matrices) {
+                        *out = (*m).into();
+                    }
+                }
+                pointlight_frag::PointLight_Data {
+                    position: [x, y, z, 1.0],
+                    color: light.color.into(),
+                    intensity: light.intensity.into(),
+                    radius: light.radius.into(),
+                    direction,
+                    params,
+                    shadow_matrices: matrices,
+                }
             },
         )
         .unwrap();
@@ -536,6 +655,7 @@ impl Renderer {
                 WriteDescriptorSet::image_view(3, self.specular_buffer.clone()),
                 WriteDescriptorSet::buffer(4, point_buffer.clone()),
                 WriteDescriptorSet::buffer(5, camera_buffer.clone()),
+                WriteDescriptorSet::image_view_sampler(6, self.local_shadow_view.clone(), self.shadow_sampler.clone()),
             ],
             [],
         )
@@ -943,5 +1063,13 @@ impl Renderer {
             commands.draw(3, 1, 0, 0).unwrap();
         }
         commands.end_render_pass(SubpassEndInfo::default()).unwrap();
+    }
+}
+
+fn shadow_viewport(size: u32) -> vulkano::pipeline::graphics::viewport::Viewport {
+    vulkano::pipeline::graphics::viewport::Viewport {
+        offset: [0.0, 0.0],
+        extent: [size as f32, size as f32],
+        depth_range: 0.0..=1.0,
     }
 }

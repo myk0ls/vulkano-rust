@@ -11,6 +11,8 @@ pub struct Pointlight {
     pub color: [f32; 3],
     pub intensity: f32,
     pub radius: f32,
+    /// Shadows from point lights render the scene six times, so they're opt-in.
+    pub cast_shadows: bool,
 }
 
 impl Pointlight {
@@ -20,6 +22,7 @@ impl Pointlight {
             color,
             intensity,
             radius,
+            cast_shadows: false,
         }
     }
 }

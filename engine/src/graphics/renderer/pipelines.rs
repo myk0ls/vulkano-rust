@@ -434,22 +434,23 @@ pub(super) fn create_shadow(
             stages: stages.into_iter().collect(),
             vertex_input_state: Some(vertex_input_state),
             input_assembly_state: Some(InputAssemblyState::default()),
+            // Shadow maps differ in size (sun vs. local lights), so the viewport is set per pass.
+            dynamic_state: [DynamicState::Viewport].into_iter().collect(),
             viewport_state: Some(ViewportState {
-                viewports: [Viewport {
-                    offset: [0.0, 0.0],
-                    extent: [SHADOW_MAP_SIZE as f32, SHADOW_MAP_SIZE as f32],
-                    depth_range: 0.0..=1.0,
-                }]
-                .into_iter()
-                .collect(),
+                viewports: [Viewport::default()].into_iter().collect(),
                 ..Default::default()
             }),
             rasterization_state: Some(RasterizationState {
-                cull_mode: CullMode::Front,
+                // Both faces are drawn so the stored depth is the surface nearest the
+                // light. Culling front faces stored the underside of objects instead,
+                // which sits level with the floor and made shadows detach from their
+                // casters. Acne is handled by the slope bias here plus a normal offset
+                // in the lighting shaders.
+                cull_mode: CullMode::None,
                 depth_bias: Some(DepthBiasState {
-                    constant_factor: 0.0,
+                    constant_factor: 1.0,
                     clamp: 0.0,
-                    slope_factor: 0.0,
+                    slope_factor: 1.5,
                 }),
                 ..Default::default()
             }),

@@ -35,7 +35,9 @@ impl EntityListState {
 pub fn entity_icon(world: &World, entity: EntityId) -> (&'static str, Color32) {
     if world.get::<&Object3D>(entity).is_ok() {
         ("▣", theme::entity())
-    } else if world.get::<&Pointlight>(entity).is_ok() {
+    } else if world.get::<&Pointlight>(entity).is_ok()
+        || world.get::<&vulkano_engine::scene::components::spotlight::Spotlight>(entity).is_ok()
+    {
         ("💡", theme::warning())
     } else if world.get::<&Camera>(entity).is_ok() {
         ("🎞", theme::accent())

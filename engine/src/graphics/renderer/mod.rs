@@ -209,6 +209,33 @@ mod brdf_lut_comp {
 // ── Public re-exports (was in old mod.rs) ──────────────────────────────────
 
 const SHADOW_MAP_SIZE: u32 = 4096;
+/// Size of each local light (spot or cube face) shadow map.
+const LOCAL_SHADOW_SIZE: u32 = 1024;
+/// How many spot lights and point lights can cast shadows at once. Each spot light costs
+/// one extra render of the scene's geometry, each point light six.
+pub const MAX_SPOT_SHADOWS: usize = 4;
+pub const MAX_POINT_SHADOWS: usize = 2;
+const LOCAL_SHADOW_LAYERS: u32 = (MAX_SPOT_SHADOWS + 6 * MAX_POINT_SHADOWS) as u32;
+
+/// A point or spot light, in engine space, as the renderer draws it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LocalLight {
+    pub position: [f32; 3],
+    pub color: [f32; 3],
+    pub intensity: f32,
+    pub radius: f32,
+    /// For spot lights: the direction it shines, and the inner and outer cone angles in
+    /// degrees.
+    pub spot: Option<([f32; 3], f32, f32)>,
+    pub cast_shadows: bool,
+}
+
+/// Where a local light's shadow is stored this frame.
+#[derive(Clone, Debug)]
+pub(crate) struct ShadowSlot {
+    pub layer: u32,
+    pub matrices: Vec<TMat4<f32>>,
+}
 
 #[derive(Debug, Clone)]
 enum RenderStage {
@@ -332,6 +359,12 @@ pub struct Renderer {
     pub shadow_softness: f32,
 
     pub(super) composite_format: Format,
+    pub(super) local_shadow_view: Arc<ImageView>,
+    pub(super) local_shadow_framebuffers: Vec<Arc<Framebuffer>>,
+    pub(super) local_lights: Vec<LocalLight>,
+    pub(super) local_slots: Vec<Option<ShadowSlot>>,
+    /// Whether the sun casts shadows.
+    pub sun_shadows: bool,
     pub(super) custom: custom::CustomShaders,
     pub(super) post_effects: Vec<crate::scene::scene_file::PostEffect>,
     pub(super) post_images: Option<[Arc<ImageView>; 2]>,
@@ -787,6 +820,46 @@ impl Renderer {
         )
         .unwrap();
 
+        // ── Local light shadow maps: one layer per spot light or cube face ──
+
+        let local_shadow_image = Image::new(
+            memory_allocator.clone(),
+            ImageCreateInfo {
+                image_type: vulkano::image::ImageType::Dim2d,
+                format: Format::D32_SFLOAT,
+                extent: [LOCAL_SHADOW_SIZE, LOCAL_SHADOW_SIZE, 1],
+                array_layers: LOCAL_SHADOW_LAYERS,
+                usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::SAMPLED,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let local_shadow_view = ImageView::new(
+            local_shadow_image.clone(),
+            ImageViewCreateInfo {
+                view_type: vulkano::image::view::ImageViewType::Dim2dArray,
+                ..ImageViewCreateInfo::from_image(&local_shadow_image)
+            },
+        )
+        .unwrap();
+        let local_shadow_framebuffers = (0..LOCAL_SHADOW_LAYERS)
+            .map(|layer| {
+                let mut info = ImageViewCreateInfo::from_image(&local_shadow_image);
+                info.view_type = vulkano::image::view::ImageViewType::Dim2d;
+                info.subresource_range.array_layers = layer..layer + 1;
+                let view = ImageView::new(local_shadow_image.clone(), info).unwrap();
+                Framebuffer::new(
+                    shadow_render_pass.clone(),
+                    FramebufferCreateInfo { attachments: vec![view], ..Default::default() },
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+
         // ── Samplers ───────────────────────────────────────────────────────
 
         let sampler = Sampler::new(
@@ -995,6 +1068,11 @@ impl Renderer {
             fxaa_enabled: true,
             shadow_softness: 2.0,
             composite_format,
+            local_shadow_view,
+            local_shadow_framebuffers,
+            local_lights: Vec::new(),
+            local_slots: Vec::new(),
+            sun_shadows: true,
             custom: Default::default(),
             post_effects: Vec::new(),
             post_images: None,
@@ -1196,6 +1274,39 @@ impl Renderer {
         }
     }
 
+    /// The point and spot lights for this frame, before its shadow pass. Shadows go to the
+    /// first lights that ask for them, up to the limits.
+    pub fn set_local_lights(&mut self, lights: Vec<LocalLight>) {
+        let mut spots = 0;
+        let mut points = 0;
+        self.local_slots = lights
+            .iter()
+            .map(|light| {
+                if !light.cast_shadows {
+                    return None;
+                }
+                match light.spot {
+                    Some((direction, _, outer)) if spots < MAX_SPOT_SHADOWS => {
+                        spots += 1;
+                        let layer = (spots - 1) as u32;
+                        Some(ShadowSlot { layer, matrices: vec![spot_matrix(light.position, direction, outer, light.radius)] })
+                    }
+                    None if points < MAX_POINT_SHADOWS => {
+                        points += 1;
+                        let layer = (MAX_SPOT_SHADOWS + 6 * (points - 1)) as u32;
+                        Some(ShadowSlot { layer, matrices: cube_matrices(light.position, light.radius) })
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+        self.local_lights = lights;
+    }
+
+    pub fn local_light_count(&self) -> usize {
+        self.local_lights.len()
+    }
+
     /// Replace the projection used by subsequent frames.
     pub fn set_projection(&mut self, projection: &TMat4<f32>) {
         self.vp.projection = *projection;
@@ -1203,6 +1314,7 @@ impl Renderer {
 
     /// Apply the renderer-side settings of a scene's environment.
     pub fn apply_environment(&mut self, env: &Environment) {
+        self.sun_shadows = env.sun_shadows;
         self.exposure = env.exposure;
         self.fxaa_enabled = env.fxaa;
         self.shadow_softness = env.shadow_softness;
@@ -1312,4 +1424,40 @@ impl Renderer {
             norm(sub(r3, r2)),
         ]
     }
+}
+
+/// glm's projections map depth to -1..1; Vulkan wants 0..1.
+fn vulkan_depth() -> TMat4<f32> {
+    nalgebra_glm::mat4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0, 1.0)
+}
+
+fn light_view(position: [f32; 3], direction: TVec3<f32>) -> TMat4<f32> {
+    let eye = vec3(position[0], position[1], position[2]);
+    let up = if direction.y.abs() > 0.99 { vec3(0.0, 0.0, 1.0) } else { vec3(0.0, 1.0, 0.0) };
+    look_at_rh(&eye, &(eye + direction), &up)
+}
+
+/// A spot light's view and projection, covering its cone with a little margin.
+fn spot_matrix(position: [f32; 3], direction: [f32; 3], outer_degrees: f32, range: f32) -> TMat4<f32> {
+    let d = vec3(direction[0], direction[1], direction[2]);
+    let d = if d.norm() > 1e-6 { d.normalize() } else { vec3(0.0, 1.0, 0.0) };
+    let fov = (outer_degrees * 2.0 + 10.0).clamp(10.0, 170.0).to_radians();
+    vulkan_depth() * nalgebra_glm::perspective(1.0, fov, 0.05, range.max(0.1)) * light_view(position, d)
+}
+
+/// Six 95° views around a point light: +X, -X, +Y, -Y, +Z, -Z. The extra 5° gives the
+/// shadow filter room at the cube's edges.
+fn cube_matrices(position: [f32; 3], range: f32) -> Vec<TMat4<f32>> {
+    let projection = vulkan_depth() * nalgebra_glm::perspective(1.0, 95f32.to_radians(), 0.05, range.max(0.1));
+    [
+        vec3(1.0, 0.0, 0.0),
+        vec3(-1.0, 0.0, 0.0),
+        vec3(0.0, 1.0, 0.0),
+        vec3(0.0, -1.0, 0.0),
+        vec3(0.0, 0.0, 1.0),
+        vec3(0.0, 0.0, -1.0),
+    ]
+    .into_iter()
+    .map(|d| projection * light_view(position, d))
+    .collect()
 }

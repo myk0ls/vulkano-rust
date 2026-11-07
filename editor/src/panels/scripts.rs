@@ -185,6 +185,7 @@ const API_HELP: &[(&str, &[(&str, &str)])] = &[
             ("every(0.5, \"shoot\")", "Call it repeatedly."),
             ("cancel_timers()", "Stop this script's timers."),
             ("time(), frame()", "Seconds and frames since the game started."),
+            ("fps(), frame_ms()", "Frames per second and frame time, averaged over half a second. For a counter on a UiElement: me().set_text(`${fps()} FPS`)"),
         ],
     ),
     (

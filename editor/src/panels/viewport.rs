@@ -8,6 +8,7 @@ use shipyard::{EntityId, World};
 use vulkano_engine::physics::physics_engine::ColliderComponent;
 use vulkano_engine::scene::components::object3d::Object3D;
 use vulkano_engine::scene::components::pointlight::Pointlight;
+use vulkano_engine::scene::components::spotlight::Spotlight;
 use vulkano_engine::scene::components::transform::Transform;
 use vulkano_engine::scene::scene_file::Hidden;
 
@@ -75,6 +76,10 @@ pub fn entity_pose(world: &World, entity: EntityId) -> Option<Pose> {
     if let Ok(transform) = world.get::<&Transform>(entity) {
         return Some(Pose::from_engine(&transform));
     }
+    if let Ok(spot) = world.get::<&Spotlight>(entity) {
+        let [x, y, z] = spot.position;
+        return Some(Pose { position: glm::vec3(x, -y, z), rotation: glm::identity(), scale: 1.0 });
+    }
     let light = world.get::<&Pointlight>(entity).ok()?;
     let [x, y, z, _] = light.position;
     Some(Pose { position: glm::vec3(x, -y, z), rotation: glm::identity(), scale: 1.0 })
@@ -83,6 +88,8 @@ pub fn entity_pose(world: &World, entity: EntityId) -> Option<Pose> {
 fn set_entity_pose(world: &World, entity: EntityId, pose: &Pose) {
     if let Ok(mut transform) = world.get::<&mut Transform>(entity) {
         pose.apply_to(&mut transform);
+    } else if let Ok(mut spot) = world.get::<&mut Spotlight>(entity) {
+        spot.position = [pose.position.x, -pose.position.y + 0.0, pose.position.z];
     } else if let Ok(mut light) = world.get::<&mut Pointlight>(entity) {
         light.position = [pose.position.x, -pose.position.y + 0.0, pose.position.z, 1.0];
     }
@@ -524,6 +531,29 @@ fn draw_selection(painter: &egui::Painter, projector: &Projector, editor: &Edito
     }
     if let Ok(light) = world.get::<&Pointlight>(entity) {
         draw_circles(painter, projector, pose, light.radius, Stroke::new(1.0, theme::warning().linear_multiply(0.7)));
+    }
+    if let Ok(spot) = world.get::<&Spotlight>(entity) {
+        // The cone: lines from the light to a circle at the end of its range.
+        let [dx, dy, dz] = spot.direction;
+        let d = glm::vec3(dx, -dy, dz);
+        if glm::length(&d) > 1e-6 {
+            let d = glm::normalize(&d);
+            let side = if d.y.abs() > 0.99 { glm::vec3(1.0, 0.0, 0.0) } else { glm::normalize(&glm::cross(&d, &glm::vec3(0.0, 1.0, 0.0))) };
+            let up = glm::cross(&side, &d);
+            let length = spot.range.min(8.0);
+            let radius = length * spot.outer_angle.to_radians().tan();
+            let stroke = Stroke::new(1.0, theme::warning().linear_multiply(0.8));
+            let point = |i: usize| {
+                let a = i as f32 / 32.0 * std::f32::consts::TAU;
+                pose.position + d * length + (side * a.cos() + up * a.sin()) * radius
+            };
+            for i in 0..32 {
+                line(painter, projector, point(i), point(i + 1), stroke);
+                if i % 8 == 0 {
+                    line(painter, projector, pose.position, point(i), stroke);
+                }
+            }
+        }
     }
     if let Ok(collider) = world.get::<&ColliderComponent>(entity) {
         let stroke = Stroke::new(1.5, theme::collider());

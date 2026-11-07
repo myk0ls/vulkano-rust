@@ -22,6 +22,7 @@ layout(set = 0, binding = 7) uniform sampler2DShadow shadow_map;
 
 layout(push_constant) uniform PushConstants {
     float shadowRadius;
+    float shadowsEnabled;
 } pc;
 
 layout(location = 0) out vec4 f_color;
@@ -49,6 +50,9 @@ const vec2 poissonDisk[16] = vec2[](
     );
 
 float compute_shadow(vec4 frag_pos_light_space) {
+    if (pc.shadowsEnabled < 0.5) {
+        return 1.0;
+    }
     vec3 proj_coords = frag_pos_light_space.xyz / frag_pos_light_space.w;
     proj_coords.xy = proj_coords.xy * 0.5 + 0.5;
 
@@ -120,7 +124,13 @@ void main() {
     vec3 Lo = (kD * albedo / PI + specular) * radiance * NdotL;
 
     // Shadow attenuation
-    vec4 frag_pos_light_space = light_space.light_space_matrix * vec4(fragPos, 1.0);
+    // Normal offset: push the lookup a little off the surface (in world units, about
+    // one shadow texel; the sun's map spans 50 m over its width) so it does not
+    // shadow itself, without the detached look a large depth bias gives.
+    float texel_world = 50.0 / float(textureSize(shadow_map, 0).x);
+    float slope = clamp(1.0 - dot(N, L), 0.0, 1.0);
+    vec3 offset_pos = fragPos + N * texel_world * (0.5 + 1.5 * slope);
+    vec4 frag_pos_light_space = light_space.light_space_matrix * vec4(offset_pos, 1.0);
     float shadow = compute_shadow(frag_pos_light_space);
 
     f_color = vec4(Lo * shadow, 1.0);

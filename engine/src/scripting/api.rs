@@ -66,6 +66,9 @@ fn get_position(world: &World, id: EntityId) -> Vec3 {
     if let Ok(l) = world.get::<&Pointlight>(id) {
         return Vec3::from_f32([l.position[0], l.position[1], l.position[2]]);
     }
+    if let Ok(s) = world.get::<&crate::scene::components::spotlight::Spotlight>(id) {
+        return Vec3::from_f32(s.position);
+    }
     Vec3::default()
 }
 
@@ -76,6 +79,9 @@ fn set_position(world: &World, id: EntityId, p: Vec3) {
     }
     if let Ok(mut l) = world.get::<&mut Pointlight>(id) {
         l.position = [x, y, z, 1.0];
+    }
+    if let Ok(mut s) = world.get::<&mut crate::scene::components::spotlight::Spotlight>(id) {
+        s.position = [x, y, z];
     }
     // Teleport the physics body too, or the simulation would put it back.
     let body = world.get::<&RigidBodyComponent>(id).ok().and_then(|b| b.handle);
@@ -677,6 +683,13 @@ fn register_world(engine: &mut Engine, ctx: &Shared) {
 
     ctx_fn!(engine, ctx, "time", |c| c.borrow().time);
     ctx_fn!(engine, ctx, "frame", |c| c.borrow().frame as INT);
+    // Frames per second, averaged over half a second so it reads steadily on a label.
+    ctx_fn!(engine, ctx, "fps", |c| c.borrow().fps.round() as INT);
+    // Average frame time in milliseconds over the same window.
+    ctx_fn!(engine, ctx, "frame_ms", |c| {
+        let fps = c.borrow().fps;
+        if fps > 0.0 { (100_000.0 / fps).round() / 100.0 } else { 0.0 }
+    });
 
     ctx_fn!(engine, ctx, "raycast", |c, origin: Vec3, direction: Vec3, max: Dynamic| {
         raycast(&c, origin, direction, number(&max).unwrap_or(1000.0), None, None)

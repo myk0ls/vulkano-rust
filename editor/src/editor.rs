@@ -266,6 +266,16 @@ impl Editor {
                 if play.clicked() {
                     self.actions.push(Action::Play);
                 }
+                if let Some(crates) = self.runner.build_progress() {
+                    let detail = match crates {
+                        0 => "Building…".to_string(),
+                        1 => "Building… (1 crate)".to_string(),
+                        n => format!("Building… ({n} crates)"),
+                    };
+                    ui.label(RichText::new(detail).color(theme::text_dim()))
+                        .on_hover_text("cargo is compiling the game; it starts when the build finishes");
+                    ui.add(egui::Spinner::new().size(14.0).color(theme::play()));
+                }
                 ui.add_space(8.0);
                 let dirty = if self.doc.is_dirty() { " (*)" } else { "" };
                 ui.label(RichText::new(format!("{}{dirty}", self.doc.title())).color(theme::text_dim()));

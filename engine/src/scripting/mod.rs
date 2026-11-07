@@ -210,6 +210,11 @@ pub(crate) struct Context {
     requests: ScriptRequests,
     time: f64,
     frame: u64,
+    /// Frames per second, averaged over the last half-second window.
+    fps: f64,
+    /// Frames and seconds counted so far in the current window.
+    fps_frames: u32,
+    fps_window: f64,
     rng: u64,
 }
 
@@ -275,6 +280,9 @@ impl ScriptRuntime {
             requests: ScriptRequests::default(),
             time: 0.0,
             frame: 0,
+            fps: 0.0,
+            fps_frames: 0,
+            fps_window: 0.0,
             rng: 0x9E3779B97F4A7C15 ^ std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(1, |d| d.as_nanos() as u64),
@@ -364,6 +372,16 @@ impl ScriptRuntime {
             context.world = world;
             context.time += dt as f64;
             context.frame += 1;
+            context.fps_frames += 1;
+            context.fps_window += dt as f64;
+            if context.fps_window >= 0.5 {
+                context.fps = context.fps_frames as f64 / context.fps_window;
+                context.fps_frames = 0;
+                context.fps_window = 0.0;
+            } else if context.fps == 0.0 && dt > 0.0 {
+                // Something to show before the first window completes.
+                context.fps = 1.0 / dt as f64;
+            }
             context.input = read_input(world);
         }
         self.queue_collision_events(world);

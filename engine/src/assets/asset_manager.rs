@@ -332,14 +332,6 @@ impl AssetManager {
             None
         };
 
-        println!(
-            "Unified geometry built: {} vertices, {} indices, {} draws, {} unique textures, {} materials",
-            current_vertex_offset,
-            current_index_offset,
-            mesh_draws.len(),
-            textures.len(),
-            material_data.len(),
-        );
 
         self.unified_geometry = UnifiedGeometry {
             vertex_buffer,

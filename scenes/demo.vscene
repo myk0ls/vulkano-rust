@@ -3,9 +3,10 @@
         exposure: 1.0,
         ambient_color: (1.0, 1.0, 1.0),
         ambient_intensity: 0.5,
-        sun_direction: (0.1, 1.0, 0.1),
+        sun_direction: (0.1, -0.37, 0.1),
         sun_color: (4.0, 4.0, 4.0),
         shadow_softness: 2.0,
+        sun_shadows: true,
         fxaa: true,
         ao_radius: 0.05,
         ao_strength: 1.0,
@@ -120,11 +121,7 @@
                 ),
                 (
                     component: "Pointlight",
-                    fields: {"color": Vec3((1.0, 10.0, 1.0)), "intensity": Float(5.0), "position": Vec3((0.0, -1.5, 0.0)), "radius": Float(5.0)},
-                ),
-                (
-                    component: "Hidden",
-                    fields: {},
+                    fields: {"cast_shadows": Bool(true), "color": Vec3((1.0, 1.4, 1.0)), "intensity": Float(12.45), "position": Vec3((0.0, -1.2831347, -0.011695451)), "radius": Float(5.0)},
                 ),
             ],
         ),
@@ -136,11 +133,7 @@
                 ),
                 (
                     component: "Pointlight",
-                    fields: {"color": Vec3((1.0, 1.0, 41.0)), "intensity": Float(5.0), "position": Vec3((-7.0, -1.5, 0.0)), "radius": Float(5.0)},
-                ),
-                (
-                    component: "Hidden",
-                    fields: {},
+                    fields: {"cast_shadows": Bool(true), "color": Vec3((1.0, 1.0, 41.0)), "intensity": Float(5.0), "position": Vec3((-7.0, -1.5, 0.0)), "radius": Float(5.0)},
                 ),
             ],
         ),
@@ -152,11 +145,7 @@
                 ),
                 (
                     component: "Pointlight",
-                    fields: {"color": Vec3((10.0, 1.0, 1.0)), "intensity": Float(5.0), "position": Vec3((7.0, -1.5, 0.0)), "radius": Float(5.0)},
-                ),
-                (
-                    component: "Hidden",
-                    fields: {},
+                    fields: {"cast_shadows": Bool(true), "color": Vec3((10.0, 1.0, 1.0)), "intensity": Float(5.0), "position": Vec3((7.0, -1.5, 0.0)), "radius": Float(5.0)},
                 ),
             ],
         ),
@@ -168,7 +157,7 @@
                 ),
                 (
                     component: "Transform",
-                    fields: {"position": Vec3((0.0, -1.18163, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(0.01)},
+                    fields: {"position": Vec3((0.0, 0.049105186, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(0.01)},
                 ),
                 (
                     component: "Object3D",
@@ -176,11 +165,59 @@
                 ),
                 (
                     component: "RigidBody",
-                    fields: {"body_type": Text("Dynamic")},
+                    fields: {"body_type": Text("Fixed")},
                 ),
                 (
                     component: "Collider",
                     fields: {"collision_layer": Int(1), "collision_mask": Int(65535), "radius": Float(0.5), "sensor": Bool(false), "shape": Text("Ball")},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("Cylinder")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((4.6315093, -0.56877387, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                ),
+                (
+                    component: "Shape3D",
+                    fields: {"collision": Bool(true), "shape": Text("Cylinder"), "size": Vec3((1.0, 1.0, 1.0))},
+                ),
+                (
+                    component: "Object3D",
+                    fields: {"model": Text("shape:cylinder:1,1")},
+                ),
+                (
+                    component: "MaterialOverride",
+                    fields: {"emissive": Vec3((1.0, 1.0, 1.0)), "emissive_strength": Float(0.0), "metallic": Float(0.0), "override_metallic": Bool(false), "override_roughness": Bool(false), "roughness": Float(0.5), "shader": Text("shaders/materials/pulse.glsl"), "tint": Vec3((1.0, 1.0, 1.0))},
+                ),
+                (
+                    component: "RigidBody",
+                    fields: {"body_type": Text("Fixed")},
+                ),
+                (
+                    component: "Collider",
+                    fields: {"collision_layer": Int(1), "collision_mask": Int(65535), "half_height": Float(0.5), "radius": Float(0.5), "sensor": Bool(false), "shape": Text("Cylinder")},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("FPSLabel")},
+                ),
+                (
+                    component: "Scripts",
+                    fields: {"scripts": Scripts([(path: "scripts/fps_label.rhai", exports: {})])},
+                ),
+                (
+                    component: "UiElement",
+                    fields: {"anchor": Text("TopLeft"), "background": Vec3((0.1, 0.1, 0.1)), "background_opacity": Float(0.0), "font_size": Float(10.0), "height": Float(40.0), "kind": Text("Label"), "layer": Int(0), "text": Text("FPS"), "text_color": Vec3((1.0, 1.0, 1.0)), "value": Float(0.5), "width": Float(50.0), "x": Float(1069.0), "y": Float(32.65)},
                 ),
             ],
         ),

@@ -27,6 +27,7 @@ use crate::scene::components::object3d::Object3D;
 use crate::scene::components::shape3d::Shape3D;
 use crate::scene::components::animation_events::AnimationEvents;
 use crate::scene::components::pointlight::Pointlight;
+use crate::scene::components::spotlight::Spotlight;
 use crate::scene::components::transform::Transform;
 use crate::scene::components::velocity::Velocity;
 use crate::scripting::{Groups, ScriptInstance, Scripts};
@@ -211,6 +212,7 @@ impl ComponentRegistry {
         registry.register::<AnimationEvents>();
         registry.register::<MaterialOverride>();
         registry.register::<Pointlight>();
+        registry.register::<Spotlight>();
         registry.register::<Camera>();
         registry.register::<Velocity>();
         registry.register::<RigidBodyComponent>();
@@ -239,6 +241,7 @@ impl ComponentRegistry {
             );
         }
         registry.add_template("Point Light", "A light shining in all directions.", vec![ComponentData::named("Pointlight")]);
+        registry.add_template("Spot Light", "A cone of light that casts shadows.", vec![ComponentData::named("Spotlight")]);
         registry.add_template("Camera", "A camera with a position.", vec![transform.clone(), ComponentData::named("Camera")]);
         registry.add_template("UI Label", "Text on the screen. Scripts can change it with set_text.", vec![ComponentData::named("UiElement")]);
         registry.add_template(
@@ -394,6 +397,8 @@ pub struct Environment {
     pub sun_direction: [f32; 3],
     pub sun_color: [f32; 3],
     pub shadow_softness: f32,
+    /// Whether the sun casts shadows.
+    pub sun_shadows: bool,
     pub fxaa: bool,
     pub ao_radius: f32,
     pub ao_strength: f32,
@@ -410,6 +415,7 @@ impl Default for Environment {
             sun_direction: [0.1, 1.0, 0.1],
             sun_color: [4.0, 4.0, 4.0],
             shadow_softness: 2.0,
+            sun_shadows: true,
             fxaa: true,
             ao_radius: 0.05,
             ao_strength: 1.0,
@@ -660,6 +666,7 @@ impl EditableComponent for Pointlight {
             Field::hinted("color", FieldValue::Vec3(self.color), FieldHint::Color),
             Field::hinted("intensity", FieldValue::Float(self.intensity), FieldHint::Range(0.0, 10000.0)),
             Field::hinted("radius", FieldValue::Float(self.radius), FieldHint::Range(0.01, 10000.0)),
+            Field::new("cast_shadows", FieldValue::Bool(self.cast_shadows)),
         ]
     }
     fn set_field(&mut self, name: &str, value: &FieldValue) {
@@ -668,6 +675,40 @@ impl EditableComponent for Pointlight {
             ("color", FieldValue::Vec3(color)) => self.color = *color,
             ("intensity", FieldValue::Float(v)) => self.intensity = *v,
             ("radius", FieldValue::Float(v)) => self.radius = *v,
+            ("cast_shadows", FieldValue::Bool(v)) => self.cast_shadows = *v,
+            _ => {}
+        }
+    }
+}
+
+impl EditableComponent for Spotlight {
+    const NAME: &'static str = "Spotlight";
+    fn create() -> Self {
+        Spotlight::default()
+    }
+    fn fields(&self) -> Vec<Field> {
+        let angle = FieldHint::Range(0.0, 89.0);
+        vec![
+            Field::new("position", FieldValue::Vec3(self.position)),
+            Field::new("direction", FieldValue::Vec3(self.direction)),
+            Field::hinted("color", FieldValue::Vec3(self.color), FieldHint::Color),
+            Field::hinted("intensity", FieldValue::Float(self.intensity), FieldHint::Range(0.0, 10000.0)),
+            Field::hinted("range", FieldValue::Float(self.range), FieldHint::Range(0.1, 10000.0)),
+            Field::hinted("inner_angle", FieldValue::Float(self.inner_angle), angle),
+            Field::hinted("outer_angle", FieldValue::Float(self.outer_angle), angle),
+            Field::new("cast_shadows", FieldValue::Bool(self.cast_shadows)),
+        ]
+    }
+    fn set_field(&mut self, name: &str, value: &FieldValue) {
+        match (name, value) {
+            ("position", FieldValue::Vec3(v)) => self.position = *v,
+            ("direction", FieldValue::Vec3(v)) => self.direction = *v,
+            ("color", FieldValue::Vec3(v)) => self.color = *v,
+            ("intensity", FieldValue::Float(v)) => self.intensity = *v,
+            ("range", FieldValue::Float(v)) => self.range = *v,
+            ("inner_angle", FieldValue::Float(v)) => self.inner_angle = *v,
+            ("outer_angle", FieldValue::Float(v)) => self.outer_angle = *v,
+            ("cast_shadows", FieldValue::Bool(v)) => self.cast_shadows = *v,
             _ => {}
         }
     }
@@ -1003,7 +1044,19 @@ mod tests {
                 .with("position", FieldValue::Vec3([1.0, 2.0, 3.0]))
                 .with("color", FieldValue::Vec3([10.0, 1.0, 1.0]))
                 .with("intensity", FieldValue::Float(5.0))
-                .with("radius", FieldValue::Float(3.0)),
+                .with("radius", FieldValue::Float(3.0))
+                .with("cast_shadows", FieldValue::Bool(true)),
+        );
+        assert_round_trips(
+            ComponentData::named("Spotlight")
+                .with("position", FieldValue::Vec3([1.0, -4.0, 2.0]))
+                .with("direction", FieldValue::Vec3([0.0, 1.0, 0.5]))
+                .with("color", FieldValue::Vec3([1.0, 0.8, 0.5]))
+                .with("intensity", FieldValue::Float(40.0))
+                .with("range", FieldValue::Float(12.0))
+                .with("inner_angle", FieldValue::Float(20.0))
+                .with("outer_angle", FieldValue::Float(35.0))
+                .with("cast_shadows", FieldValue::Bool(false)),
         );
         assert_round_trips(ComponentData::named("RigidBody").with("body_type", FieldValue::Text("KinematicVelocity".into())));
         assert_round_trips(

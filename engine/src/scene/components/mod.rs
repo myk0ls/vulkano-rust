@@ -7,5 +7,6 @@ pub mod material_override;
 pub mod object3d;
 pub mod pointlight;
 pub mod shape3d;
+pub mod spotlight;
 pub mod transform;
 pub mod velocity;

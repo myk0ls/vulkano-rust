@@ -486,6 +486,9 @@ fn environment_ui(ui: &mut Ui, env: &mut Environment) {
             vec3_widgets(ui, &mut env.sun_direction, xyz(), "", 0.01);
         });
         color(ui, "Color", &mut env.sun_color);
+        property(ui, "Sun Shadows", |ui| {
+            ui.checkbox(&mut env.sun_shadows, "");
+        });
         float(ui, "Shadow Softness", &mut env.shadow_softness, 0.05, 0.0, 16.0);
     });
     egui::CollapsingHeader::new(RichText::new("Ambient").strong()).default_open(true).show(ui, |ui| {

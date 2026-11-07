@@ -21,7 +21,7 @@ use vulkano::sync;
 use vulkano::sync::GpuFuture;
 
 use crate::assets::asset_manager::GpuOverride;
-use crate::graphics::renderer::{CulledDrawBuffers, DrawItem, Renderer, RendererConfig};
+use crate::graphics::renderer::{CulledDrawBuffers, DrawItem, LocalLight, Renderer, RendererConfig};
 use crate::scene::components::material_override::MaterialOverride;
 use crate::scene::scene_file::{ComponentRegistry, CurrentScene, Environment, Hidden, SceneFile};
 use crate::scripting::ScriptRuntime;
@@ -149,6 +149,7 @@ impl<G: Game> Application<G> {
             return;
         }
         let culled = self.build_culled_draw_list();
+        self.gather_local_lights();
         self.render_shadows(culled.as_ref());
         self.render_objects3d(culled.as_ref());
         self.renderer
@@ -657,15 +658,42 @@ impl<G: Game> Application<G> {
         self.renderer.geometry(unified, culled);
     }
 
-    pub fn render_pointlights(&mut self) {
-        let world = self.game.get_world();
-        let asset_manager = world.get_unique::<&AssetManager>().unwrap();
+    /// Hand this frame's point and spot lights to the renderer, so it can render their
+    /// shadows before lighting.
+    pub fn gather_local_lights(&mut self) {
+        let mut lights = Vec::new();
+        self.game.get_world().run(
+            |points: View<Pointlight>, spots: View<crate::scene::components::spotlight::Spotlight>, hidden: View<Hidden>| {
+                for (light, _) in (&points, !&hidden).iter() {
+                    let [x, y, z, _] = light.position;
+                    lights.push(LocalLight {
+                        position: [x, y, z],
+                        color: light.color,
+                        intensity: light.intensity,
+                        radius: light.radius,
+                        spot: None,
+                        cast_shadows: light.cast_shadows,
+                    });
+                }
+                for (light, _) in (&spots, !&hidden).iter() {
+                    lights.push(LocalLight {
+                        position: light.position,
+                        color: light.color,
+                        intensity: light.intensity,
+                        radius: light.range,
+                        spot: Some((light.direction, light.inner_angle, light.outer_angle)),
+                        cast_shadows: light.cast_shadows,
+                    });
+                }
+            },
+        );
+        self.renderer.set_local_lights(lights);
+    }
 
-        world.run(|pointlights: View<Pointlight>, hidden: View<Hidden>| {
-            for (object, _) in (&pointlights, !&hidden).iter() {
-                self.renderer.pointlight(object);
-            }
-        });
+    pub fn render_pointlights(&mut self) {
+        for index in 0..self.renderer.local_light_count() {
+            self.renderer.local_light(index);
+        }
     }
 
     pub fn render_directional(&mut self) {
