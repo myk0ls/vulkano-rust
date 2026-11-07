@@ -153,7 +153,7 @@ impl Renderer {
             self.commands
                 .as_mut()
                 .unwrap()
-                .draw_indexed_indirect(culled.indirect.clone())
+                .draw_indexed_indirect(culled.shadow_indirect.clone())
                 .unwrap();
         }
 
@@ -227,7 +227,7 @@ impl Renderer {
                 )
                 .unwrap();
             unsafe {
-                commands.draw_indexed_indirect(culled.indirect.clone()).unwrap();
+                commands.draw_indexed_indirect(culled.shadow_indirect.clone()).unwrap();
             }
             commands.end_render_pass(SubpassEndInfo::default()).unwrap();
         }
@@ -878,6 +878,21 @@ impl Renderer {
         )
         .unwrap();
 
+        let shadow_indirect = Buffer::from_iter(
+            self.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::INDIRECT_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            indirect_commands.iter().copied(),
+        )
+        .unwrap();
+
         let indirect_buffer = Buffer::from_iter(
             self.memory_allocator.clone(),
             BufferCreateInfo {
@@ -990,6 +1005,7 @@ impl Renderer {
             overrides,
             ranges,
             indirect: indirect_buffer,
+            shadow_indirect,
             draw_data: draw_data_buffer,
             joint_matrices: joint_matrices_buffer,
         })

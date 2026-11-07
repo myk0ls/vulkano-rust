@@ -285,7 +285,11 @@ pub struct DrawItem {
 pub struct CulledDrawBuffers {
     pub overrides: Subbuffer<[asset_manager::GpuOverride]>,
     pub ranges: Vec<DrawRange>,
+    /// Draws for the camera; the cull pass zeroes the instance count of what it can't see.
     pub indirect: Subbuffer<[DrawIndexedIndirectCommand]>,
+    /// Every draw, unculled, for the shadow passes: an object off screen can still cast
+    /// a shadow into view.
+    pub shadow_indirect: Subbuffer<[DrawIndexedIndirectCommand]>,
     pub draw_data: Subbuffer<[asset_manager::DrawData]>,
     pub joint_matrices: Subbuffer<[[[f32; 4]; 4]]>,
 }
@@ -1420,7 +1424,9 @@ impl Renderer {
             norm(sub(r3, r0)),
             norm(add(r3, r1)),
             norm(sub(r3, r1)),
-            norm(r2),
+            // w + z works for both -1..1 and 0..1 depth; for the latter it only reaches a
+            // little behind the near plane, which keeps a few extra draws, never fewer.
+            norm(add(r3, r2)),
             norm(sub(r3, r2)),
         ]
     }

@@ -18,9 +18,9 @@ struct DrawData {
     mat4 model;
     mat4 normals;
     uint material_index;
-    uint pad0;
-    uint pad1;
-    uint pad2;
+    uint skin_offset;
+    uint override_index;
+    uint pad;
 };
 
 layout(std430, set = 0, binding = 0) buffer IndirectCommands {
@@ -76,9 +76,14 @@ void main() {
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= num_draws) return;
 
+    // Skinned meshes are bounded in their bind pose, which an animation can leave far
+    // behind, so they are always drawn.
+    if (draws[idx].skin_offset != 0xFFFFFFFFu) {
+        dc[idx].instance_count = 1u;
+        return;
+    }
+
     AABB box = boxes[idx];
     mat4 model = draws[idx].model;
-
-    //dc[idx].instance_count = isAABBinFrustum(box, model) ? 1u : 0u;
-    dc[idx].instance_count = 1u;
+    dc[idx].instance_count = isAABBinFrustum(box, model) ? 1u : 0u;
 }
