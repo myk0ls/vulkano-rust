@@ -31,6 +31,7 @@ impl Renderer {
         unified: &UnifiedGeometry,
         culled: Option<&CulledDrawBuffers>,
     ) {
+        self.sun_cascades = None;
         let culled = match culled {
             None => {
                 self.begin_main_render_pass();
@@ -60,50 +61,12 @@ impl Renderer {
             return;
         }
 
-        let light_space_matrix = self.compute_light_space_matrix(light.position);
-
-        let light_space_buffer = Buffer::from_data(
-            self.memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::UNIFORM_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            shadows_vert::LightSpaceMatrix {
-                lightSpaceMatrix: light_space_matrix.into(),
-            },
-        )
-        .unwrap();
+        let cascades = self.compute_sun_cascades(light.position);
 
         let vb = unified.vertex_buffer.as_ref().unwrap().clone();
         let ib = unified.index_buffer.as_ref().unwrap().clone();
 
-        let light_space_layout = self
-            .shadow_pipeline
-            .layout()
-            .set_layouts()
-            .get(0)
-            .unwrap()
-            .clone();
-        let light_space_set = DescriptorSet::new(
-            self.descriptor_set_allocator.clone(),
-            light_space_layout,
-            [WriteDescriptorSet::buffer(0, light_space_buffer)],
-            [],
-        )
-        .unwrap();
-
-        let draw_data_layout = self
-            .shadow_pipeline
-            .layout()
-            .set_layouts()
-            .get(1)
-            .unwrap()
-            .clone();
+        let draw_data_layout = self.shadow_pipeline.layout().set_layouts()[1].clone();
         let draw_data_set = DescriptorSet::new(
             self.descriptor_set_allocator.clone(),
             draw_data_layout,
@@ -115,53 +78,58 @@ impl Renderer {
         )
         .unwrap();
 
-        self.commands
-            .as_mut()
-            .unwrap()
-            .begin_render_pass(
-                RenderPassBeginInfo {
-                    clear_values: vec![Some(1.0f32.into())],
-                    ..RenderPassBeginInfo::framebuffer(self.shadow_framebuffer.clone())
-                },
-                SubpassBeginInfo {
-                    contents: SubpassContents::Inline,
+        // The scene's depth from the sun, once per cascade.
+        for (cascade, matrix) in cascades.matrices.iter().enumerate() {
+            let light_space_buffer = Buffer::from_data(
+                self.memory_allocator.clone(),
+                BufferCreateInfo { usage: BufferUsage::UNIFORM_BUFFER, ..Default::default() },
+                AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
                     ..Default::default()
                 },
+                shadows_vert::LightSpaceMatrix { lightSpaceMatrix: (*matrix).into() },
+            )
+            .unwrap();
+            let light_space_set = DescriptorSet::new(
+                self.descriptor_set_allocator.clone(),
+                self.shadow_pipeline.layout().set_layouts()[0].clone(),
+                [WriteDescriptorSet::buffer(0, light_space_buffer)],
+                [],
             )
             .unwrap();
 
-        self.commands
-            .as_mut()
-            .unwrap()
-            .bind_pipeline_graphics(self.shadow_pipeline.clone())
-            .unwrap()
-            .set_viewport(0, [shadow_viewport(super::SHADOW_MAP_SIZE)].into_iter().collect())
-            .unwrap()
-            .bind_vertex_buffers(0, vb.clone())
-            .unwrap()
-            .bind_index_buffer(ib.clone())
-            .unwrap()
-            .bind_descriptor_sets(
-                PipelineBindPoint::Graphics,
-                self.shadow_pipeline.layout().clone(),
-                0,
-                (light_space_set, draw_data_set.clone()),
-            )
-            .unwrap();
-
-        unsafe {
-            self.commands
-                .as_mut()
+            let framebuffer = self.shadow_framebuffers[cascade].clone();
+            let commands = self.commands.as_mut().unwrap();
+            commands
+                .begin_render_pass(
+                    RenderPassBeginInfo {
+                        clear_values: vec![Some(1.0f32.into())],
+                        ..RenderPassBeginInfo::framebuffer(framebuffer)
+                    },
+                    SubpassBeginInfo { contents: SubpassContents::Inline, ..Default::default() },
+                )
                 .unwrap()
-                .draw_indexed_indirect(culled.shadow_indirect.clone())
+                .bind_pipeline_graphics(self.shadow_pipeline.clone())
+                .unwrap()
+                .set_viewport(0, [shadow_viewport(super::SHADOW_MAP_SIZE)].into_iter().collect())
+                .unwrap()
+                .bind_vertex_buffers(0, vb.clone())
+                .unwrap()
+                .bind_index_buffer(ib.clone())
+                .unwrap()
+                .bind_descriptor_sets(
+                    PipelineBindPoint::Graphics,
+                    self.shadow_pipeline.layout().clone(),
+                    0,
+                    (light_space_set, draw_data_set.clone()),
+                )
                 .unwrap();
+            unsafe {
+                commands.draw_indexed_indirect(culled.shadow_indirect.clone()).unwrap();
+            }
+            commands.end_render_pass(SubpassEndInfo::default()).unwrap();
         }
-
-        self.commands
-            .as_mut()
-            .unwrap()
-            .end_render_pass(SubpassEndInfo::default())
-            .unwrap();
+        self.sun_cascades = Some(cascades);
 
         self.local_shadow_passes(culled, vb, ib, draw_data_set);
         self.begin_main_render_pass();
@@ -471,8 +439,23 @@ impl Renderer {
         )
         .unwrap();
 
-        let light_space_matrix = self.compute_light_space_matrix(directional_light.position);
-
+        // The cascades the shadow pass rendered this frame. Without them the sun casts no
+        // shadow, and the matrices are unused.
+        let cascades = self.sun_cascades.clone();
+        let camera = nalgebra_glm::inverse(&self.vp.view);
+        let forward = -nalgebra_glm::vec3(camera[8], camera[9], camera[10]).normalize();
+        let mut cascade_data = directional_frag::LightSpaceData {
+            matrices: [[[0.0; 4]; 4]; super::SUN_CASCADES],
+            splits: super::SUN_CASCADE_SPLITS,
+            texel: [0.0; super::SUN_CASCADES],
+            camera_forward: [forward.x, forward.y, forward.z, 0.0],
+        };
+        if let Some(cascades) = &cascades {
+            for i in 0..super::SUN_CASCADES {
+                cascade_data.matrices[i] = cascades.matrices[i].into();
+            }
+            cascade_data.texel = cascades.texel;
+        }
         let light_space_buffer = Buffer::from_data(
             self.memory_allocator.clone(),
             BufferCreateInfo {
@@ -484,9 +467,7 @@ impl Renderer {
                     | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
                 ..Default::default()
             },
-            directional_frag::LightSpaceData {
-                light_space_matrix: light_space_matrix.into(),
-            },
+            cascade_data,
         )
         .unwrap();
 
@@ -541,7 +522,7 @@ impl Renderer {
                 0,
                 directional_frag::PushConstants {
                     shadowRadius: self.shadow_softness,
-                    shadowsEnabled: if self.sun_shadows { 1.0 } else { 0.0 },
+                    shadowsEnabled: if cascades.is_some() { 1.0 } else { 0.0 },
                 },
             )
             .unwrap();
@@ -555,7 +536,6 @@ impl Renderer {
         }
     }
 
-    /// Draw the point or spot light at `index` of this frame's local lights.
     /// Upload this frame's point and spot lights and sort them into clusters. Runs on the
     /// GPU before the render pass starts, since a compute dispatch can't run inside one.
     pub(super) fn cluster_lights(&mut self) {

@@ -14,11 +14,18 @@ layout(set = 0, binding = 5) uniform Camera_Data {
     vec3 position;
 } camera;
 
-layout(set = 0, binding = 6) uniform LightSpaceData {
-    mat4 light_space_matrix;
-} light_space;
+// Cascaded shadow maps: each cascade covers a longer stretch of the view than the last.
+// Must match SUN_CASCADES in renderer/mod.rs.
+const int CASCADES = 4;
 
-layout(set = 0, binding = 7) uniform sampler2DShadow shadow_map;
+layout(set = 0, binding = 6) uniform LightSpaceData {
+    mat4 matrices[CASCADES];
+    vec4 splits;          // where each cascade ends, in metres along the camera's view
+    vec4 texel;           // the world size of one shadow-map texel in each cascade
+    vec4 camera_forward;  // xyz: the direction the camera looks
+} cascades;
+
+layout(set = 0, binding = 7) uniform sampler2DArrayShadow shadow_map;
 
 layout(push_constant) uniform PushConstants {
     float shadowRadius;
@@ -49,26 +56,54 @@ const vec2 poissonDisk[16] = vec2[](
         vec2(0.14383161, -0.14100790)
     );
 
-float compute_shadow(vec4 frag_pos_light_space) {
-    if (pc.shadowsEnabled < 0.5) {
+// Filtered shadow from one cascade. 1 is fully lit.
+float cascade_shadow(int cascade, vec3 fragPos, vec3 N, float slope) {
+    // Normal offset: push the lookup a little off the surface, about one texel of this
+    // cascade, so the surface does not shadow itself without the detached look a large
+    // depth bias gives.
+    vec3 offset_pos = fragPos + N * cascades.texel[cascade] * (0.5 + 1.5 * slope);
+    vec4 light_space = cascades.matrices[cascade] * vec4(offset_pos, 1.0);
+    vec3 p = light_space.xyz / light_space.w;
+    p.xy = p.xy * 0.5 + 0.5;
+    if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) {
         return 1.0;
     }
-    vec3 proj_coords = frag_pos_light_space.xyz / frag_pos_light_space.w;
-    proj_coords.xy = proj_coords.xy * 0.5 + 0.5;
 
-    if (proj_coords.x < 0.0 || proj_coords.x > 1.0 ||
-            proj_coords.y < 0.0 || proj_coords.y > 1.0 ||
-            proj_coords.z > 1.0) {
-        return 1.0;
-    }
-
-    vec2 texel = 1.0 / textureSize(shadow_map, 0);
+    vec2 texel = 1.0 / vec2(textureSize(shadow_map, 0).xy);
     float shadow = 0.0;
     for (int i = 0; i < 16; i++) {
         vec2 offset = poissonDisk[i] * texel * pc.shadowRadius;
-        shadow += texture(shadow_map, vec3(proj_coords.xy + offset, proj_coords.z));
+        shadow += texture(shadow_map, vec4(p.xy + offset, float(cascade), p.z));
     }
     return shadow / 16.0;
+}
+
+float compute_shadow(vec3 fragPos, vec3 N, vec3 L) {
+    if (pc.shadowsEnabled < 0.5) {
+        return 1.0;
+    }
+    float depth = dot(fragPos - camera.position, cascades.camera_forward.xyz);
+    if (depth >= cascades.splits[CASCADES - 1]) {
+        return 1.0;
+    }
+    int cascade = 0;
+    while (cascade < CASCADES - 1 && depth > cascades.splits[cascade]) {
+        cascade++;
+    }
+    float slope = clamp(1.0 - dot(N, L), 0.0, 1.0);
+    float shadow = cascade_shadow(cascade, fragPos, N, slope);
+
+    // Blend into the next cascade over the last part of this one, so the change in
+    // sharpness has no visible seam; the last cascade fades out instead.
+    float start = cascade == 0 ? 0.0 : cascades.splits[cascade - 1];
+    float end = cascades.splits[cascade];
+    float band = (end - start) * 0.2;
+    float blend = clamp((depth - (end - band)) / band, 0.0, 1.0);
+    if (blend > 0.0) {
+        float next = cascade < CASCADES - 1 ? cascade_shadow(cascade + 1, fragPos, N, slope) : 1.0;
+        shadow = mix(shadow, next, blend);
+    }
+    return shadow;
 }
 
 // GGX normal distribution
@@ -124,14 +159,7 @@ void main() {
     vec3 Lo = (kD * albedo / PI + specular) * radiance * NdotL;
 
     // Shadow attenuation
-    // Normal offset: push the lookup a little off the surface (in world units, about
-    // one shadow texel; the sun's map spans 50 m over its width) so it does not
-    // shadow itself, without the detached look a large depth bias gives.
-    float texel_world = 50.0 / float(textureSize(shadow_map, 0).x);
-    float slope = clamp(1.0 - dot(N, L), 0.0, 1.0);
-    vec3 offset_pos = fragPos + N * texel_world * (0.5 + 1.5 * slope);
-    vec4 frag_pos_light_space = light_space.light_space_matrix * vec4(offset_pos, 1.0);
-    float shadow = compute_shadow(frag_pos_light_space);
+    float shadow = compute_shadow(fragPos, N, L);
 
     f_color = vec4(Lo * shadow, 1.0);
 }

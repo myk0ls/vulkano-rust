@@ -214,13 +214,26 @@ mod brdf_lut_comp {
 
 // ── Public re-exports (was in old mod.rs) ──────────────────────────────────
 
-const SHADOW_MAP_SIZE: u32 = 4096;
-/// Width in metres of the square the sun's shadow map covers around the camera. Larger
-/// reaches farther but makes shadows blurrier. directional.frag assumes this value.
-const SUN_SHADOW_EXTENT: f32 = 50.0;
-/// How far along the sun's direction the shadow map reaches, centred on the camera's area,
-/// so tall casters well above the player still cast into view.
+/// Size of each sun shadow cascade.
+const SHADOW_MAP_SIZE: u32 = 2048;
+/// Cascaded shadow maps: the sun's shadows are drawn into this many maps, each covering a
+/// longer stretch of the view than the last, so shadows are sharp up close and still reach
+/// far. Must match directional.frag.
+pub const SUN_CASCADES: usize = 4;
+/// Where each cascade ends, in metres from the camera along its view. Shadows fade out at
+/// the last one.
+pub const SUN_CASCADE_SPLITS: [f32; SUN_CASCADES] = [6.0, 16.0, 40.0, 100.0];
+/// The least distance a cascade reaches along the sun's direction, so tall casters well
+/// above the player still cast into view.
 const SUN_SHADOW_DEPTH: f32 = 200.0;
+
+/// This frame's sun cascades, from the shadow pass for the lighting pass.
+#[derive(Clone, Debug)]
+pub(crate) struct SunCascades {
+    pub matrices: [TMat4<f32>; SUN_CASCADES],
+    /// The world size of one shadow-map texel in each cascade.
+    pub texel: [f32; SUN_CASCADES],
+}
 /// Size of each local light (spot or cube face) shadow map.
 const LOCAL_SHADOW_SIZE: u32 = 1024;
 /// How many spot lights and point lights can cast shadows at once. Each spot light costs
@@ -372,7 +385,10 @@ pub struct Renderer {
     pub(super) scene_image: Arc<ImageView>,
     pub(super) dummy_verts: Subbuffer<[DummyVertex]>,
     pub(super) framebuffers: Vec<Arc<Framebuffer>>,
-    pub(super) shadow_framebuffer: Arc<Framebuffer>,
+    /// One framebuffer per sun cascade layer.
+    pub(super) shadow_framebuffers: Vec<Arc<Framebuffer>>,
+    /// The cascades the last shadow pass rendered, if the sun cast shadows this frame.
+    pub(super) sun_cascades: Option<SunCascades>,
     pub(super) color_buffer: Arc<ImageView>,
     pub(super) normal_buffer: Arc<ImageView>,
     pub(super) depth_buffer: Arc<ImageView>,
@@ -841,6 +857,7 @@ impl Renderer {
                 image_type: vulkano::image::ImageType::Dim2d,
                 format: Format::D32_SFLOAT,
                 extent: [SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, 1],
+                array_layers: SUN_CASCADES as u32,
                 usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::SAMPLED,
                 ..Default::default()
             },
@@ -851,16 +868,27 @@ impl Renderer {
         )
         .unwrap();
 
-        let shadow_map_view = ImageView::new_default(shadow_map_image).unwrap();
-
-        let shadow_framebuffer = Framebuffer::new(
-            shadow_render_pass.clone(),
-            FramebufferCreateInfo {
-                attachments: vec![shadow_map_view.clone()],
-                ..Default::default()
+        let shadow_map_view = ImageView::new(
+            shadow_map_image.clone(),
+            ImageViewCreateInfo {
+                view_type: vulkano::image::view::ImageViewType::Dim2dArray,
+                ..ImageViewCreateInfo::from_image(&shadow_map_image)
             },
         )
         .unwrap();
+        let shadow_framebuffers = (0..SUN_CASCADES as u32)
+            .map(|layer| {
+                let mut info = ImageViewCreateInfo::from_image(&shadow_map_image);
+                info.view_type = vulkano::image::view::ImageViewType::Dim2d;
+                info.subresource_range.array_layers = layer..layer + 1;
+                let view = ImageView::new(shadow_map_image.clone(), info).unwrap();
+                Framebuffer::new(
+                    shadow_render_pass.clone(),
+                    FramebufferCreateInfo { attachments: vec![view], ..Default::default() },
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
 
         // ── Local light shadow maps: one layer per spot light or cube face ──
 
@@ -1085,7 +1113,8 @@ impl Renderer {
             scene_image,
             dummy_verts,
             framebuffers,
-            shadow_framebuffer,
+            shadow_framebuffers,
+            sun_cascades: None,
             color_buffer,
             normal_buffer,
             depth_buffer,
@@ -1425,10 +1454,9 @@ impl Renderer {
         .unwrap();
     }
 
-    /// The sun's shadow map covers a square `SUN_SHADOW_EXTENT` metres wide that follows
-    /// the camera, so shadows never run out as the player moves.
-    pub fn compute_light_space_matrix(&self, light_dir: [f32; 4]) -> TMat4<f32> {
-        sun_shadow_matrix(light_dir, &self.vp.view)
+    /// The sun's shadow cascades for the current camera.
+    pub(crate) fn compute_sun_cascades(&self, light_dir: [f32; 4]) -> SunCascades {
+        sun_cascades(light_dir, &self.vp.view, &self.vp.projection)
     }
 
     pub(super) fn extract_frustum_planes(vp: &TMat4<f32>) -> [[f32; 4]; 6] {
@@ -1466,42 +1494,71 @@ impl Renderer {
     }
 }
 
-/// The sun's shadow matrix for a camera with this view: a square around the camera,
-/// moved in whole shadow-map texels so shadow edges don't shimmer as the camera moves.
-fn sun_shadow_matrix(light_dir: [f32; 4], view: &TMat4<f32>) -> TMat4<f32> {
+/// The sun's shadow cascades for a camera with this view and projection.
+///
+/// Each cascade covers one stretch of the camera's view (see `SUN_CASCADE_SPLITS`) with a
+/// square shadow map. Two things keep shadows steady while the camera moves:
+/// - The square is sized from a sphere around that stretch of the view, which depends only
+///   on the field of view and split distances, so turning the camera never resizes it.
+/// - It moves in whole shadow-map texels, so the scene is always sampled at the same spots.
+fn sun_cascades(light_dir: [f32; 4], view: &TMat4<f32>, projection: &TMat4<f32>) -> SunCascades {
     let direction = vec3(light_dir[0], light_dir[1], light_dir[2]).normalize();
     // look_at needs an up vector that isn't parallel to the light.
     let up = if direction.y.abs() > 0.99 { vec3(0.0, 0.0, 1.0) } else { vec3(0.0, 1.0, 0.0) };
     let rotation = look_at_rh(&vec3(0.0, 0.0, 0.0), &direction, &up);
+    let unrotate = inverse(&rotation);
 
-    // Centre the square a little ahead of the camera: what's in front is what's seen,
-    // but shadows from just behind still fall into view.
     let camera = inverse(view);
-    let forward = -vec3(camera[8], camera[9], camera[10]);
-    let mut center = vec3(camera[12], camera[13], camera[14]) + forward * (SUN_SHADOW_EXTENT * 0.25);
+    let position = vec3(camera[12], camera[13], camera[14]);
+    let forward = -vec3(camera[8], camera[9], camera[10]).normalize();
 
-    // Move in whole shadow-map texels. A map that slides smoothly samples the scene at
-    // different spots every frame, which makes shadow edges shimmer and crawl.
-    let texel = SUN_SHADOW_EXTENT / SHADOW_MAP_SIZE as f32;
-    let in_light = rotation * nalgebra_glm::vec4(center.x, center.y, center.z, 1.0);
-    let snapped = nalgebra_glm::vec4(
-        (in_light.x / texel).floor() * texel,
-        (in_light.y / texel).floor() * texel,
-        in_light.z,
-        1.0,
-    );
-    let back = inverse(&rotation) * snapped;
-    center = vec3(back.x, back.y, back.z);
+    // How wide the view is: half extents at depth 1 for a perspective camera, or fixed
+    // half extents for an orthographic one.
+    let orthographic = projection[(3, 3)].abs() > 0.5;
+    let half_x = 1.0 / projection[(0, 0)].abs().max(1e-6);
+    let half_y = 1.0 / projection[(1, 1)].abs().max(1e-6);
 
-    let half = SUN_SHADOW_EXTENT * 0.5;
-    let eye = center - direction * SUN_SHADOW_DEPTH * 0.5;
-    let light_view = look_at_rh(&eye, &center, &up);
-    let light_projection = ortho(-half, half, -half, half, 0.1, SUN_SHADOW_DEPTH);
+    let mut matrices = [identity(); SUN_CASCADES];
+    let mut texel = [0.0; SUN_CASCADES];
+    let mut near = 0.0f32;
+    for (i, &far) in SUN_CASCADE_SPLITS.iter().enumerate() {
+        // The smallest sphere around this stretch of the view, as a distance along it.
+        let (center_distance, radius) = if orthographic {
+            let c = (near + far) * 0.5;
+            (c, ((far - near) * 0.5).hypot((half_x * half_x + half_y * half_y).sqrt()))
+        } else {
+            let k = half_x * half_x + half_y * half_y;
+            let c = ((near + far) * 0.5 * (1.0 + k)).min(far);
+            let to_far = ((far - c).powi(2) + far * far * k).sqrt();
+            let to_near = ((c - near).powi(2) + near * near * k).sqrt();
+            (c, to_far.max(to_near))
+        };
+        // Round up so float noise in the projection can't change the size frame to frame.
+        let radius = (radius * 16.0).ceil() / 16.0;
+        let size = radius * 2.0;
+        let world_texel = size / SHADOW_MAP_SIZE as f32;
 
-    let vulkan_depth_correction = nalgebra_glm::mat4(
-        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0, 1.0,
-    );
-    vulkan_depth_correction * light_projection * light_view
+        // Snap the centre to whole texels in the light's view.
+        let center = position + forward * center_distance;
+        let in_light = rotation * nalgebra_glm::vec4(center.x, center.y, center.z, 1.0);
+        let snapped = nalgebra_glm::vec4(
+            (in_light.x / world_texel).floor() * world_texel,
+            (in_light.y / world_texel).floor() * world_texel,
+            in_light.z,
+            1.0,
+        );
+        let back = unrotate * snapped;
+        let center = vec3(back.x, back.y, back.z);
+
+        let depth = SUN_SHADOW_DEPTH.max(radius * 4.0);
+        let eye = center - direction * depth * 0.5;
+        let light_view = look_at_rh(&eye, &center, &up);
+        let light_projection = ortho(-radius, radius, -radius, radius, 0.1, depth);
+        matrices[i] = vulkan_depth() * light_projection * light_view;
+        texel[i] = world_texel;
+        near = far;
+    }
+    SunCascades { matrices, texel }
 }
 
 /// glm's projections map depth to -1..1; Vulkan wants 0..1.
@@ -1544,43 +1601,93 @@ fn cube_matrices(position: [f32; 3], range: f32) -> Vec<TMat4<f32>> {
 mod sun_shadow_tests {
     use super::*;
 
-    /// Where a world point lands in the sun's shadow map, in texels.
+    const SUN: [f32; 4] = [0.4, 1.0, 0.3, 0.0];
+
+    /// Where a world point lands in a cascade's shadow map, in texels.
     fn texel_of(matrix: &TMat4<f32>, point: TVec3<f32>) -> (f32, f32) {
         let p = matrix * nalgebra_glm::vec4(point.x, point.y, point.z, 1.0);
         let size = SHADOW_MAP_SIZE as f32;
         ((p.x / p.w * 0.5 + 0.5) * size, (p.y / p.w * 0.5 + 0.5) * size)
     }
 
-    fn view_from(position: TVec3<f32>) -> TMat4<f32> {
-        look_at_rh(&position, &(position + vec3(0.3, 0.2, 1.0)), &vec3(0.0, 1.0, 0.0))
+    fn projection() -> TMat4<f32> {
+        perspective(16.0 / 9.0, 70f32.to_radians(), 0.05, 1000.0)
+    }
+
+    /// A camera at `position` looking along `yaw` (radians) and a little down.
+    fn view(position: TVec3<f32>, yaw: f32) -> TMat4<f32> {
+        let forward = vec3(yaw.sin(), 0.25, yaw.cos());
+        look_at_rh(&position, &(position + forward), &vec3(0.0, 1.0, 0.0))
+    }
+
+    /// Size of a cascade's square, from its matrix: two units of clip space.
+    fn width(matrix: &TMat4<f32>) -> f32 {
+        let a = texel_of(matrix, vec3(0.0, 0.0, 0.0));
+        let unit = texel_of(matrix, vec3(1.0, 0.0, 0.0));
+        let unit_z = texel_of(matrix, vec3(0.0, 0.0, 1.0));
+        // Texels per metre along two world axes; the square's scale is what matters.
+        ((unit.0 - a.0).powi(2) + (unit.1 - a.1).powi(2) + (unit_z.0 - a.0).powi(2) + (unit_z.1 - a.1).powi(2)).sqrt()
     }
 
     #[test]
-    fn the_map_moves_in_whole_texels_so_shadows_dont_shimmer() {
-        let sun = [0.4, 1.0, 0.3, 0.0];
+    fn cascades_move_in_whole_texels_while_walking_and_turning() {
         let point = vec3(3.0, -0.5, 7.0);
-        let first = texel_of(&sun_shadow_matrix(sun, &view_from(vec3(0.0, -1.7, 0.0))), point);
-        // Walk the camera in small, uneven steps, as a player would.
+        let start = sun_cascades(SUN, &view(vec3(0.0, -1.7, 0.0), 0.0), &projection());
+        let first: Vec<_> = start.matrices.iter().map(|m| texel_of(m, point)).collect();
         for step in 1..400 {
             let t = step as f32 * 0.0137;
             let camera = vec3(t * 1.3, -1.7 + (t * 3.0).sin() * 0.2, t * 0.7);
-            let now = texel_of(&sun_shadow_matrix(sun, &view_from(camera)), point);
-            // The point may land on another texel, but always at the same place within one.
-            let fraction = |a: f32, b: f32| ((a - b) - (a - b).round()).abs();
-            assert!(
-                fraction(now.0, first.0) < 0.02 && fraction(now.1, first.1) < 0.02,
-                "step {step}: point drifted within its texel: {first:?} -> {now:?}"
-            );
+            let now = sun_cascades(SUN, &view(camera, t * 0.9), &projection());
+            for (cascade, matrix) in now.matrices.iter().enumerate() {
+                let here = texel_of(matrix, point);
+                let fraction = |a: f32, b: f32| ((a - b) - (a - b).round()).abs();
+                assert!(
+                    fraction(here.0, first[cascade].0) < 0.02 && fraction(here.1, first[cascade].1) < 0.02,
+                    "step {step}, cascade {cascade}: point drifted within its texel: {:?} -> {here:?}",
+                    first[cascade]
+                );
+            }
         }
     }
 
     #[test]
-    fn the_map_follows_the_camera() {
-        let sun = [0.4, 1.0, 0.3, 0.0];
-        let far = vec3(500.0, -1.0, -300.0);
-        let matrix = sun_shadow_matrix(sun, &view_from(far));
-        let (x, y) = texel_of(&matrix, far + vec3(0.3, 0.2, 1.0) * 2.0);
+    fn turning_never_resizes_a_cascade() {
+        let position = vec3(5.0, -1.7, -3.0);
+        let reference = sun_cascades(SUN, &view(position, 0.0), &projection());
+        for step in 1..64 {
+            let turned = sun_cascades(SUN, &view(position, step as f32 * 0.1), &projection());
+            for cascade in 0..SUN_CASCADES {
+                assert_eq!(turned.texel[cascade], reference.texel[cascade], "cascade {cascade} resized");
+                let (a, b) = (width(&turned.matrices[cascade]), width(&reference.matrices[cascade]));
+                assert!((a - b).abs() < 1e-3 * b, "cascade {cascade} scale changed: {b} -> {a}");
+            }
+        }
+    }
+
+    #[test]
+    fn near_cascades_are_sharper_and_each_covers_its_stretch_of_the_view() {
+        let position = vec3(500.0, -1.7, -300.0);
+        let cascades = sun_cascades(SUN, &view(position, 0.0), &projection());
+        for cascade in 1..SUN_CASCADES {
+            assert!(cascades.texel[cascade] > cascades.texel[cascade - 1]);
+        }
+        let forward = vec3(0.0, 0.25, 1.0).normalize();
         let size = SHADOW_MAP_SIZE as f32;
-        assert!(x > 0.0 && x < size && y > 0.0 && y < size, "in front of a far camera is outside the map: {x}, {y}");
+        let mut near = 0.0;
+        for (cascade, &far) in SUN_CASCADE_SPLITS.iter().enumerate() {
+            // Points across the cascade's stretch, straight ahead and off to the side.
+            for t in [0.05, 0.5, 0.95] {
+                let distance = near + (far - near) * t;
+                for side in [-0.5f32, 0.0, 0.5] {
+                    let point = position + forward * distance + vec3(side * distance, 0.0, 0.0);
+                    let (x, y) = texel_of(&cascades.matrices[cascade], point);
+                    assert!(
+                        x > 0.0 && x < size && y > 0.0 && y < size,
+                        "cascade {cascade} misses a point {distance} m ahead: {x}, {y}"
+                    );
+                }
+            }
+            near = far;
+        }
     }
 }
