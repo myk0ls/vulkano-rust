@@ -14,7 +14,7 @@ use vulkano::{
 
 use super::{
     CulledDrawBuffers, RenderStage, Renderer, ambient_frag, composite_frag, directional_frag,
-    directional_vert, pointlight_frag, shadows_vert, skybox_frag,
+    directional_vert, shadows_vert, skybox_frag,
 };
 use crate::{
     assets::asset_manager::{self, UnifiedGeometry},
@@ -556,11 +556,119 @@ impl Renderer {
     }
 
     /// Draw the point or spot light at `index` of this frame's local lights.
-    pub fn local_light(&mut self, index: usize) {
-        let Some(light) = self.local_lights.get(index).cloned() else {
+    /// Upload this frame's point and spot lights and sort them into clusters. Runs on the
+    /// GPU before the render pass starts, since a compute dispatch can't run inside one.
+    pub(super) fn cluster_lights(&mut self) {
+        self.cluster_frame = None;
+        if self.local_lights.is_empty() {
             return;
+        }
+
+        let lights: Vec<super::clustered_frag::Light> = self
+            .local_lights
+            .iter()
+            .zip(&self.local_slots)
+            .map(|(light, slot)| {
+                let [x, y, z] = light.position;
+                let (direction, mut params) = match light.spot {
+                    Some((d, inner, outer)) => {
+                        let outer = outer.max(0.1);
+                        let inner = inner.min(outer - 0.05).max(0.0);
+                        ([d[0], d[1], d[2], outer.to_radians().cos()], [inner.to_radians().cos(), 1.0, 0.0, 0.0])
+                    }
+                    None => ([0.0, 1.0, 0.0, -1.0], [1.0, 0.0, 0.0, 0.0]),
+                };
+                if let Some(slot) = slot {
+                    params[2] = if light.spot.is_some() { 1.0 } else { 2.0 };
+                    params[3] = slot.layer as f32;
+                }
+                let [r, g, b] = light.color;
+                super::clustered_frag::Light {
+                    position_radius: [x, y, z, light.radius],
+                    color_intensity: [r, g, b, light.intensity],
+                    direction,
+                    params,
+                }
+            })
+            .collect();
+        let light_count = lights.len() as u32;
+
+        let mut shadow_matrices = [[[0.0f32; 4]; 4]; 16];
+        for slot in self.local_slots.iter().flatten() {
+            for (k, m) in slot.matrices.iter().enumerate() {
+                if let Some(out) = shadow_matrices.get_mut(slot.layer as usize + k) {
+                    *out = (*m).into();
+                }
+            }
+        }
+
+        let upload = AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
         };
-        let slot = self.local_slots.get(index).cloned().flatten();
+        let lights = Buffer::from_iter(
+            self.memory_allocator.clone(),
+            BufferCreateInfo { usage: BufferUsage::STORAGE_BUFFER, ..Default::default() },
+            upload.clone(),
+            lights,
+        )
+        .unwrap();
+        let shadow = Buffer::from_data(
+            self.memory_allocator.clone(),
+            BufferCreateInfo { usage: BufferUsage::UNIFORM_BUFFER, ..Default::default() },
+            upload.clone(),
+            super::clustered_frag::Shadow_Data { matrices: shadow_matrices },
+        )
+        .unwrap();
+        let [width, height] = self.viewport.extent;
+        let frame = Buffer::from_data(
+            self.memory_allocator.clone(),
+            BufferCreateInfo { usage: BufferUsage::UNIFORM_BUFFER, ..Default::default() },
+            upload,
+            super::clustered_frag::Frame_Data {
+                view: self.vp.view.into(),
+                inv_projection: nalgebra_glm::inverse(&self.vp.projection).into(),
+                camera_position: [self.vp.camera_pos.x, self.vp.camera_pos.y, self.vp.camera_pos.z, 1.0],
+                screen: [width, height, super::CLUSTER_NEAR, super::CLUSTER_FAR],
+                counts: [light_count, 0, 0, 0],
+            },
+        )
+        .unwrap();
+        // Only the GPU touches the cluster lists, so they can live in fast device memory.
+        let clusters = Buffer::new_slice::<u32>(
+            self.memory_allocator.clone(),
+            BufferCreateInfo { usage: BufferUsage::STORAGE_BUFFER, ..Default::default() },
+            AllocationCreateInfo { memory_type_filter: MemoryTypeFilter::PREFER_DEVICE, ..Default::default() },
+            (super::CLUSTER_COUNT * super::CLUSTER_SLOT) as u64,
+        )
+        .unwrap();
+
+        let set = DescriptorSet::new(
+            self.descriptor_set_allocator.clone(),
+            self.light_cluster_pipeline.layout().set_layouts()[0].clone(),
+            [
+                WriteDescriptorSet::buffer(0, lights.clone()),
+                WriteDescriptorSet::buffer(1, clusters.clone()),
+                WriteDescriptorSet::buffer(2, frame.clone()),
+            ],
+            [],
+        )
+        .unwrap();
+        let commands = self.commands.as_mut().unwrap();
+        commands
+            .bind_pipeline_compute(self.light_cluster_pipeline.clone())
+            .unwrap()
+            .bind_descriptor_sets(PipelineBindPoint::Compute, self.light_cluster_pipeline.layout().clone(), 0, set)
+            .unwrap();
+        unsafe {
+            commands.dispatch([super::CLUSTER_COUNT.div_ceil(64), 1, 1]).unwrap();
+        }
+
+        self.cluster_frame = Some(super::ClusterFrame { lights, clusters, frame, shadow });
+    }
+
+    /// Shade every point and spot light in one full-screen pass, using the cluster lists.
+    pub fn local_lights(&mut self) {
         match self.render_stage {
             RenderStage::Ambient => {
                 self.render_stage = RenderStage::Directional;
@@ -578,112 +686,40 @@ impl Renderer {
                 return;
             }
         }
+        let Some(cluster) = &self.cluster_frame else {
+            return;
+        };
 
-        let camera_buffer = Buffer::from_data(
-            self.memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::UNIFORM_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            pointlight_frag::Camera_Data {
-                position: self.vp.camera_pos.into(),
-            },
-        )
-        .unwrap();
-
-        let point_buffer = Buffer::from_data(
-            self.memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::UNIFORM_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            {
-                let [x, y, z] = light.position;
-                let (direction, params) = match light.spot {
-                    Some((d, inner, outer)) => {
-                        let outer = outer.max(0.1);
-                        let inner = inner.min(outer - 0.05).max(0.0);
-                        ([d[0], d[1], d[2], outer.to_radians().cos()], [inner.to_radians().cos(), 1.0, 0.0, 0.0])
-                    }
-                    None => ([0.0, 1.0, 0.0, -1.0], [1.0, 0.0, 0.0, 0.0]),
-                };
-                let mut params = params;
-                let mut matrices = [[[0.0f32; 4]; 4]; 6];
-                if let Some(slot) = &slot {
-                    params[2] = if light.spot.is_some() { 1.0 } else { 2.0 };
-                    params[3] = slot.layer as f32;
-                    for (out, m) in matrices.iter_mut().zip(&slot.matrices) {
-                        *out = (*m).into();
-                    }
-                }
-                pointlight_frag::PointLight_Data {
-                    position: [x, y, z, 1.0],
-                    color: light.color.into(),
-                    intensity: light.intensity.into(),
-                    radius: light.radius.into(),
-                    direction,
-                    params,
-                    shadow_matrices: matrices,
-                }
-            },
-        )
-        .unwrap();
-
-        let pointlight_layout = self
-            .pointlight_pipeline
-            .layout()
-            .set_layouts()
-            .get(0)
-            .unwrap();
-        let pointlight_set = DescriptorSet::new(
+        let set = DescriptorSet::new(
             self.descriptor_set_allocator.clone(),
-            pointlight_layout.clone(),
+            self.clustered_pipeline.layout().set_layouts()[0].clone(),
             [
                 WriteDescriptorSet::image_view(0, self.color_buffer.clone()),
                 WriteDescriptorSet::image_view(1, self.normal_buffer.clone()),
                 WriteDescriptorSet::image_view(2, self.frag_location_buffer.clone()),
                 WriteDescriptorSet::image_view(3, self.specular_buffer.clone()),
-                WriteDescriptorSet::buffer(4, point_buffer.clone()),
-                WriteDescriptorSet::buffer(5, camera_buffer.clone()),
-                WriteDescriptorSet::image_view_sampler(6, self.local_shadow_view.clone(), self.shadow_sampler.clone()),
+                WriteDescriptorSet::buffer(4, cluster.lights.clone()),
+                WriteDescriptorSet::buffer(5, cluster.clusters.clone()),
+                WriteDescriptorSet::buffer(6, cluster.frame.clone()),
+                WriteDescriptorSet::image_view_sampler(7, self.local_shadow_view.clone(), self.shadow_sampler.clone()),
+                WriteDescriptorSet::buffer(8, cluster.shadow.clone()),
             ],
             [],
         )
         .unwrap();
 
-        self.commands
-            .as_mut()
-            .unwrap()
-            .bind_pipeline_graphics(self.pointlight_pipeline.clone())
+        let commands = self.commands.as_mut().unwrap();
+        commands
+            .bind_pipeline_graphics(self.clustered_pipeline.clone())
             .unwrap()
             .set_viewport(0, [self.viewport.clone()].into_iter().collect())
             .unwrap()
             .bind_vertex_buffers(0, self.dummy_verts.clone())
             .unwrap()
-            .bind_descriptor_sets(
-                PipelineBindPoint::Graphics,
-                self.pointlight_pipeline.layout().clone(),
-                0,
-                pointlight_set.clone(),
-            )
+            .bind_descriptor_sets(PipelineBindPoint::Graphics, self.clustered_pipeline.layout().clone(), 0, set)
             .unwrap();
-
         unsafe {
-            self.commands
-                .as_mut()
-                .unwrap()
-                .draw(self.dummy_verts.len() as u32, 1, 0, 0)
-                .unwrap();
+            commands.draw(self.dummy_verts.len() as u32, 1, 0, 0).unwrap();
         }
     }
 

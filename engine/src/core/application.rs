@@ -691,9 +691,7 @@ impl<G: Game> Application<G> {
     }
 
     pub fn render_pointlights(&mut self) {
-        for index in 0..self.renderer.local_light_count() {
-            self.renderer.local_light(index);
-        }
+        self.renderer.local_lights();
     }
 
     pub fn render_directional(&mut self) {

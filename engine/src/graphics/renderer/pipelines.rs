@@ -33,7 +33,7 @@ use super::{
     directional_frag, directional_vert,
     fxaa_comp,
     light_obj_frag, light_obj_vert,
-    pointlight_frag, pointlight_vert,
+    clustered_frag, light_cluster_comp, pointlight_vert,
     shadows_frag, shadows_vert,
     skybox_frag, skybox_vert,
 };
@@ -186,13 +186,13 @@ pub(super) fn create_directional(
     .unwrap()
 }
 
-pub(super) fn create_pointlight(
+pub(super) fn create_clustered(
     device: Arc<Device>,
     viewport: Viewport,
     lighting_pass: Subpass,
 ) -> Arc<GraphicsPipeline> {
     let vs = pointlight_vert::load(device.clone()).unwrap();
-    let fs = pointlight_frag::load(device.clone()).unwrap();
+    let fs = clustered_frag::load(device.clone()).unwrap();
     let vs = vs.entry_point("main").unwrap();
     let fs = fs.entry_point("main").unwrap();
 
@@ -523,6 +523,24 @@ pub(super) fn create_fxaa(device: Arc<Device>) -> Arc<ComputePipeline> {
 
 pub(super) fn create_cull(device: Arc<Device>) -> Arc<ComputePipeline> {
     let cs = cull_comp::load(device.clone()).unwrap();
+    let stage = PipelineShaderStageCreateInfo::new(cs.entry_point("main").unwrap());
+    let layout = PipelineLayout::new(
+        device.clone(),
+        PipelineDescriptorSetLayoutCreateInfo::from_stages([&stage])
+            .into_pipeline_layout_create_info(device.clone())
+            .unwrap(),
+    )
+    .unwrap();
+    ComputePipeline::new(
+        device.clone(),
+        None,
+        ComputePipelineCreateInfo::stage_layout(stage, layout),
+    )
+    .unwrap()
+}
+
+pub(super) fn create_light_cluster(device: Arc<Device>) -> Arc<ComputePipeline> {
+    let cs = light_cluster_comp::load(device.clone()).unwrap();
     let stage = PipelineShaderStageCreateInfo::new(cs.entry_point("main").unwrap());
     let layout = PipelineLayout::new(
         device.clone(),

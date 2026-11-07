@@ -133,10 +133,16 @@ mod pointlight_vert {
         path: "src/graphics/renderer/shaders/pointlight.vert",
     }
 }
-mod pointlight_frag {
+mod clustered_frag {
     vulkano_shaders::shader! {
         ty: "fragment",
-        path: "src/graphics/renderer/shaders/pointlight.frag",
+        path: "src/graphics/renderer/shaders/clustered.frag",
+    }
+}
+mod light_cluster_comp {
+    vulkano_shaders::shader! {
+        ty: "compute",
+        path: "src/graphics/renderer/shaders/light_cluster.comp",
     }
 }
 mod shadows_vert {
@@ -216,6 +222,27 @@ const LOCAL_SHADOW_SIZE: u32 = 1024;
 pub const MAX_SPOT_SHADOWS: usize = 4;
 pub const MAX_POINT_SHADOWS: usize = 2;
 const LOCAL_SHADOW_LAYERS: u32 = (MAX_SPOT_SHADOWS + 6 * MAX_POINT_SHADOWS) as u32;
+
+/// Clustered lighting: the view frustum is split into this many tiles across, down, and
+/// in depth. Must match `GRID` in light_cluster.comp and clustered.frag.
+const CLUSTER_GRID: [u32; 3] = [16, 9, 24];
+const CLUSTER_COUNT: u32 = CLUSTER_GRID[0] * CLUSTER_GRID[1] * CLUSTER_GRID[2];
+/// u32s per cluster: a count and up to 127 light indices. Must match `SLOT` in the shaders.
+const CLUSTER_SLOT: u32 = 128;
+/// Depth slices are spaced exponentially between these distances; the first slice also
+/// covers everything nearer and the last everything farther.
+const CLUSTER_NEAR: f32 = 0.1;
+const CLUSTER_FAR: f32 = 200.0;
+/// The most point and spot lights drawn in one frame.
+pub const MAX_LOCAL_LIGHTS: usize = 4096;
+
+/// This frame's lights and their cluster lists, from `cluster_lights` for the lighting pass.
+pub(super) struct ClusterFrame {
+    pub lights: Subbuffer<[clustered_frag::Light]>,
+    pub clusters: Subbuffer<[u32]>,
+    pub frame: Subbuffer<clustered_frag::Frame_Data>,
+    pub shadow: Subbuffer<clustered_frag::Shadow_Data>,
+}
 
 /// A point or spot light, in engine space, as the renderer draws it.
 #[derive(Clone, Debug, PartialEq)]
@@ -321,7 +348,11 @@ pub struct Renderer {
     pub(super) shadow_pipeline: Arc<GraphicsPipeline>,
     pub(super) deferred_pipeline: Arc<GraphicsPipeline>,
     pub(super) directional_pipeline: Arc<GraphicsPipeline>,
-    pub(super) pointlight_pipeline: Arc<GraphicsPipeline>,
+    /// Shades all point and spot lights in one pass, using the cluster lists.
+    pub(super) clustered_pipeline: Arc<GraphicsPipeline>,
+    /// Builds the cluster lists.
+    pub(super) light_cluster_pipeline: Arc<ComputePipeline>,
+    pub(super) cluster_frame: Option<ClusterFrame>,
     pub(super) ambient_pipeline: Arc<GraphicsPipeline>,
     pub(super) light_obj_pipeline: Arc<GraphicsPipeline>,
     pub(super) skybox_pipeline: Arc<GraphicsPipeline>,
@@ -667,8 +698,9 @@ impl Renderer {
             pipelines::create_deferred(device.clone(), viewport.clone(), deferred_pass);
         let directional_pipeline =
             pipelines::create_directional(device.clone(), viewport.clone(), lighting_pass.clone());
-        let pointlight_pipeline =
-            pipelines::create_pointlight(device.clone(), viewport.clone(), lighting_pass.clone());
+        let clustered_pipeline =
+            pipelines::create_clustered(device.clone(), viewport.clone(), lighting_pass.clone());
+        let light_cluster_pipeline = pipelines::create_light_cluster(device.clone());
         let ambient_pipeline =
             pipelines::create_ambient(device.clone(), viewport.clone(), lighting_pass.clone());
         let light_obj_pipeline =
@@ -1031,7 +1063,9 @@ impl Renderer {
             shadow_pipeline,
             deferred_pipeline,
             directional_pipeline,
-            pointlight_pipeline,
+            clustered_pipeline,
+            light_cluster_pipeline,
+            cluster_frame: None,
             ambient_pipeline,
             light_obj_pipeline,
             skybox_pipeline,
@@ -1224,6 +1258,8 @@ impl Renderer {
     }
 
     fn begin_main_render_pass(&mut self) {
+        // Light clustering is a compute dispatch, which can't run inside a render pass.
+        self.cluster_lights();
         let clear_values = vec![
             Some([0.0, 0.0, 0.0, 1.0].into()),
             Some([0.0, 0.0, 0.0, 1.0].into()),
@@ -1305,6 +1341,8 @@ impl Renderer {
             })
             .collect();
         self.local_lights = lights;
+        self.local_lights.truncate(MAX_LOCAL_LIGHTS);
+        self.local_slots.truncate(MAX_LOCAL_LIGHTS);
     }
 
     pub fn local_light_count(&self) -> usize {

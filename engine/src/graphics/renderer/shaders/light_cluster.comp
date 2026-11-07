@@ -1,0 +1,94 @@
+#version 450
+
+// Clustered light assignment. The view frustum is cut into a grid of clusters: tiles on
+// screen, and slices in depth that grow exponentially so near clusters stay thin. Each
+// invocation handles one cluster: it builds the cluster's bounding box in view space and
+// lists every light whose range sphere touches it. The lighting pass then shades each
+// pixel with only its cluster's lights.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// Must match clustered.frag and the constants in renderer/mod.rs.
+const uvec3 GRID = uvec3(16, 9, 24);
+// Per cluster: one count followed by up to SLOT - 1 light indices.
+const uint SLOT = 128;
+
+struct Light {
+    vec4 position_radius;   // xyz engine-space position, w range
+    vec4 color_intensity;   // rgb color, w intensity
+    vec4 direction;         // spot: xyz direction, w cos(outer angle)
+    vec4 params;            // x cos(inner angle), y is spot, z shadow kind, w shadow layer
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer Lights {
+    Light lights[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly buffer Clusters {
+    uint clusters[];
+};
+
+layout(set = 0, binding = 2) uniform Frame_Data {
+    mat4 view;
+    mat4 inv_projection;
+    vec4 camera_position;
+    vec4 screen;        // x width, y height, z slice near, w slice far
+    uvec4 counts;       // x light count
+} frame;
+
+// The view-space ray through a point on screen, scaled so its depth is 1.
+vec3 view_ray(vec2 ndc) {
+    vec4 p = frame.inv_projection * vec4(ndc, 0.5, 1.0);
+    p.xyz /= p.w;
+    return p.xyz / abs(p.z);
+}
+
+float slice_depth(uint k) {
+    return frame.screen.z * pow(frame.screen.w / frame.screen.z, float(k) / float(GRID.z));
+}
+
+void main() {
+    uint c = gl_GlobalInvocationID.x;
+    if (c >= GRID.x * GRID.y * GRID.z) {
+        return;
+    }
+    uint x = c % GRID.x;
+    uint y = (c / GRID.x) % GRID.y;
+    uint z = c / (GRID.x * GRID.y);
+
+    // The first slice reaches the camera and the last reaches forever, so every visible
+    // pixel lands in some cluster.
+    float d0 = z == 0u ? 0.0 : slice_depth(z);
+    float d1 = z == GRID.z - 1u ? 1e6 : slice_depth(z + 1u);
+
+    vec2 n0 = vec2(x, y) / vec2(GRID.xy) * 2.0 - 1.0;
+    vec2 n1 = vec2(x + 1u, y + 1u) / vec2(GRID.xy) * 2.0 - 1.0;
+    vec3 rays[4] = vec3[4](
+            view_ray(n0),
+            view_ray(vec2(n1.x, n0.y)),
+            view_ray(vec2(n0.x, n1.y)),
+            view_ray(n1)
+        );
+    vec3 lo = vec3(1e30);
+    vec3 hi = vec3(-1e30);
+    for (int i = 0; i < 4; i++) {
+        vec3 a = rays[i] * d0;
+        vec3 b = rays[i] * d1;
+        lo = min(lo, min(a, b));
+        hi = max(hi, max(a, b));
+    }
+
+    uint base = c * SLOT;
+    uint count = 0u;
+    for (uint i = 0u; i < frame.counts.x && count < SLOT - 1u; i++) {
+        vec4 pr = lights[i].position_radius;
+        vec3 center = (frame.view * vec4(pr.xyz, 1.0)).xyz;
+        // Distance from the sphere's centre to the nearest point of the box.
+        vec3 d = center - clamp(center, lo, hi);
+        if (dot(d, d) <= pr.w * pr.w) {
+            clusters[base + 1u + count] = i;
+            count++;
+        }
+    }
+    clusters[base] = count;
+}
