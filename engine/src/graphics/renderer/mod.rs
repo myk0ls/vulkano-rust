@@ -215,6 +215,12 @@ mod brdf_lut_comp {
 // ── Public re-exports (was in old mod.rs) ──────────────────────────────────
 
 const SHADOW_MAP_SIZE: u32 = 4096;
+/// Width in metres of the square the sun's shadow map covers around the camera. Larger
+/// reaches farther but makes shadows blurrier. directional.frag assumes this value.
+const SUN_SHADOW_EXTENT: f32 = 50.0;
+/// How far along the sun's direction the shadow map reaches, centred on the camera's area,
+/// so tall casters well above the player still cast into view.
+const SUN_SHADOW_DEPTH: f32 = 200.0;
 /// Size of each local light (spot or cube face) shadow map.
 const LOCAL_SHADOW_SIZE: u32 = 1024;
 /// How many spot lights and point lights can cast shadows at once. Each spot light costs
@@ -1419,20 +1425,10 @@ impl Renderer {
         .unwrap();
     }
 
-    pub fn compute_light_space_matrix(light_dir: [f32; 4]) -> TMat4<f32> {
-        let light_direction = vec3(light_dir[0], light_dir[1], light_dir[2]).normalize();
-        let eye = vec3(0.0, 0.0, 0.0) - light_direction * 50.0;
-        let target = vec3(0.0, 0.0, 0.0);
-        let up = vec3(0.0, 1.0, 0.0);
-
-        let light_view = look_at_rh(&eye, &target, &up);
-        let light_projection = ortho(-25.0, 25.0, -25.0, 25.0, 0.1, 100.0);
-
-        let vulkan_depth_correction = nalgebra_glm::mat4(
-            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0, 1.0,
-        );
-
-        vulkan_depth_correction * light_projection * light_view
+    /// The sun's shadow map covers a square `SUN_SHADOW_EXTENT` metres wide that follows
+    /// the camera, so shadows never run out as the player moves.
+    pub fn compute_light_space_matrix(&self, light_dir: [f32; 4]) -> TMat4<f32> {
+        sun_shadow_matrix(light_dir, &self.vp.view)
     }
 
     pub(super) fn extract_frustum_planes(vp: &TMat4<f32>) -> [[f32; 4]; 6] {
@@ -1470,6 +1466,44 @@ impl Renderer {
     }
 }
 
+/// The sun's shadow matrix for a camera with this view: a square around the camera,
+/// moved in whole shadow-map texels so shadow edges don't shimmer as the camera moves.
+fn sun_shadow_matrix(light_dir: [f32; 4], view: &TMat4<f32>) -> TMat4<f32> {
+    let direction = vec3(light_dir[0], light_dir[1], light_dir[2]).normalize();
+    // look_at needs an up vector that isn't parallel to the light.
+    let up = if direction.y.abs() > 0.99 { vec3(0.0, 0.0, 1.0) } else { vec3(0.0, 1.0, 0.0) };
+    let rotation = look_at_rh(&vec3(0.0, 0.0, 0.0), &direction, &up);
+
+    // Centre the square a little ahead of the camera: what's in front is what's seen,
+    // but shadows from just behind still fall into view.
+    let camera = inverse(view);
+    let forward = -vec3(camera[8], camera[9], camera[10]);
+    let mut center = vec3(camera[12], camera[13], camera[14]) + forward * (SUN_SHADOW_EXTENT * 0.25);
+
+    // Move in whole shadow-map texels. A map that slides smoothly samples the scene at
+    // different spots every frame, which makes shadow edges shimmer and crawl.
+    let texel = SUN_SHADOW_EXTENT / SHADOW_MAP_SIZE as f32;
+    let in_light = rotation * nalgebra_glm::vec4(center.x, center.y, center.z, 1.0);
+    let snapped = nalgebra_glm::vec4(
+        (in_light.x / texel).floor() * texel,
+        (in_light.y / texel).floor() * texel,
+        in_light.z,
+        1.0,
+    );
+    let back = inverse(&rotation) * snapped;
+    center = vec3(back.x, back.y, back.z);
+
+    let half = SUN_SHADOW_EXTENT * 0.5;
+    let eye = center - direction * SUN_SHADOW_DEPTH * 0.5;
+    let light_view = look_at_rh(&eye, &center, &up);
+    let light_projection = ortho(-half, half, -half, half, 0.1, SUN_SHADOW_DEPTH);
+
+    let vulkan_depth_correction = nalgebra_glm::mat4(
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0, 1.0,
+    );
+    vulkan_depth_correction * light_projection * light_view
+}
+
 /// glm's projections map depth to -1..1; Vulkan wants 0..1.
 fn vulkan_depth() -> TMat4<f32> {
     nalgebra_glm::mat4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0, 1.0)
@@ -1504,4 +1538,49 @@ fn cube_matrices(position: [f32; 3], range: f32) -> Vec<TMat4<f32>> {
     .into_iter()
     .map(|d| projection * light_view(position, d))
     .collect()
+}
+
+#[cfg(test)]
+mod sun_shadow_tests {
+    use super::*;
+
+    /// Where a world point lands in the sun's shadow map, in texels.
+    fn texel_of(matrix: &TMat4<f32>, point: TVec3<f32>) -> (f32, f32) {
+        let p = matrix * nalgebra_glm::vec4(point.x, point.y, point.z, 1.0);
+        let size = SHADOW_MAP_SIZE as f32;
+        ((p.x / p.w * 0.5 + 0.5) * size, (p.y / p.w * 0.5 + 0.5) * size)
+    }
+
+    fn view_from(position: TVec3<f32>) -> TMat4<f32> {
+        look_at_rh(&position, &(position + vec3(0.3, 0.2, 1.0)), &vec3(0.0, 1.0, 0.0))
+    }
+
+    #[test]
+    fn the_map_moves_in_whole_texels_so_shadows_dont_shimmer() {
+        let sun = [0.4, 1.0, 0.3, 0.0];
+        let point = vec3(3.0, -0.5, 7.0);
+        let first = texel_of(&sun_shadow_matrix(sun, &view_from(vec3(0.0, -1.7, 0.0))), point);
+        // Walk the camera in small, uneven steps, as a player would.
+        for step in 1..400 {
+            let t = step as f32 * 0.0137;
+            let camera = vec3(t * 1.3, -1.7 + (t * 3.0).sin() * 0.2, t * 0.7);
+            let now = texel_of(&sun_shadow_matrix(sun, &view_from(camera)), point);
+            // The point may land on another texel, but always at the same place within one.
+            let fraction = |a: f32, b: f32| ((a - b) - (a - b).round()).abs();
+            assert!(
+                fraction(now.0, first.0) < 0.02 && fraction(now.1, first.1) < 0.02,
+                "step {step}: point drifted within its texel: {first:?} -> {now:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_map_follows_the_camera() {
+        let sun = [0.4, 1.0, 0.3, 0.0];
+        let far = vec3(500.0, -1.0, -300.0);
+        let matrix = sun_shadow_matrix(sun, &view_from(far));
+        let (x, y) = texel_of(&matrix, far + vec3(0.3, 0.2, 1.0) * 2.0);
+        let size = SHADOW_MAP_SIZE as f32;
+        assert!(x > 0.0 && x < size && y > 0.0 && y < size, "in front of a far camera is outside the map: {x}, {y}");
+    }
 }

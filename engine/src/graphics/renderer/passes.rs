@@ -60,7 +60,7 @@ impl Renderer {
             return;
         }
 
-        let light_space_matrix = Renderer::compute_light_space_matrix(light.position);
+        let light_space_matrix = self.compute_light_space_matrix(light.position);
 
         let light_space_buffer = Buffer::from_data(
             self.memory_allocator.clone(),
@@ -471,7 +471,7 @@ impl Renderer {
         )
         .unwrap();
 
-        let light_space_matrix = Renderer::compute_light_space_matrix(directional_light.position);
+        let light_space_matrix = self.compute_light_space_matrix(directional_light.position);
 
         let light_space_buffer = Buffer::from_data(
             self.memory_allocator.clone(),
