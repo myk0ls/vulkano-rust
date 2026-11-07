@@ -4,7 +4,7 @@ mod images;
 mod passes;
 mod custom;
 mod pipelines;
-pub use custom::{PostParam, check_material, check_post_effect, parse_post_params};
+pub use custom::{PostParam, check_material, check_post_effect, parse_post_params, shader_params};
 mod upload;
 
 use std::{mem, sync::Arc};

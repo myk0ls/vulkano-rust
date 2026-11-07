@@ -58,6 +58,8 @@ fn property(ui: &mut Ui, label: &str, contents: impl FnOnce(&mut Ui)) {
 }
 
 fn pretty(name: &str) -> String {
+    // Material shader @params are stored as "param:<name>"; show just the name.
+    let name = name.strip_prefix(vulkano_engine::scene::scene_file::PARAM_PREFIX).unwrap_or(name);
     let mut out = String::new();
     for (i, word) in name.split('_').enumerate() {
         if i > 0 {

@@ -68,9 +68,15 @@ const NEW_MATERIAL: &str = "\
 //
 // Surface has: albedo, normal, emissive, metallic, roughness, uv, world_position, time.
 // Positions and normals are in engine space, where -Y is up.
+//
+// Each line like the ones below becomes a slider on the MaterialOverride, set per entity:
+// a name, a default, and optionally a min and max. Use the name like a variable. Scripts
+// can change it with e.set_material_param(\"glow\", 2.0).
+// @param glow 1.0 0 10
+// @param speed 2.0 0 10
 
 void material(inout Surface s) {
-    s.emissive += vec3(0.2, 0.6, 1.0) * (0.5 + 0.5 * sin(s.time * 2.0));
+    s.emissive += vec3(0.2, 0.6, 1.0) * glow * (0.5 + 0.5 * sin(s.time * speed));
 }
 ";
 
@@ -214,6 +220,7 @@ const API_HELP: &[(&str, &[(&str, &str)])] = &[
             ("reload_scene()", "Restart the current scene."),
             ("quit()", "Close the game."),
             ("set_post_param(\"vignette\", \"strength\", 0.8)", "Change a post effect's value."),
+            ("e.set_material_param(\"glow\", 2.0)", "Change one of e's material shader @params."),
             ("set_post_enabled(\"vignette\", false)", "Turn a post effect on or off."),
         ],
     ),
@@ -593,7 +600,10 @@ fn help_ui(ui: &mut Ui) {
         ui.label(RichText::new(
             "GLSL files with a function void material(inout Surface s). Give an entity a MaterialOverride and pick the file \
              as its Shader. Surface has albedo, normal, emissive, metallic, roughness, uv, world_position, and time. \
-             Saving the file updates the game and the editor right away; errors show here and in the Inspector.",
+             Lines like // @param glow 1.0 0 10 (name, default, min, max; up to 8) become sliders on the \
+             MaterialOverride, set per entity, and the name works like a variable in the shader. \
+             Saving the file updates the game and the editor right away; errors show here, in the Inspector, \
+             and in the Output dock.",
         ).color(theme::text_dim()));
         let mut text = NEW_MATERIAL;
         ui.add(egui::TextEdit::multiline(&mut text).code_editor().desired_width(f32::INFINITY));

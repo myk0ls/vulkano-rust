@@ -93,6 +93,8 @@ pub struct GpuOverride {
     pub emissive: [f32; 4],
     /// x = metallic, y = roughness; negative keeps the material's own value.
     pub pbr: [f32; 4],
+    /// Values for the material shader's `@param`s, in the order it declares them.
+    pub params: [[f32; 4]; 2],
 }
 
 impl GpuOverride {
@@ -100,6 +102,7 @@ impl GpuOverride {
         tint: [1.0, 1.0, 1.0, 1.0],
         emissive: [0.0; 4],
         pbr: [-1.0, -1.0, 0.0, 0.0],
+        params: [[0.0; 4]; 2],
     };
 }
 

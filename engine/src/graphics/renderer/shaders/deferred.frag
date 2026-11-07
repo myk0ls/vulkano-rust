@@ -37,6 +37,7 @@ struct Override {
     vec4 tint;       // rgb multiplies albedo
     vec4 emissive;   // rgb, already multiplied by strength
     vec4 pbr;        // x = metallic, y = roughness; negative keeps the material's own
+    vec4 params[2];  // the material shader's @param values
 };
 
 layout(set = 2, binding = 2) readonly buffer Overrides {
@@ -59,6 +60,9 @@ struct Surface {
     vec3 world_position;  // -Y is up
     float time;           // seconds since start
 };
+
+// A material shader's @params, which it reads by name.
+vec4 material_params[2];
 
 // @material
 
@@ -109,6 +113,8 @@ void main() {
     s.uv = in_tex_coords;
     s.world_position = in_location.xyz;
     s.time = push.time;
+    material_params[0] = o.params[0];
+    material_params[1] = o.params[1];
 #ifdef CUSTOM_MATERIAL
     material(s);
 #endif

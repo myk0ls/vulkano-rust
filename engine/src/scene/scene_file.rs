@@ -584,6 +584,26 @@ impl EditableComponent for Object3D {
     }
 }
 
+/// MaterialOverride fields named `param:<name>` hold a material shader's `@param` values.
+pub const PARAM_PREFIX: &str = "param:";
+
+/// The field name for a shader parameter. Field names are `&'static str`, so each distinct
+/// name is stored once and kept; there are only ever a handful.
+fn param_field_name(name: &str) -> &'static str {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    static NAMES: Mutex<Option<HashSet<&'static str>>> = Mutex::new(None);
+    let full = format!("{PARAM_PREFIX}{name}");
+    let mut names = NAMES.lock().unwrap();
+    let names = names.get_or_insert_with(HashSet::new);
+    if let Some(existing) = names.get(full.as_str()) {
+        return existing;
+    }
+    let leaked: &'static str = Box::leak(full.into_boxed_str());
+    names.insert(leaked);
+    leaked
+}
+
 impl EditableComponent for MaterialOverride {
     const NAME: &'static str = "MaterialOverride";
     fn create() -> Self {
@@ -601,6 +621,15 @@ impl EditableComponent for MaterialOverride {
             Field::hinted("roughness", FieldValue::Float(self.roughness), unit),
             Field::hinted("shader", FieldValue::Text(self.shader.clone()), FieldHint::Asset(&["glsl"])),
         ]
+        .into_iter()
+        // The shader's `@param`s, so each entity can set its own values.
+        .chain(self.shader_path().into_iter().flat_map(|path| crate::graphics::renderer::shader_params(&path)).map(
+            |param| {
+                let value = self.params.get(&param.name).copied().unwrap_or(param.default);
+                Field::hinted(param_field_name(&param.name), FieldValue::Float(value), FieldHint::Range(param.min, param.max))
+            },
+        ))
+        .collect()
     }
     fn set_field(&mut self, name: &str, value: &FieldValue) {
         match (name, value) {
@@ -612,6 +641,11 @@ impl EditableComponent for MaterialOverride {
             ("override_roughness", FieldValue::Bool(v)) => self.override_roughness = *v,
             ("roughness", FieldValue::Float(v)) => self.roughness = *v,
             ("shader", FieldValue::Text(v)) => self.shader = v.clone(),
+            (name, value) if name.starts_with(PARAM_PREFIX) => {
+                if let Some(v) = value.as_float() {
+                    self.params.insert(name[PARAM_PREFIX.len()..].to_string(), v);
+                }
+            }
             _ => {}
         }
     }

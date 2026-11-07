@@ -1,0 +1,101 @@
+(
+    environment: (
+        exposure: 1.0,
+        ambient_color: (1.0, 1.0, 1.0),
+        ambient_intensity: 0.5,
+        sun_direction: (0.1, 1.0, 0.1),
+        sun_color: (4.0, 4.0, 4.0),
+        shadow_softness: 2.0,
+        sun_shadows: true,
+        fxaa: true,
+        ao_radius: 0.05,
+        ao_strength: 1.0,
+        post_effects: [],
+    ),
+    entities: [
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("Player")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((0.0, -3.63342, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                ),
+                (
+                    component: "Camera",
+                    fields: {"active": Bool(true), "far": Float(1000.0), "fov": Float(80.0), "near": Float(0.1), "pitch": Float(0.0), "yaw": Float(0.0)},
+                ),
+                (
+                    component: "Velocity",
+                    fields: {},
+                ),
+                (
+                    component: "RigidBody",
+                    fields: {"body_type": Text("KinematicVelocity")},
+                ),
+                (
+                    component: "Collider",
+                    fields: {"collision_layer": Int(1), "collision_mask": Int(65535), "half_height": Float(1.0), "radius": Float(0.5), "sensor": Bool(false), "shape": Text("Capsule")},
+                ),
+                (
+                    component: "KinematicCharacter",
+                    fields: {},
+                ),
+                (
+                    component: "Player",
+                    fields: {},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("Box")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((0.0, 0.0, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                ),
+                (
+                    component: "Shape3D",
+                    fields: {"collision": Bool(true), "shape": Text("Box"), "size": Vec3((1000.0, 0.05, 1000.0))},
+                ),
+                (
+                    component: "Object3D",
+                    fields: {"model": Text("shape:box:1000,0.05,1000")},
+                ),
+                (
+                    component: "MaterialOverride",
+                    fields: {"emissive": Vec3((1.0, 1.0, 1.0)), "emissive_strength": Float(0.0), "metallic": Float(0.0), "override_metallic": Bool(false), "override_roughness": Bool(false), "roughness": Float(0.0), "shader": Text("shaders/materials/water.glsl"), "tint": Vec3((1.0, 1.0, 1.0))},
+                ),
+                (
+                    component: "RigidBody",
+                    fields: {"body_type": Text("Fixed")},
+                ),
+                (
+                    component: "Collider",
+                    fields: {"collision_layer": Int(1), "collision_mask": Int(65535), "half_extents": Vec3((500.0, 0.025, 500.0)), "sensor": Bool(false), "shape": Text("Box")},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("tree_elm")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((0.40119338, 0.0, -9.185781)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(0.5)},
+                ),
+                (
+                    component: "Object3D",
+                    fields: {"model": Text("data/models/tree_elm.glb")},
+                ),
+            ],
+        ),
+    ],
+)

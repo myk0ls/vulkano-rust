@@ -195,7 +195,21 @@ fn main() {
         app.renderer.set_view(&camera.engine_view());
 
         app.renderer.set_post_effects(&editor.doc.environment.post_effects);
-        editor.shader_errors = app.renderer.shader_errors();
+        let errors = app.renderer.shader_errors();
+        if errors != editor.shader_errors {
+            // Report each new or changed error once, and say when a shader is fixed.
+            for (path, error) in &errors {
+                if !editor.shader_errors.contains(&(path.clone(), error.clone())) {
+                    editor.log.error(format!("[shader] {error}"));
+                }
+            }
+            for (path, _) in &editor.shader_errors {
+                if !errors.iter().any(|(p, _)| p == path) {
+                    editor.log.info(format!("[shader] {path} compiles again."));
+                }
+            }
+            editor.shader_errors = errors;
+        }
         if environment_applied.as_ref() != Some(&editor.doc.environment) {
             environment_applied = Some(editor.doc.environment.clone());
             app.renderer.apply_environment(&editor.doc.environment);

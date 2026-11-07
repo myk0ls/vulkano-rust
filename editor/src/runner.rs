@@ -79,6 +79,8 @@ impl GameRunner {
         std::thread::spawn(move || {
             for line in BufReader::new(stream).lines().map_while(Result::ok) {
                 let message = match classify(&line) {
+                    // The game prints shader compile errors to stderr with this prefix.
+                    Line::Game if line.starts_with("[shader]") => Message::Log(Level::Error, line),
                     Line::Game => Message::Log(level, line),
                     Line::BuildError(text) => Message::Log(Level::Error, text),
                     Line::CrateBuilt => Message::CrateBuilt,

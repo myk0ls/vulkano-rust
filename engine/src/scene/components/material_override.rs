@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use shipyard::Component;
 
 use crate::assets::asset_manager::GpuOverride;
@@ -17,6 +19,8 @@ pub struct MaterialOverride {
     pub roughness: f32,
     /// A material shader file (`void material(inout Surface s)`), or empty for none.
     pub shader: String,
+    /// Values for the shader's `@param`s. Missing ones use the shader's default.
+    pub params: BTreeMap<String, f32>,
 }
 
 impl Default for MaterialOverride {
@@ -30,6 +34,7 @@ impl Default for MaterialOverride {
             override_roughness: false,
             roughness: 0.5,
             shader: String::new(),
+            params: BTreeMap::new(),
         }
     }
 }
@@ -47,7 +52,19 @@ impl MaterialOverride {
                 0.0,
                 0.0,
             ],
+            params: self.param_values(),
         }
+    }
+
+    /// The shader's `@param` values in declaration order, as the GPU reads them.
+    fn param_values(&self) -> [[f32; 4]; 2] {
+        let mut values = [[0.0; 4]; 2];
+        if let Some(path) = self.shader_path() {
+            for (i, param) in crate::graphics::renderer::shader_params(&path).iter().enumerate().take(8) {
+                values[i / 4][i % 4] = self.params.get(&param.name).copied().unwrap_or(param.default);
+            }
+        }
+        values
     }
 
     pub fn shader_path(&self) -> Option<String> {

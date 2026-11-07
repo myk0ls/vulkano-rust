@@ -101,9 +101,32 @@ fn compile(source: &str, kind: shaderc::ShaderKind, name: &str) -> Result<Vec<u3
     Ok(artifact.as_binary().to_vec())
 }
 
-/// The G-buffer shader with a material function added.
+/// The G-buffer shader with a material function added. The material's `@param`s are
+/// available by name, read from the entity's MaterialOverride values.
 pub fn material_source(user: &str) -> String {
-    DEFERRED_FRAG.replacen("// @material", &format!("#define CUSTOM_MATERIAL\n#line 1\n{user}\n"), 1)
+    let mut defines = String::new();
+    for (i, param) in parse_post_params(user).iter().enumerate() {
+        defines.push_str(&format!("#define {} (material_params[{}][{}])\n", param.name, i / 4, i % 4));
+    }
+    DEFERRED_FRAG.replacen("// @material", &format!("#define CUSTOM_MATERIAL\n{defines}#line 1\n{user}\n"), 1)
+}
+
+/// The `@param`s a shader file declares, re-read only when the file changes. Used every
+/// frame for material values, so it avoids reading the file each time.
+pub fn shader_params(path: &str) -> Vec<PostParam> {
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<HashMap<String, (Option<SystemTime>, Vec<PostParam>)>>> = Mutex::new(None);
+    let modified = modified(path);
+    let mut cache = CACHE.lock().unwrap();
+    let cache = cache.get_or_insert_with(HashMap::new);
+    match cache.get(path) {
+        Some((when, params)) if *when == modified => params.clone(),
+        _ => {
+            let params = std::fs::read_to_string(path).map(|s| parse_post_params(&s)).unwrap_or_default();
+            cache.insert(path.to_string(), (modified, params.clone()));
+            params
+        }
+    }
 }
 
 /// A post effect's compute shader, with its parameters available by name.
@@ -125,6 +148,14 @@ pub fn check_material(path: &str) -> Result<(), String> {
 pub fn check_post_effect(path: &str) -> Result<(), String> {
     let user = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
     compile(&post_source(&user), shaderc::ShaderKind::Compute, path).map(|_| ())
+}
+
+/// Print a shader error to the console. Every line gets the prefix, so the editor's game
+/// runner can show all of a multi-line compiler error as an error.
+fn report(error: &str) {
+    for line in error.lines() {
+        eprintln!("[shader] {line}");
+    }
 }
 
 fn modified(path: &str) -> Option<SystemTime> {
@@ -169,7 +200,7 @@ impl Renderer {
         if stale {
             let result = self.build_material(path);
             if let Err(e) = &result {
-                eprintln!("[shader] {e}");
+                report(e);
             }
             self.custom.materials.insert(path.to_string(), Cached { modified, result });
         }
@@ -203,7 +234,7 @@ impl Renderer {
         if stale {
             let result = self.build_post(path);
             if let Err(e) = &result {
-                eprintln!("[shader] {e}");
+                report(e);
             }
             self.custom.posts.insert(path.to_string(), Cached { modified, result });
         }
@@ -266,6 +297,14 @@ mod tests {
         let source = material_source("void material(inout Surface s) {\n    s.albedo = nope;\n}");
         let error = compile(&source, shaderc::ShaderKind::Fragment, "mine.glsl").unwrap_err();
         assert!(error.contains("mine.glsl:2"), "{error}");
+    }
+
+    #[test]
+    fn material_params_are_usable_by_name() {
+        let source = material_source(
+            "// @param glow 2.0 0 10\n// @param speed 1.0\nvoid material(inout Surface s) { s.emissive = vec3(glow * sin(s.time * speed)); }",
+        );
+        compile(&source, shaderc::ShaderKind::Fragment, "pulse.glsl").unwrap();
     }
 
     #[test]

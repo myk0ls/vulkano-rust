@@ -222,7 +222,7 @@ fn set_field(ctx: &Shared, entity: Entity, component: &str, field: &str, value: 
             return;
         };
         let Some(current) = def.fields(world, id).and_then(|fs| fs.into_iter().find(|f| f.name == field)) else {
-            eprintln!("[script] set: {component} has no field {field} here");
+            eprintln!("[script] set: this entity has no {component}, or its {component} has no field {field}");
             return;
         };
         match to_field_like(&value, &current.value) {
@@ -672,6 +672,11 @@ fn register_world(engine: &mut Engine, ctx: &Shared) {
     ctx_fn!(engine, ctx, "has_global", |c, key: &str| c.borrow().globals.contains_key(key));
 
     // Post effects, by file name ("vignette") or path.
+    // A material shader @param on an entity's MaterialOverride.
+    ctx_fn!(engine, ctx, "set_material_param", |c, e: &mut Entity, param: &str, value: Dynamic| {
+        let field = format!("{}{param}", crate::scene::scene_file::PARAM_PREFIX);
+        set_field(&c, *e, "MaterialOverride", &field, value)
+    });
     ctx_fn!(engine, ctx, "set_post_param", |c, effect: &str, param: &str, value: Dynamic| {
         with_post_effect(&c, effect, |e| {
             e.params.insert(param.to_string(), number(&value).unwrap_or(0.0) as f32);
