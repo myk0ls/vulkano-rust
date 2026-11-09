@@ -17,6 +17,7 @@
 //! can call are registered in [`api`].
 
 mod api;
+pub mod docs;
 mod vec3;
 
 pub use vec3::Vec3;
@@ -294,6 +295,11 @@ impl ScriptRuntime {
         vec3::register(&mut engine);
         api::register(&mut engine, &context);
         Self { engine, context, loaded: HashMap::new() }
+    }
+
+    /// The engine scripts run on, for tools that list or check what scripts can call.
+    pub fn engine(&self) -> &Engine {
+        &self.engine
     }
 
     pub fn set_registry(&mut self, registry: ComponentRegistry) {

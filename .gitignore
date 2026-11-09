@@ -1,3 +1,8 @@
 /target
 data/models/Bistro_Godot.glb
 .vulkano-editor
+
+# Zed builds the dev extension in place.
+zed-extension/target
+zed-extension/extension.wasm
+zed-extension/Cargo.lock

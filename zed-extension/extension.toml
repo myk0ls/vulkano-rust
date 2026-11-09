@@ -1,0 +1,13 @@
+id = "vulkano-rhai"
+name = "Vulkano Rhai"
+version = "0.1.0"
+schema_version = 1
+authors = ["myk0ls"]
+description = "Completion, hover docs, signature help, and error checking for Vulkano engine Rhai scripts."
+repository = "https://github.com/myk0ls/vulkano-rust"
+
+# Adds a language server to the "Rhai" language from the rhai extension, which provides
+# the syntax highlighting.
+[language_servers.vulkano-rhai-lsp]
+name = "Vulkano Rhai"
+languages = ["Rhai"]

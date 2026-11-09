@@ -4,6 +4,7 @@ members = [
     "engine",
     "game",
     "editor",
+    "rhai-lsp",
 ]
 
 [workspace.dependencies]
@@ -20,6 +21,6 @@ shipyard = "0.9.0"
 image = { version = "0.25.6", features = ["hdr"] }
 serde = { version = "1", features = ["derive"] }
 ron = "0.11"
-rhai = "1.27"
+rhai = { version = "1.27", features = ["metadata"] }
 shaderc = "0.8"
 egui = "0.36"
