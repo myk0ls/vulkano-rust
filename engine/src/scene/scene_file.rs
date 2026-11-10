@@ -818,7 +818,8 @@ impl EditableComponent for RigidBodyComponent {
     }
 }
 
-const COLLIDER_SHAPES: &[&str] = &["Box", "Ball", "Capsule", "Cylinder"];
+const COLLIDER_SHAPES: &[&str] =
+    &["Box", "Ball", "Capsule", "Cylinder", "Mesh", "Simplified Mesh", "Convex Hull", "Convex Parts"];
 
 impl EditableComponent for ColliderComponent {
     const NAME: &'static str = "Collider";
@@ -844,6 +845,36 @@ impl EditableComponent for ColliderComponent {
                 self.collision_mask = (*bits as u32) & crate::physics::physics_engine::ALL_LAYERS;
                 return;
             }
+            ("shape", FieldValue::Text(shape)) => {
+                use crate::physics::mesh_collider::{MeshShape, MeshShapeKind};
+                if let Some(kind) = MeshShapeKind::from_name(shape) {
+                    if self.mesh.as_ref().map(|m| m.kind) != Some(kind) {
+                        self.mesh = Some(MeshShape::new(kind));
+                    }
+                    return;
+                }
+                if self.mesh.take().is_some() {
+                    // Back to a primitive: start from a plain box.
+                    self.shape = SharedShape::cuboid(0.5, 0.5, 0.5);
+                }
+            }
+            ("detail", value) => {
+                let detail = match value {
+                    FieldValue::Int(v) => Some(*v as f32),
+                    other => other.as_float(),
+                };
+                // Kept even before the shape is set, since a scene may list it first.
+                if let Some(detail) = detail {
+                    let detail = (detail.round() as u32).clamp(2, 256);
+                    if self.mesh_detail != detail {
+                        self.mesh_detail = detail;
+                        if let Some(mesh) = &mut self.mesh {
+                            mesh.built_for = None;
+                        }
+                    }
+                }
+                return;
+            }
             _ => {}
         }
         self.set_shape_field(name, value);
@@ -853,7 +884,14 @@ impl EditableComponent for ColliderComponent {
 impl ColliderComponent {
     fn shape_fields(&self, positive: FieldHint) -> Vec<Field> {
         let shape = |name: &str| Field::hinted("shape", FieldValue::Text(name.into()), FieldHint::Choice(COLLIDER_SHAPES));
-        let fields = if let Some(ball) = self.shape.as_ball() {
+        let fields = if let Some(mesh) = &self.mesh {
+            // Built from the entity's model; see physics::mesh_collider.
+            let mut fields = vec![shape(mesh.kind.name())];
+            if mesh.kind.uses_detail() {
+                fields.push(Field::hinted("detail", FieldValue::Int(self.mesh_detail as i64), FieldHint::Range(2.0, 256.0)));
+            }
+            fields
+        } else if let Some(ball) = self.shape.as_ball() {
             vec![shape("Ball"), Field::hinted("radius", FieldValue::Float(ball.radius), positive)]
         } else if let Some(capsule) = self.shape.as_capsule() {
             vec![

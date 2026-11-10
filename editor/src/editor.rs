@@ -186,6 +186,8 @@ impl Editor {
         // Shapes derive their model and collider. Doing it before taking the undo
         // snapshot keeps every snapshot consistent, so undo never fights with it.
         self.shapes_changed |= vulkano_engine::scene::components::shape3d::shape3d_system(world);
+        // Colliders made from models, so the viewport can show them.
+        vulkano_engine::physics::mesh_collider::mesh_collider_system(world);
         self.doc.refresh(world, &self.registry);
         self.doc.commit_changes(interacting);
     }

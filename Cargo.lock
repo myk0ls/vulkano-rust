@@ -2748,6 +2748,7 @@ dependencies = [
  "image",
  "mint",
  "nalgebra-glm",
+ "rapier3d",
  "sdl3",
  "serde_json",
  "shipyard",

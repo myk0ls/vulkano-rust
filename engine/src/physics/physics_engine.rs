@@ -169,6 +169,11 @@ pub struct ColliderComponent {
     /// Which layers it collides with. Two colliders interact only if each one's mask
     /// includes the other's layer.
     pub collision_mask: u32,
+    /// Build `shape` from the entity's 3D model (see `mesh_collider`) instead of using a
+    /// primitive. Until the model has loaded the collider isn't added to the physics world.
+    pub mesh: Option<super::mesh_collider::MeshShape>,
+    /// How detailed a Simplified Mesh or Convex Parts shape is; see `mesh_collider`.
+    pub mesh_detail: u32,
 }
 
 /// Every layer.
@@ -192,6 +197,8 @@ impl ColliderComponent {
             sensor: false,
             collision_layer: 1,
             collision_mask: ALL_LAYERS,
+            mesh: None,
+            mesh_detail: super::mesh_collider::DEFAULT_DETAIL,
         }
     }
 
@@ -295,7 +302,9 @@ pub fn physics_bodies_creation_system(world: &mut World) {
 
             // Create colliders for entities that have ColliderComponent but no handle yet
             for (id, (body, collider)) in (&bodies, &mut colliders).iter().with_id() {
-                if collider.handle.is_none() {
+                // A shape from a model waits until the model has loaded and it's built.
+                let waiting = collider.mesh.as_ref().is_some_and(|m| m.built_for.is_none());
+                if collider.handle.is_none() && !waiting {
                     if let Some(body_handle) = body.handle {
                         // Create collider attached to the rigid body
                         let collider_builder = ColliderBuilder::new(collider.shape.clone())

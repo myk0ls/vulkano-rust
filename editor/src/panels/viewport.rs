@@ -6,6 +6,7 @@ use transform_gizmo_egui::math::Transform as GizmoTransform;
 use transform_gizmo_egui::{Gizmo, GizmoConfig, GizmoExt, GizmoMode, GizmoOrientation};
 use shipyard::{EntityId, World};
 use vulkano_engine::physics::physics_engine::ColliderComponent;
+use rapier3d::prelude::SharedShape;
 use vulkano_engine::scene::components::object3d::Object3D;
 use vulkano_engine::scene::components::pointlight::Pointlight;
 use vulkano_engine::scene::components::spotlight::Spotlight;
@@ -569,7 +570,48 @@ fn draw_selection(painter: &egui::Painter, projector: &Projector, editor: &Edito
             for center in [unscaled.position + up, unscaled.position - up] {
                 draw_circles(painter, projector, &Pose { position: center, ..unscaled }, capsule.radius, stroke);
             }
+        } else {
+            draw_collider_mesh(painter, projector, &unscaled.matrix(), &collider.shape, stroke);
         }
+    }
+}
+
+/// Most collider edges drawn for one entity; a huge exact mesh shows only part of itself.
+const MAX_COLLIDER_EDGES: usize = 20_000;
+
+/// The wireframe of a collider built from a model: a triangle mesh, a convex hull, or
+/// convex parts. The viewport's poses are +Y up, like physics space, so points go straight
+/// through the entity's matrix.
+fn draw_collider_mesh(painter: &egui::Painter, projector: &Projector, matrix: &glm::Mat4, shape: &SharedShape, stroke: Stroke) {
+    let to_engine = |p: rapier3d::prelude::Vector| (matrix * glm::vec4(p.x, p.y, p.z, 1.0)).xyz();
+    let mut segments: Vec<(rapier3d::prelude::Vector, rapier3d::prelude::Vector)> = Vec::new();
+    let mut add_convex = |hull: &rapier3d::parry::shape::ConvexPolyhedron, pose: rapier3d::prelude::Pose| {
+        let points = hull.points();
+        for edge in hull.edges() {
+            let [a, b] = edge.vertices;
+            segments.push((pose.transform_point(points[a as usize]), pose.transform_point(points[b as usize])));
+        }
+    };
+    if let Some(mesh) = shape.as_trimesh() {
+        let v = mesh.vertices();
+        for [a, b, c] in mesh.indices() {
+            let (a, b, c) = (v[*a as usize], v[*b as usize], v[*c as usize]);
+            segments.extend([(a, b), (b, c), (c, a)]);
+            if segments.len() > MAX_COLLIDER_EDGES {
+                break;
+            }
+        }
+    } else if let Some(hull) = shape.as_convex_polyhedron() {
+        add_convex(hull, rapier3d::prelude::Pose::IDENTITY);
+    } else if let Some(compound) = shape.as_compound() {
+        for (pose, part) in compound.shapes() {
+            if let Some(hull) = part.as_convex_polyhedron() {
+                add_convex(hull, *pose);
+            }
+        }
+    }
+    for (a, b) in segments.into_iter().take(MAX_COLLIDER_EDGES) {
+        line(painter, projector, to_engine(a), to_engine(b), stroke);
     }
 }
 

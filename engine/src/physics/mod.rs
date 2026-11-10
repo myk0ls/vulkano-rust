@@ -1,3 +1,4 @@
+pub mod mesh_collider;
 pub mod physics_engine;
 
 use shipyard::World;

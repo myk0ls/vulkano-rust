@@ -183,6 +183,7 @@ impl<G: Game> Application<G> {
             self.renderer.apply_environment(&env);
         }
 
+        crate::physics::mesh_collider::mesh_collider_system(self.game.get_world_mut());
         crate::physics::physics_engine::physics_bodies_creation_system(self.game.get_world_mut());
 
         self.sdl.mouse().set_relative_mouse_mode(&self.window, true);
@@ -410,6 +411,11 @@ impl<G: Game> Application<G> {
                 .unwrap()
                 .cleanup_finished();
 
+            // Colliders made from models are built once their model has loaded; their
+            // bodies are created then.
+            if crate::physics::mesh_collider::mesh_collider_system(self.game.get_world_mut()) {
+                crate::physics::physics_engine::physics_bodies_creation_system(self.game.get_world_mut());
+            }
             crate::physics::physics_engine::physics_frame(
                 self.game.get_world_mut(),
                 dt,
