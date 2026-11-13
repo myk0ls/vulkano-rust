@@ -25,6 +25,8 @@ impl InputManager {
         self.keys_released_this_frame.clear();
         self.mouse_pressed_this_frame.clear();
         self.mouse_released_this_frame.clear();
+        // Motion is the sum of this frame's events.
+        self.mouse_motion = (0.0, 0.0);
     }
 
     pub fn new() -> InputManager {

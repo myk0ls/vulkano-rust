@@ -55,9 +55,13 @@ impl MyApp {
     }
 
     fn add_player_if_missing(&mut self) {
-        let has_player = self.world.run(|players: View<Player>| players.iter().count() > 0);
-        if !has_player {
-            eprintln!("This scene has no entity with a Player component; adding a default one.");
+        // A scene with its own camera brings its own way to play, such as a scripted
+        // controller.
+        let has_view = self.world.run(|players: View<Player>, cameras: View<Camera>| {
+            players.iter().count() > 0 || cameras.iter().count() > 0
+        });
+        if !has_view {
+            eprintln!("This scene has no Player or Camera; adding a default player.");
             self.world.add_entity((
                 Player::new(),
                 Camera::new(vec3(0.0, -5.0, 0.0)),

@@ -9,7 +9,7 @@ use shipyard::{EntityId, IntoIter, View, World};
 
 use super::vec3::{Vec3, number, to_vec3};
 use super::{Connection, Context, Pending, Shared, Timer, from_field, spawn_prefab, to_field_like};
-use crate::physics::physics_engine::{ColliderComponent, PhysicsEngine, RigidBodyComponent, collider_entity};
+use crate::physics::physics_engine::{ColliderComponent, KinematicCharacterComponent, PhysicsEngine, RigidBodyComponent, collider_entity};
 use crate::scene::components::animator::Animator;
 use crate::scene::components::audio_playback::{AudioPlayback, AudioPlayback3D, AudioSource};
 use crate::scene::components::pointlight::Pointlight;
@@ -504,6 +504,38 @@ fn register_entity(engine: &mut Engine, ctx: &Shared) {
     ctx_fn!(engine, ctx, "apply_impulse", |c, e: &mut Entity, v: Vec3| {
         with_entity(&c, *e, |w, id| with_body(w, id, |rb| rb.apply_impulse(physics_vector(v), true)));
     });
+    // Kinematic characters: scripts set the walking speed; physics moves them.
+    let (c, c2) = (ctx.clone(), ctx.clone());
+    engine.register_get_set(
+        "move_velocity",
+        move |e: &mut Entity| {
+            with_entity(&c, *e, |w, id| {
+                w.get::<&KinematicCharacterComponent>(id)
+                    .map(|k| Vec3::new(k.desired_velocity.x as FLOAT, 0.0, k.desired_velocity.z as FLOAT))
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default()
+        },
+        move |e: &mut Entity, v: Vec3| {
+            with_entity(&c2, *e, |w, id| {
+                if let Ok(mut k) = w.get::<&mut KinematicCharacterComponent>(id) {
+                    k.desired_velocity = Vector::new(v.x as f32, 0.0, v.z as f32);
+                }
+            });
+        },
+    );
+    ctx_fn!(engine, ctx, "jump", |c, e: &mut Entity, speed: Dynamic| {
+        with_entity(&c, *e, |w, id| {
+            if let Ok(mut k) = w.get::<&mut KinematicCharacterComponent>(id) {
+                k.vertical_velocity = number(&speed).unwrap_or(0.0) as f32;
+                k.grounded = false;
+            }
+        });
+    });
+    let c = ctx.clone();
+    engine.register_get("grounded", move |e: &mut Entity| {
+        with_entity(&c, *e, |w, id| w.get::<&KinematicCharacterComponent>(id).is_ok_and(|k| k.grounded)).unwrap_or(false)
+    });
     ctx_fn!(engine, ctx, "play_animation", |c, e: &mut Entity, clip: &str| {
         with_entity(&c, *e, |w, id| {
             if let Ok(mut animator) = w.get::<&mut Animator>(id) {
@@ -570,16 +602,25 @@ fn register_entity(engine: &mut Engine, ctx: &Shared) {
             }
         }
     });
-    ctx_fn!(engine, ctx, "call", |c, e: &mut Entity, function: &str| {
-        if let Some(target) = e.id() {
-            c.borrow_mut().pending.push_back(Pending::Call { target, function: function.to_string(), args: Vec::new() });
-        }
-    });
-    ctx_fn!(engine, ctx, "call", |c, e: &mut Entity, function: &str, arg: Dynamic| {
-        if let Some(target) = e.id() {
-            c.borrow_mut().pending.push_back(Pending::Call { target, function: function.to_string(), args: vec![arg] });
-        }
-    });
+    // `invoke` is the name that works as a method: Rhai reserves `x.call(...)` for calling
+    // function pointers, so `e.call(...)` never reaches the functions below.
+    for name in ["invoke", "call"] {
+        ctx_fn!(engine, ctx, name, |c, e: &mut Entity, function: &str| {
+            if let Some(target) = e.id() {
+                c.borrow_mut().pending.push_back(Pending::Call { target, function: function.to_string(), args: Vec::new() });
+            }
+        });
+        ctx_fn!(engine, ctx, name, |c, e: &mut Entity, function: &str, arg: Dynamic| {
+            if let Some(target) = e.id() {
+                c.borrow_mut().pending.push_back(Pending::Call { target, function: function.to_string(), args: vec![arg] });
+            }
+        });
+        ctx_fn!(engine, ctx, name, |c, e: &mut Entity, function: &str, a: Dynamic, b: Dynamic| {
+            if let Some(target) = e.id() {
+                c.borrow_mut().pending.push_back(Pending::Call { target, function: function.to_string(), args: vec![a, b] });
+            }
+        });
+    }
 }
 
 /// The original functions acting on the script's own entity.

@@ -428,6 +428,11 @@ impl<G: Game> Application<G> {
                 &mut self.physics_accumulator,
             );
 
+            self.scripts.late_update(self.game.get_world_mut(), dt);
+            if self.handle_script_requests(&mut environment) {
+                break 'running;
+            }
+
             if let Ok(env) = self.game.get_world().get_unique::<&Environment>() {
                 self.renderer.set_post_effects(&env.post_effects);
             }

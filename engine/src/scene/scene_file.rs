@@ -873,6 +873,14 @@ impl EditableComponent for KinematicCharacterComponent {
     fn create() -> Self {
         KinematicCharacterComponent::new()
     }
+    fn fields(&self) -> Vec<Field> {
+        vec![Field::hinted("gravity", FieldValue::Float(self.gravity), FieldHint::Range(0.0, 1000.0))]
+    }
+    fn set_field(&mut self, name: &str, value: &FieldValue) {
+        if let ("gravity", FieldValue::Float(v)) = (name, value) {
+            self.gravity = v.max(0.0);
+        }
+    }
 }
 
 const BODY_TYPES: &[&str] = &["Dynamic", "Fixed", "KinematicPosition", "KinematicVelocity"];

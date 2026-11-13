@@ -19,10 +19,9 @@ pub fn player_movement(
     physics_engine: UniqueView<PhysicsEngine>,
     delta_time: UniqueView<DeltaTime>,
 ) {
-    let camera = cameras
-        .iter()
-        .find(|c| c.active)
-        .expect("No active camera found");
+    let Some(camera) = cameras.iter().find(|c| c.active) else {
+        return;
+    };
 
     let forward = camera.get_forward_vector();
     let right = camera.get_right_vector();

@@ -11,6 +11,7 @@ pub const API_HELP: &[(&str, &[(&str, &str)])] = &[
         &[
             ("fn on_start()", "Runs once when the game starts or the entity appears."),
             ("fn on_update(dt)", "Runs every frame. dt is in seconds."),
+            ("fn on_late_update(dt)", "Runs every frame after physics has moved things, so a camera can follow a character without lagging behind."),
             ("fn on_collision(other)", "Something touched this entity's collider. other is an Entity."),
             ("fn on_collision_end(other)", "It stopped touching."),
             ("fn on_pressed()", "This UI button was clicked."),
@@ -53,6 +54,8 @@ pub const API_HELP: &[(&str, &[(&str, &str)])] = &[
             ("e.look_at(point or entity), e.forward()", "Face something; the direction it faces."),
             ("e.distance_to(other)", "Distance to an entity or point."),
             ("e.apply_impulse(v)", "Push a physics body."),
+            ("e.move_velocity = vec3(x, 0, z)", "Walk a KinematicCharacter at this speed in m/s; Y is ignored. Physics keeps it on the ground and out of walls."),
+            ("e.jump(6.0), e.grounded", "Launch a KinematicCharacter upward at this speed; whether it stands on something."),
             ("e.play_animation(\"Walk\")", "On an Animator."),
             ("e.get(\"Comp\", \"field\"), e.set(...)", "Any field of any component, as in the Inspector."),
             ("e.has(\"Comp\"), e.add(...), e.remove(...)", "Check, add, or remove a component."),
@@ -70,7 +73,7 @@ pub const API_HELP: &[(&str, &[(&str, &str)])] = &[
             ("add_to_group(\"enemies\")", "Join a group; also e.add_to_group. Groups can be set in the Inspector."),
             ("remove_from_group(\"enemies\"), is_in_group(...)", "Leave or check; e.in_group(...) for others."),
             ("call_group(\"enemies\", \"alert\", args...)", "Call a function on every script in a group."),
-            ("e.call(\"open\", arg)", "Call a function on another entity's scripts."),
+            ("e.invoke(\"open\", args...)", "Call a function on another entity's scripts, with up to 2 values. (Rhai reserves e.call for function pointers.)"),
         ],
     ),
     (

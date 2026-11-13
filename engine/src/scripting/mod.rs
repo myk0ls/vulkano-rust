@@ -428,6 +428,20 @@ impl ScriptRuntime {
         self.context.borrow_mut().world = std::ptr::null_mut();
     }
 
+    /// Call `on_late_update` after physics has moved everything this frame, for what has
+    /// to follow those results exactly, such as a camera chasing a physics character.
+    pub fn late_update(&mut self, world: &mut World, dt: f32) {
+        self.context.borrow_mut().world = world;
+        let mut keys: Vec<InstanceKey> = self.context.borrow().running.keys().cloned().collect();
+        keys.sort_by_key(|k| (k.0.inner(), k.1));
+        for key in keys {
+            self.invoke(&key, "on_late_update", vec![Dynamic::from_float(dt as f64)]);
+        }
+        self.deliver_pending();
+        self.apply_destroys(world);
+        self.context.borrow_mut().world = std::ptr::null_mut();
+    }
+
     fn start(&mut self, key: InstanceKey, instance: &ScriptInstance) {
         let Some(script) = self.load(&instance.path) else {
             // Remember the failure so it's reported once, not every frame.
@@ -864,6 +878,37 @@ mod tests {
                 let _ = std::fs::remove_file(file);
             }
         }
+    }
+
+    #[test]
+    fn invoke_calls_another_entitys_function() {
+        let mut f = Fixture::new();
+        let target = f.entity("Target", Some("fn hit(n, m) { translate(n + m, 0, 0); }"));
+        f.entity("Shooter", Some("fn on_update(dt) { if frame() == 2 { find(\"Target\").invoke(\"hit\", 2, 3); } }"));
+        f.frame();
+        f.frame();
+        assert_eq!(f.x(target), 5.0);
+    }
+
+    #[test]
+    fn late_update_runs_after_update() {
+        let mut f = Fixture::new();
+        let e = f.entity("Late", Some("fn on_update(dt) { set_position(1, 0, 0); } fn on_late_update(dt) { translate(10, 0, 0); }"));
+        f.frame();
+        assert_eq!(f.x(e), 1.0);
+        f.runtime.late_update(&mut f.world, 0.1);
+        assert_eq!(f.x(e), 11.0);
+    }
+
+    #[test]
+    fn scripts_walk_and_jump_kinematic_characters() {
+        let mut f = Fixture::new();
+        let hero = f.entity("Hero", Some("fn on_start() { let h = me(); h.move_velocity = vec3(3, 5, 4); h.jump(6.0); }"));
+        f.world.add_component(hero, crate::physics::physics_engine::KinematicCharacterComponent::new());
+        f.frame();
+        let k = f.world.get::<&crate::physics::physics_engine::KinematicCharacterComponent>(hero).unwrap();
+        assert_eq!((k.desired_velocity.x, k.desired_velocity.y, k.desired_velocity.z), (3.0, 0.0, 4.0));
+        assert_eq!(k.vertical_velocity, 6.0);
     }
 
     #[test]

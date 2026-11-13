@@ -1,6 +1,6 @@
 use nalgebra_glm::vec3;
 use sdl3::keyboard::Keycode;
-use shipyard::{IntoIter, UniqueView, UniqueViewMut, ViewMut};
+use shipyard::{IntoIter, UniqueView, View, ViewMut};
 use vulkano_engine::input::input_manager::InputManager;
 use vulkano_engine::prelude::camera::Camera;
 use vulkano_engine::prelude::transform::Transform;
@@ -8,14 +8,14 @@ use vulkano_engine::scene::components::delta_time::DeltaTime;
 
 use crate::player;
 
-pub fn mouse_look(mut cameras: ViewMut<Camera>, mut input_manager: UniqueViewMut<InputManager>) {
-    let dx = input_manager.mouse_motion.0;
-    let dy = input_manager.mouse_motion.1;
+/// Turn the player's own camera. Other cameras, such as one a script drives, are left alone.
+pub fn mouse_look(players: View<player::Player>, mut cameras: ViewMut<Camera>, input_manager: UniqueView<InputManager>) {
+    let (dx, dy) = input_manager.mouse_motion;
 
-    for camera in (&mut cameras).iter().filter(|c| c.active) {
+    for (_, camera) in (&players, &mut cameras).iter().filter(|(_, c)| c.active) {
         if dx != 0.0 || dy != 0.0 {
-            camera.yaw += input_manager.mouse_motion.0 * player::SENSITIVITY;
-            camera.pitch += input_manager.mouse_motion.1 * player::SENSITIVITY;
+            camera.yaw += dx * player::SENSITIVITY;
+            camera.pitch += dy * player::SENSITIVITY;
 
             camera.pitch = camera.pitch.clamp(
                 -std::f32::consts::FRAC_PI_2 + 0.01,
@@ -24,8 +24,6 @@ pub fn mouse_look(mut cameras: ViewMut<Camera>, mut input_manager: UniqueViewMut
         }
     }
 
-    // Reset mouse motion after applying it
-    input_manager.mouse_motion = (0.0, 0.0);
 }
 
 pub fn freecam_movement(
