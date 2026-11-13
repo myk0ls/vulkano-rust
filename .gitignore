@@ -6,3 +6,6 @@ data/models/Bistro_Godot.glb
 zed-extension/target
 zed-extension/extension.wasm
 zed-extension/Cargo.lock
+
+# .blend files converted by Blender
+.import/

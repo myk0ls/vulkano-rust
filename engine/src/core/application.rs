@@ -179,8 +179,14 @@ impl<G: Game> Application<G> {
 
         self.build_unified_geometry();
 
-        let mut environment =
-            self.bake_environment("data/skybox/citrus_orchard_road_puresky_4k.hdr");
+        // The project's sky, or the engine's.
+        let sky = self
+            .game
+            .get_world()
+            .get_unique::<&crate::core::project::Project>()
+            .map(|p| p.sky_path())
+            .unwrap_or_else(|_| crate::core::project::default_sky());
+        let mut environment = self.bake_environment(&sky);
 
         self.renderer.set_ambient([1.0, 1.0, 1.0], 0.5);
         // A scene file loaded in on_init overrides the defaults above.
@@ -543,15 +549,28 @@ impl<G: Game> Application<G> {
             }
         };
         let world = self.game.get_world_mut();
+        // Autoloads stay for the whole run; everything else belongs to the old scene.
+        let kept: std::collections::HashSet<shipyard::EntityId> =
+            crate::core::project::autoload_entities(world).into_iter().collect();
         let entities: Vec<shipyard::EntityId> = world
             .borrow::<shipyard::EntitiesView>()
             .map(|e| e.iter().collect())
             .unwrap_or_default();
-        for entity in entities {
+        for entity in entities.into_iter().filter(|e| !kept.contains(e)) {
             world.delete_entity(entity);
         }
         world.add_unique(PhysicsEngine::new());
-        self.scripts.reset();
+        // Kept bodies belonged to the old simulation; they're made again in the new one.
+        world.run(|mut bodies: ViewMut<crate::physics::physics_engine::RigidBodyComponent>,
+                   mut colliders: ViewMut<crate::physics::physics_engine::ColliderComponent>| {
+            for body in (&mut bodies).iter() {
+                body.handle = None;
+            }
+            for collider in (&mut colliders).iter() {
+                collider.handle = None;
+            }
+        });
+        self.scripts.reset_keeping(&kept);
         self.scripts.reload_files();
 
         let registry = self.scripts.registry();

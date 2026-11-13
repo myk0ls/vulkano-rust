@@ -54,7 +54,7 @@ impl FileKind {
         }
     }
 
-    fn template(self) -> &'static str {
+    pub fn template(self) -> &'static str {
         match self {
             FileKind::Script => NEW_SCRIPT,
             FileKind::Material => NEW_MATERIAL,

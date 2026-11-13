@@ -57,6 +57,8 @@ pub enum Action {
         path: String,
         position: Option<[f32; 3]>,
     },
+    /// Open another project, in a new editor window that replaces this one.
+    SwitchProject(PathBuf),
 }
 
 pub enum Dialog {
@@ -69,6 +71,12 @@ pub enum Dialog {
     Unsaved { then: Action },
     Shortcuts,
     About,
+    /// Open, create, or reopen a recent project.
+    Projects { name: String, parent: String },
+    ProjectSettings { draft: vulkano_engine::core::project::Project, blender: String },
+    /// A name for a new file or folder, or a new name for one, from the FileSystem dock.
+    FileName { op: filesystem::FileOp, name: String },
+    DeleteFile { path: PathBuf },
 }
 
 pub struct Editor {
@@ -96,6 +104,10 @@ pub struct Editor {
     pub actions: Vec<Action>,
     /// A blocking operation is about to run; the UI shows this while it does.
     pub busy: Option<String>,
+    /// The open project, whose folder is the current directory. None outside a project.
+    pub project: Option<vulkano_engine::core::project::Project>,
+    /// Remembered across projects: recent projects, where Blender is.
+    pub global: crate::projects::GlobalConfig,
     pub quit: bool,
     pub frame_ms: f32,
     pub output_autoscroll: bool,
@@ -138,6 +150,8 @@ impl Editor {
             dialog: None,
             actions: Vec::new(),
             busy: None,
+            project: None,
+            global: crate::projects::GlobalConfig::load(),
             quit: false,
             frame_ms: 0.0,
             output_autoscroll: true,
@@ -149,7 +163,10 @@ impl Editor {
 
     pub fn window_title(&self) -> String {
         let dirty = if self.doc.is_dirty() { "(*) " } else { "" };
-        format!("{dirty}{} - Vulkano Editor", self.doc.title())
+        match &self.project {
+            Some(project) => format!("{dirty}{} - {} - Vulkano Editor", self.doc.title(), project.name),
+            None => format!("{dirty}{} - Vulkano Editor", self.doc.title()),
+        }
     }
 
     pub fn ui(&mut self, root: &mut Ui, world: &mut World) {
@@ -212,6 +229,41 @@ impl Editor {
                 }
                 ui.separator();
                 self.menu_item(ui, "Quit", "Ctrl+Q", true, Action::Quit);
+            });
+            ui.menu_button("Project", |ui| {
+                if ui.button("Open or Create Project…").clicked() {
+                    self.projects_manager();
+                    ui.close();
+                }
+                let recent: Vec<PathBuf> = self.global.recent.iter().skip(1).take(6).cloned().collect();
+                ui.add_enabled_ui(!recent.is_empty(), |ui| {
+                    ui.menu_button("Recent", |ui| {
+                        for path in recent {
+                            let name = vulkano_engine::core::project::Project::load(&path)
+                                .map(|p| p.name)
+                                .unwrap_or_else(|_| path.display().to_string());
+                            if ui.button(name).on_hover_text(path.display().to_string()).clicked() {
+                                self.actions.push(Action::SwitchProject(path));
+                                ui.close();
+                            }
+                        }
+                    });
+                });
+                ui.separator();
+                let settings = ui.add_enabled(self.project.is_some(), Button::new("Project Settings…"));
+                if settings.clicked() {
+                    if let Some(project) = self.project.clone() {
+                        self.dialog = Some(Dialog::ProjectSettings { draft: project, blender: self.global.blender.clone() });
+                    }
+                    ui.close();
+                }
+                let reveal = if cfg!(windows) { "Show Project in Explorer" } else { "Show Project Folder" };
+                if ui.button(reveal).clicked() {
+                    if let Err(e) = crate::projects::reveal(std::path::Path::new(".")) {
+                        self.log.error(e);
+                    }
+                    ui.close();
+                }
             });
             ui.menu_button("Edit", |ui| {
                 self.menu_item(ui, "Undo", "Ctrl+Z", self.doc.can_undo(), Action::Undo);
@@ -351,6 +403,11 @@ impl Editor {
         }
     }
 
+    pub fn projects_manager(&mut self) {
+        let parent = crate::projects::default_projects_folder().display().to_string();
+        self.dialog = Some(Dialog::Projects { name: "My Game".into(), parent });
+    }
+
     pub fn open_dialog(&mut self) {
         let files = filesystem::list_scene_files(SCENES_DIR);
         self.dialog = Some(Dialog::OpenScene { files });
@@ -381,7 +438,7 @@ impl Editor {
 
     /// Carry out an action. `discard` means the user already agreed to lose changes.
     fn apply(&mut self, action: Action, discard: bool, world: &mut World) {
-        let replaces_doc = matches!(action, Action::NewScene | Action::OpenScene(_) | Action::Quit);
+        let replaces_doc = matches!(action, Action::NewScene | Action::OpenScene(_) | Action::Quit | Action::SwitchProject(_));
         if replaces_doc && !discard && self.doc.is_dirty() {
             self.dialog = Some(Dialog::Unsaved { then: action });
             return;
@@ -408,6 +465,14 @@ impl Editor {
             },
             Action::SaveAs(path) => self.save_to(path),
             Action::Quit => self.quit = true,
+            Action::SwitchProject(dir) => match crate::projects::relaunch(&dir) {
+                Ok(()) => {
+                    self.global.remember(&dir);
+                    self.global.save();
+                    self.quit = true;
+                }
+                Err(e) => self.log.error(e),
+            },
             Action::Play => match self.doc.path.clone() {
                 Some(path) => {
                     self.save_to(path.clone());
@@ -489,6 +554,16 @@ impl Editor {
             Dialog::OpenScene { files } => self.open_scene_dialog(ctx, files),
             Dialog::SaveAs { name, then } => self.save_as_ui(ctx, name, then),
             Dialog::Unsaved { then } => self.unsaved_dialog(ctx, world, then),
+            Dialog::Projects { name, parent } => self.projects_dialog(ctx, name, parent),
+            Dialog::ProjectSettings { draft, blender } => self.project_settings_dialog(ctx, draft, blender),
+            Dialog::FileName { op, name } => {
+                let op = op.clone();
+                self.file_name_dialog(ctx, &op, name)
+            }
+            Dialog::DeleteFile { path } => {
+                let path = path.clone();
+                self.delete_file_dialog(ctx, &path)
+            }
             Dialog::Shortcuts => info_dialog(ctx, "Controls & Shortcuts", shortcuts_ui),
             Dialog::About => info_dialog(ctx, "About", |ui| {
                 ui.label("Vulkano Editor");

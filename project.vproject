@@ -1,0 +1,6 @@
+(
+    name: "Vulkano Sandbox",
+    main_scene: "",
+    autoload: [],
+    sky: "data/skybox/citrus_orchard_road_puresky_4k.hdr",
+)

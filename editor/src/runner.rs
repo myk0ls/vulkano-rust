@@ -49,10 +49,16 @@ impl GameRunner {
     pub fn start(&mut self, scene: &Path, log: &mut Log) {
         self.stop(log);
         log.info(format!("Running {} (building the game if needed)…", scene.display()));
+        // cargo runs in the engine's workspace; the game then moves into the project, so
+        // projects can live anywhere.
+        let project = std::env::current_dir().unwrap_or_default();
         let spawned = Command::new("cargo")
+            .current_dir(vulkano_engine::core::project::engine_dir())
             // JSON keeps compiler output apart from the game's, so warnings stay out of
             // the Output dock and only build errors are shown.
             .args(["run", "--release", "--quiet", "--message-format=json", "-p", "vulkano-game", "--"])
+            .arg("--project")
+            .arg(&project)
             .arg(scene)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

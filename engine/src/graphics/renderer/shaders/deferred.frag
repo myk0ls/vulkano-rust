@@ -10,13 +10,18 @@ layout(location = 5) in vec3 in_tangent;
 layout(location = 6) in float in_tangent_w;
 layout(location = 7) flat in uint in_override_index;
 
-// Must match GpuMaterial in asset_manager.rs (std430, 5x 4-byte fields = 20 bytes each)
+// Must match GpuMaterial in asset_manager.rs (std430, 64 bytes each)
 struct Material {
     uint albedo_tex;
-    uint normal_tex; // NO_TEXTURE = 0xFFFFFFFF
-    uint mr_tex; // NO_TEXTURE = 0xFFFFFFFF; R=metallic, G=roughness
+    uint normal_tex;   // NO_TEXTURE = 0xFFFFFFFF
+    uint mr_tex;       // NO_TEXTURE = 0xFFFFFFFF; R=metallic, G=roughness
+    uint emissive_tex; // NO_TEXTURE = 0xFFFFFFFF
+    vec4 base_color;   // multiplies the albedo texture
+    vec4 emissive;     // rgb, strength included
     float metallic_factor;
     float roughness_factor;
+    float alpha_cutoff; // 0 = opaque
+    float _pad;
 };
 
 layout(set = 1, binding = 0) readonly buffer MaterialArray {
@@ -69,9 +74,12 @@ vec4 material_params[2];
 void main() {
     Material mat = materials.data[in_material_index];
 
-    vec4 albedo = texture(textures[nonuniformEXT(mat.albedo_tex)], in_tex_coords);
-    if (albedo.a < 0.5)
+    vec4 albedo = texture(textures[nonuniformEXT(mat.albedo_tex)], in_tex_coords) * mat.base_color;
+    if (albedo.a < mat.alpha_cutoff)
         discard;
+    vec3 emission = mat.emissive.rgb;
+    if (mat.emissive_tex != 0xFFFFFFFFu)
+        emission *= texture(textures[nonuniformEXT(mat.emissive_tex)], in_tex_coords).rgb;
 
     // Perturb normal from normal map if present and tangent data is valid
     vec3 N = normalize(in_normal);
@@ -107,7 +115,7 @@ void main() {
     Surface s;
     s.albedo = albedo.rgb * o.tint.rgb;
     s.normal = finalNormal;
-    s.emissive = o.emissive.rgb;
+    s.emissive = emission + o.emissive.rgb;
     s.metallic = o.pbr.x >= 0.0 ? o.pbr.x : metallic;
     s.roughness = o.pbr.y >= 0.0 ? o.pbr.y : roughness;
     s.uv = in_tex_coords;

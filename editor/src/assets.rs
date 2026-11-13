@@ -66,6 +66,14 @@ impl ModelLibrary {
                 self.failed.insert(path.clone());
                 continue;
             }
+            // A .blend is exported by Blender first; report why if that fails.
+            if vulkano_engine::assets::blend::is_blend(path) {
+                if let Err(e) = vulkano_engine::assets::blend::convert(path) {
+                    errors.push(e);
+                    self.failed.insert(path.clone());
+                    continue;
+                }
+            }
             // The glTF loader panics on files it can't read; a bad import must not take
             // the whole editor and the user's unsaved work down with it.
             let result = catch_unwind(AssertUnwindSafe(|| {

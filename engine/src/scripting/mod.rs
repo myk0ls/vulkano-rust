@@ -319,6 +319,18 @@ impl ScriptRuntime {
         self.context.borrow().registry.clone()
     }
 
+    /// Like `reset`, but the scripts, timers and connections of `keep` carry on, as an
+    /// autoload's do across scene changes.
+    pub fn reset_keeping(&mut self, keep: &HashSet<EntityId>) {
+        let mut context = self.context.borrow_mut();
+        context.running.retain(|key, _| keep.contains(&key.0));
+        context.pending.clear();
+        context.connections.retain(|c| keep.contains(&c.source) && keep.contains(&c.target.0));
+        context.timers.retain(|t| keep.contains(&t.owner.0));
+        context.destroy.clear();
+        context.early_vars.clear();
+    }
+
     /// Forget every running script, connection, and timer, for loading a new scene.
     /// Global values set with `set_global` are kept.
     pub fn reset(&mut self) {

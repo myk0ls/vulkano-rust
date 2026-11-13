@@ -1,7 +1,8 @@
 //! A scene editor for the engine, with a layout and controls modelled on Godot.
 //!
-//! Usage: `vulkano-editor [scene.vscene] [--automation steps.txt]`, run from the project
-//! root so that `data/`, `scenes/`, and `scripts/` are found.
+//! Usage: `vulkano-editor [--project DIR | DIR] [scene.vscene] [--automation steps.txt]`.
+//! Without a project, the one around the current directory is opened; outside any
+//! project, the project manager is shown.
 
 mod assets;
 mod automation;
@@ -10,6 +11,8 @@ mod document;
 mod editor;
 mod log;
 mod panels;
+mod project_ui;
+mod projects;
 mod runner;
 mod settings;
 mod theme;
@@ -26,9 +29,9 @@ use vulkano::format::Format;
 use vulkano::image::ImageUsage;
 use vulkano::swapchain::PresentMode;
 use vulkano_engine::core::application::{Application, Game};
+use vulkano_engine::core::project::Project;
 use vulkano_engine::graphics::renderer::RendererConfig;
 
-const SKY: &str = "data/skybox/citrus_orchard_road_puresky_4k.hdr";
 /// The editor doesn't need to run the GPU flat out. No vsync, so input stays responsive.
 const MIN_FRAME_TIME: Duration = Duration::from_micros(1_000_000 / 144);
 
@@ -51,16 +54,22 @@ impl Game for EditorWorld {
 }
 
 struct Args {
+    project: Option<std::path::PathBuf>,
     scene: Option<String>,
     automation: Option<String>,
 }
 
 fn parse_args() -> Args {
-    let mut args = Args { scene: None, automation: None };
+    let mut args = Args { project: None, scene: None, automation: None };
     let mut iter = std::env::args().skip(1);
     while let Some(arg) = iter.next() {
+        let path = std::path::Path::new(&arg);
         if arg == "--automation" {
             args.automation = iter.next();
+        } else if arg == "--project" {
+            args.project = iter.next().map(Into::into);
+        } else if path.is_dir() || arg.ends_with(vulkano_engine::core::project::PROJECT_FILE) {
+            args.project = Some(if path.is_dir() { path.into() } else { path.parent().unwrap_or(path).into() });
         } else {
             args.scene = Some(arg);
         }
@@ -77,8 +86,22 @@ fn main() {
         })
     });
 
-    if !std::path::Path::new(SKY).is_file() {
-        eprintln!("Could not find {SKY}. Run the editor from the project root.");
+    // Open the project: the one asked for, or the one we're in. Its folder becomes the
+    // current directory, so every path in it is relative to it.
+    let project_dir = args
+        .project
+        .clone()
+        .or_else(|| std::env::current_dir().ok().and_then(|dir| Project::find(&dir)));
+    let project = project_dir.as_deref().and_then(|dir| match Project::enter(dir) {
+        Ok(project) => Some(project),
+        Err(e) => {
+            eprintln!("{e}");
+            None
+        }
+    });
+    let sky = project.as_ref().map_or_else(vulkano_engine::core::project::default_sky, Project::sky_path);
+    if !std::path::Path::new(&sky).is_file() {
+        eprintln!("Could not find the sky {sky}.");
         std::process::exit(2);
     }
 
@@ -98,11 +121,25 @@ fn main() {
         config,
     );
     app.add_engine_uniques();
-    let mut environment = app.bake_environment(SKY);
+    let mut environment = app.bake_environment(&sky);
     app.build_unified_geometry();
 
     let settings = settings::Settings::load();
     let mut editor = Editor::new(settings.clone());
+    vulkano_engine::assets::blend::set_blender_path(editor.global.blender_path());
+    match &project {
+        Some(p) => {
+            editor.log.info(format!("Opened the project {} ({}).", p.name, projects::absolute(std::path::Path::new(".")).display()));
+            editor.global.remember(std::path::Path::new("."));
+            editor.global.save();
+        }
+        None if automation.is_none() => {
+            editor.log.info("No project is open. Open or create one.");
+            editor.projects_manager();
+        }
+        None => {}
+    }
+    editor.project = project;
     app.renderer.set_offscreen_extent(editor.viewport.wanted_extent);
 
     let video = app.sdl.video().unwrap();
@@ -249,6 +286,21 @@ fn main() {
         // ── Things that must happen between frames ─────────────────────────────
         // Importing blocks, so first show one frame saying so.
         let mut missing = library.missing_in_world(app.game.get_world());
+        // Generated shapes build at once, so they skip the "Importing…" dialog: it takes
+        // keyboard focus, and typing a size would lose it after every digit.
+        let (shapes, files): (Vec<String>, Vec<String>) =
+            missing.into_iter().partition(|p| vulkano_engine::assets::shapes::is_shape(p));
+        missing = files;
+        if !shapes.is_empty() {
+            let (loaded, errors) = library.load(app.game.get_world(), &shapes);
+            for error in errors {
+                editor.log.error(error);
+            }
+            if loaded {
+                app.sync_loaded_models();
+            }
+            editor.models = library.models.clone();
+        }
         if let Some((prefab, _)) = &editor.pending_prefab {
             missing.extend(library.missing_in_scene(prefab));
         }
@@ -259,7 +311,12 @@ fn main() {
         }
         if !missing.is_empty() {
             if editor.busy.is_none() {
-                editor.busy = Some(format!("Importing {} model(s)…", missing.len()));
+                let blend = missing.iter().any(|p| vulkano_engine::assets::blend::is_blend(p));
+                editor.busy = Some(if blend {
+                    format!("Importing {} model(s)… Blender is exporting the .blend files, which can take a while.", missing.len())
+                } else {
+                    format!("Importing {} model(s)…", missing.len())
+                });
             } else {
                 let (loaded, errors) = library.load(app.game.get_world(), &missing);
                 for error in errors {

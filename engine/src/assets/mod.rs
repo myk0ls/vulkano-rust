@@ -1,5 +1,6 @@
 pub mod animation;
 pub mod asset_manager;
+pub mod blend;
 pub mod gltf_loader;
 pub mod material;
 pub mod shapes;

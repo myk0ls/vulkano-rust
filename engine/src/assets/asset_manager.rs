@@ -34,10 +34,18 @@ pub struct GpuAABB {
 #[repr(C)]
 pub struct GpuMaterial {
     pub albedo_tex_idx: u32,
-    pub normal_tex_idx: u32, // NO_TEXTURE if absent
-    pub mr_tex_idx: u32,     // NO_TEXTURE if absent; R=metallic, G=roughness
+    pub normal_tex_idx: u32,   // NO_TEXTURE if absent
+    pub mr_tex_idx: u32,       // NO_TEXTURE if absent; R=metallic, G=roughness
+    pub emissive_tex_idx: u32, // NO_TEXTURE if absent
+    /// Multiplies the albedo texture. White when the colour is already baked into it.
+    pub base_color_factor: [f32; 4],
+    /// rgb = emission (strength included); a unused.
+    pub emissive: [f32; 4],
     pub metallic_factor: f32,
     pub roughness_factor: f32,
+    /// Alpha below this is cut out; 0 keeps every pixel.
+    pub alpha_cutoff: f32,
+    pub _pad: f32,
 }
 
 pub struct UnifiedGeometry {
@@ -146,6 +154,38 @@ impl AssetManager {
                 },
             );
         }
+        if !self.models.contains_key(filepath) && crate::assets::blend::is_blend(filepath) {
+            // Kept under the .blend's own path, so scenes refer to the .blend.
+            match crate::assets::blend::convert(filepath) {
+                Ok(glb) => {
+                    let loader = LoaderGLTF::new(&glb.to_string_lossy(), [0.0, 0.0, 0.0]);
+                    self.models.insert(
+                        filepath.to_string(),
+                        Model {
+                            meshes: loader.get_meshes(),
+                            draw_range: 0..0,
+                            node_tree: loader.get_node_tree(),
+                            skins: loader.get_skins(),
+                            animations: loader.get_animations(),
+                        },
+                    );
+                }
+                Err(e) => {
+                    // An empty model, so a missing Blender is reported once, not every frame.
+                    eprintln!("{e}");
+                    self.models.insert(
+                        filepath.to_string(),
+                        Model {
+                            meshes: Vec::new(),
+                            draw_range: 0..0,
+                            node_tree: NodeTree { nodes: Vec::new(), roots: Vec::new() },
+                            skins: Vec::new(),
+                            animations: Vec::new(),
+                        },
+                    );
+                }
+            }
+        }
         if !self.models.contains_key(filepath) {
             let loader = LoaderGLTF::new(filepath, [0.0, 0.0, 0.0]);
             let new_model = Model {
@@ -242,6 +282,14 @@ impl AssetManager {
                     mesh.normal_texture.as_ref(),
                 );
                 let mr_idx = push_tex(&mut textures, &mut texture_dedup, mesh.mr_texture.as_ref());
+                let emissive_idx = push_tex(&mut textures, &mut texture_dedup, mesh.emissive_texture.as_ref());
+                // Without a texture, the colour was baked into the 1x1 albedo texture.
+                let base_color_factor = if mesh.material.pbr.base_color_texture.is_some() {
+                    mesh.material.pbr.base_color_factor
+                } else {
+                    [1.0; 4]
+                };
+                let [er, eg, eb] = mesh.material.emissive_factor;
 
                 let roughness = mesh.material.pbr.roughness_factor.clamp(0.05, 1.0);
 
@@ -250,8 +298,13 @@ impl AssetManager {
                     albedo_tex_idx: albedo_idx,
                     normal_tex_idx: normal_idx,
                     mr_tex_idx: mr_idx,
+                    emissive_tex_idx: emissive_idx,
+                    base_color_factor,
+                    emissive: [er, eg, eb, 0.0],
                     metallic_factor: mesh.material.pbr.metallic_factor,
                     roughness_factor: roughness,
+                    alpha_cutoff: mesh.material.alpha_cutoff,
+                    _pad: 0.0,
                 });
 
                 mesh_draws.push(MeshDrawInfo {

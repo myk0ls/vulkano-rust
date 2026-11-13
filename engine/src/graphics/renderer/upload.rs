@@ -179,6 +179,14 @@ impl Renderer {
             mesh.mr_texture =
                 Some(self.upload_raw_to_gpu(pixels, width, height, Format::R8G8_UNORM));
         }
+        if let Some(emissive) = &mesh.material.emissive_texture {
+            mesh.emissive_texture = Some(self.upload_raw_to_gpu(
+                emissive.as_raw().clone(),
+                emissive.width(),
+                emissive.height(),
+                Format::R8G8B8A8_SRGB,
+            ));
+        }
     }
 
     pub fn upload_raw_to_gpu(

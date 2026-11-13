@@ -5,6 +5,12 @@ use std::sync::Arc;
 pub struct Material {
     pub pbr: PbrMaterial,
     pub normal: Option<NormalMap>,
+    /// Light the surface gives off, already multiplied by its strength. With a texture,
+    /// this multiplies it.
+    pub emissive_factor: [f32; 3],
+    pub emissive_texture: Option<Arc<RgbaImage>>,
+    /// Pixels with less alpha than this are cut out. 0 draws every pixel (opaque).
+    pub alpha_cutoff: f32,
 }
 
 #[derive(Clone, Debug)]

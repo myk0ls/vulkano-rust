@@ -587,7 +587,7 @@ impl EditableComponent for Object3D {
         vec![Field::hinted(
             "model",
             FieldValue::Text(self.model.id.clone()),
-            FieldHint::Asset(&["glb", "gltf"]),
+            FieldHint::Asset(&["glb", "gltf", "blend"]),
         )]
     }
     fn set_field(&mut self, name: &str, value: &FieldValue) {

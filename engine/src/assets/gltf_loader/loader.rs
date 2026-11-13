@@ -184,6 +184,7 @@ fn collect_meshes(
             texture: None,
             normal_texture: None,
             mr_texture: None,
+            emissive_texture: None,
             is_skinned,
         });
     }
@@ -406,6 +407,22 @@ fn load_material(material: &gltf::Material, images: &[gltf::image::Data]) -> Mat
         }
     });
 
+    // Blender's Emission colour and strength arrive as the factor and the
+    // KHR_materials_emissive_strength extension.
+    let strength = material.emissive_strength().unwrap_or(1.0);
+    let emissive_factor = material.emissive_factor().map(|c| c * strength);
+    let emissive_texture = material.emissive_texture().map(|info| {
+        let img = gltf_image_to_dynamic(&images[info.texture().source().index()]);
+        Arc::new(img.to_rgba8())
+    });
+    let alpha_cutoff = match material.alpha_mode() {
+        gltf::material::AlphaMode::Opaque => 0.0,
+        gltf::material::AlphaMode::Mask => material.alpha_cutoff().unwrap_or(0.5),
+        // Blended surfaces aren't sorted; cutting them at half is the closest a deferred
+        // renderer gets.
+        gltf::material::AlphaMode::Blend => 0.5,
+    };
+
     Material {
         pbr: PbrMaterial {
             base_color_factor,
@@ -416,5 +433,8 @@ fn load_material(material: &gltf::Material, images: &[gltf::image::Data]) -> Mat
             roughness_texture,
         },
         normal,
+        emissive_factor,
+        emissive_texture,
+        alpha_cutoff,
     }
 }

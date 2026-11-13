@@ -18,6 +18,7 @@ use vulkano_engine::scene::components::animator::Animator;
 use vulkano_engine::scene::components::delta_time::DeltaTime;
 use vulkano_engine::scene::components::directional_light::DirectionalLight;
 use vulkano_engine::scene::components::object3d::Object3D;
+use vulkano_engine::core::project::Project;
 use vulkano_engine::scene::scene_file::{CurrentScene, SceneFile};
 
 use vulkano_engine::{
@@ -32,13 +33,15 @@ use crate::player::Player;
 pub struct MyApp {
     world: World,
     scene_path: Option<String>,
+    project: Option<Project>,
 }
 
 impl MyApp {
-    pub fn new(scene_path: Option<String>) -> Self {
+    pub fn new(scene_path: Option<String>, project: Option<Project>) -> Self {
         Self {
             world: World::new(),
             scene_path,
+            project,
         }
     }
 
@@ -47,6 +50,13 @@ impl MyApp {
     fn init_from_scene(&mut self, path: &str) {
         let scene = SceneFile::load(path).unwrap_or_else(|e| panic!("{e}"));
         let registry = crate::component_registry();
+        // Autoloads come first, so the scene's scripts can find them.
+        if let Some(project) = self.project.clone() {
+            for warning in project.spawn_autoloads(&mut self.world, &registry) {
+                eprintln!("{warning}");
+            }
+            self.world.add_unique(project);
+        }
         for warning in scene.instantiate(&mut self.world, &registry) {
             eprintln!("{path}: {warning}");
         }

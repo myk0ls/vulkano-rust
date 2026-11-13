@@ -174,7 +174,7 @@ impl Builder {
                 roughness_factor: 0.6,
                 ..Default::default()
             },
-            normal: None,
+            ..Default::default()
         };
         Mesh {
             vertices: self.vertices,
@@ -183,6 +183,7 @@ impl Builder {
             texture: None,
             normal_texture: None,
             mr_texture: None,
+            emissive_texture: None,
             is_skinned: false,
         }
     }
