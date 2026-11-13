@@ -59,7 +59,7 @@ pub const API_HELP: &[(&str, &[(&str, &str)])] = &[
             ("e.play_animation(\"Walk\")", "On an Animator."),
             ("e.get(\"Comp\", \"field\"), e.set(...)", "Any field of any component, as in the Inspector."),
             ("e.has(\"Comp\"), e.add(...), e.remove(...)", "Check, add, or remove a component."),
-            ("e.get_var(\"hp\"), e.set_var(\"hp\", 3)", "Another entity's script values."),
+            ("e.get_var(\"hp\"), e.set_var(\"hp\", 3)", "Another entity's script values. Works right after instantiate: the values are there when its on_start runs."),
             ("e.set_text(\"Score: 3\")", "On a UiElement."),
             ("e.valid", "False once destroyed."),
         ],

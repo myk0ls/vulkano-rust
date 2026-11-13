@@ -10,6 +10,9 @@
 //   V             swap shoulders
 //   Escape        free or capture the mouse
 //
+// The hero is on `team` (a group, as minions and towers are), has health, and can be hurt
+// through `damage(amount, source)`. It respawns where it started after `respawn_time`.
+//
 // -Y is up in the engine, so "up" offsets below subtract from y.
 
 export let camera_name = "PlayerCamera";
@@ -31,10 +34,15 @@ export let aim_fov = 55.0;
 export let turn_speed = 16.0;
 export let fire_interval = 0.12;
 export let projectile = "prefabs/projectile.vscene";
+export let team = "blue";
+export let max_health = 600.0;
+export let regen_per_second = 12.0;
+export let regen_delay = 4.0;
+export let respawn_time = 6.0;
 
-// What shots and the camera collide with: the level (layer 1) and targets (layer 3).
-// The player is on layer 2, so neither ever hits the player.
-fn solid_layers() {
+// What the crosshair aims at: the level (layer 1), and minions and towers (layer 3). The
+// hero is on layer 2, so it never aims at itself.
+fn aim_layers() {
     layer(1) | layer(3)
 }
 
@@ -58,8 +66,19 @@ fn on_start() {
     this.dash_dir = vec3(0.0, 0.0, 1.0);
     this.fire_ready = 0.0;
     this.hit_flash = 0.0;
-    this.score = 0;
+    this.hero_kills = 0;
+    this.minion_kills = 0;
     this.camera_position = me().position;
+    this.spawn_point = me().position;
+    this.health = this.max_health;
+    this.since_hurt = 100.0;
+    this.hurt_flash = 0.0;
+    this.tower_warning = 0.0;
+    this.dead = false;
+    this.respawn_left = 0.0;
+    this.ended = false;
+    add_to_group(this.team);
+    add_to_group("heroes");
     set_mouse_captured(true);
     this.captured = true;
 }
@@ -89,9 +108,22 @@ fn on_update(dt) {
     }
 
     this.look(dt);
-    this.move(dt);
-    this.turn(dt);
-    this.shoot(dt);
+    if this.dead || this.ended {
+        let hero = me();
+        hero.move_velocity = vec3(0.0, 0.0, 0.0);
+        this.velocity = vec3(0.0, 0.0, 0.0);
+        if this.dead && !this.ended {
+            this.respawn_left -= dt;
+            if this.respawn_left <= 0.0 {
+                this.respawn();
+            }
+        }
+    } else {
+        this.move(dt);
+        this.turn(dt);
+        this.shoot(dt);
+        this.regenerate(dt);
+    }
     this.update_hud(dt);
 }
 
@@ -172,7 +204,7 @@ fn shoot(dt) {
     // from the hero's hand, so shots meet the crosshair even though the camera is off
     // to the side.
     let look = this.aim_forward();
-    let hit = raycast_mask(this.camera_position, look, 300.0, this.solid_layers());
+    let hit = raycast_mask(this.camera_position, look, 300.0, this.aim_layers());
     let target = if hit != () { hit.position } else { this.camera_position + look * 300.0 };
 
     let hero = me().position;
@@ -180,17 +212,83 @@ fn shoot(dt) {
     let shot = instantiate(this.projectile, muzzle);
     if shot != () {
         shot.look_at(target);
+        shot.set_var("team", this.team);
+        shot.set_var("source", me());
     }
 }
 
-// Called by projectiles that hit a target, for a hit marker.
+fn regenerate(dt) {
+    this.since_hurt += dt;
+    if this.since_hurt >= this.regen_delay {
+        this.health = clamp(this.health + this.regen_per_second * dt, 0.0, this.max_health);
+    }
+}
+
+fn damage(amount, source) {
+    if this.dead || this.ended {
+        return;
+    }
+    this.health -= amount;
+    this.since_hurt = 0.0;
+    this.hurt_flash = 0.25;
+    if this.health <= 0.0 {
+        this.die();
+    }
+}
+
+fn die() {
+    this.health = 0.0;
+    this.dead = true;
+    this.respawn_left = this.respawn_time;
+    // Out of the fight: nothing targets a hero that isn't in its team's group.
+    remove_from_group(this.team);
+    let hero = me();
+    hero.visible = false;
+    hero.position = this.spawn_point;
+    if this.visor != () {
+        let visor = this.visor;
+        visor.visible = false;
+    }
+}
+
+fn respawn() {
+    this.dead = false;
+    this.health = this.max_health;
+    this.since_hurt = 100.0;
+    let hero = me();
+    hero.position = this.spawn_point;
+    hero.visible = true;
+    if this.visor != () {
+        let visor = this.visor;
+        visor.visible = true;
+    }
+    add_to_group(this.team);
+}
+
+// Called by the hero's shots when they hit an enemy, for a hit marker.
 fn hit_confirmed() {
     this.hit_flash = 0.12;
 }
 
-// Called by targets when they're destroyed.
-fn target_destroyed() {
-    this.score += 1;
+// Called by whatever this hero finished off.
+fn killed(what) {
+    if what == "minion" {
+        this.minion_kills += 1;
+    } else {
+        this.hero_kills += 1;
+    }
+}
+
+// Called by an enemy tower each time it fires at this hero.
+fn targeted_by_tower() {
+    this.tower_warning = 1.3;
+}
+
+// Called by the Game when a tower falls.
+fn game_over() {
+    this.ended = true;
+    this.captured = false;
+    set_mouse_captured(false);
 }
 
 fn update_hud(dt) {
@@ -206,7 +304,28 @@ fn update_hud(dt) {
     }
     let score = find("Score");
     if score != () {
-        score.set_text(`Targets down: ${this.score}`);
+        score.set_text(`Minions killed: ${this.minion_kills}`);
+    }
+    let health = find("HealthBar");
+    if health != () {
+        health.set("UiElement", "value", this.health / this.max_health);
+        health.set_text(`${this.health.round().to_int()} / ${this.max_health.round().to_int()}`);
+        // Red while recently hurt, green otherwise.
+        this.hurt_flash -= dt;
+        let color = if this.hurt_flash > 0.0 { vec3(0.9, 0.2, 0.15) } else { vec3(0.3, 0.8, 0.3) };
+        health.set("UiElement", "text_color", color);
+    }
+    let death = find("DeathMessage");
+    if death != () {
+        death.visible = this.dead && !this.ended;
+        if this.dead {
+            death.set_text(`You died. Respawning in ${this.respawn_left.ceiling().to_int()}`);
+        }
+    }
+    this.tower_warning -= dt;
+    let warning = find("TowerWarning");
+    if warning != () {
+        warning.visible = this.tower_warning > 0.0 && !this.dead;
     }
 }
 
@@ -233,7 +352,9 @@ fn on_late_update(dt) {
     let reach = arm.length();
     let direction = arm.normalized();
     let room = reach;
-    let hit = raycast_mask(pivot, direction, reach + 0.3, this.solid_layers());
+    // Only the level (layer 1, which towers are also on) pushes the camera in; minions
+    // walking past don't.
+    let hit = raycast_mask(pivot, direction, reach + 0.3, layer(1));
     if hit != () {
         room = clamp(hit.distance - 0.3, 0.2, reach);
     }

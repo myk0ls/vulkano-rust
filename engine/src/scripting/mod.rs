@@ -208,6 +208,11 @@ pub(crate) struct Context {
     connections: Vec<Connection>,
     timers: Vec<Timer>,
     destroy: Vec<EntityId>,
+    /// Values given with set_var to entities whose scripts haven't started yet, such as
+    /// one just spawned. They're added to its scripts' state when they start.
+    /// The frame each was set in: they're dropped once that entity's scripts have had a
+    /// chance to start.
+    early_vars: HashMap<EntityId, (u64, rhai::Map)>,
     input: InputState,
     globals: rhai::Map,
     prefabs: HashMap<String, Result<SceneFile, String>>,
@@ -278,6 +283,7 @@ impl ScriptRuntime {
             connections: Vec::new(),
             timers: Vec::new(),
             destroy: Vec::new(),
+            early_vars: HashMap::new(),
             input: InputState::default(),
             globals: rhai::Map::new(),
             prefabs: HashMap::new(),
@@ -322,6 +328,7 @@ impl ScriptRuntime {
         context.connections.clear();
         context.timers.clear();
         context.destroy.clear();
+        context.early_vars.clear();
     }
 
     /// Forget compiled scripts so changed files are read again.
@@ -411,7 +418,14 @@ impl ScriptRuntime {
             }
         }
         // Scripts removed from entities stop.
-        self.context.borrow_mut().running.retain(|key, _| alive.contains(key));
+        {
+            let mut context = self.context.borrow_mut();
+            context.running.retain(|key, _| alive.contains(key));
+            // Values from before last frame went to scripts that have now started, or the
+            // entity has no scripts for them.
+            let frame = context.frame;
+            context.early_vars.retain(|_, (set_in, _)| *set_in + 1 >= frame);
+        }
 
         // Every script's update.
         let keys: Vec<InstanceKey> = self.context.borrow().running.keys().cloned().collect();
@@ -456,6 +470,9 @@ impl ScriptRuntime {
         for export in &script.defaults {
             let value = instance.exports.get(&export.name).unwrap_or(&export.default);
             state.insert(export.name.as_str().into(), from_field(value));
+        }
+        if let Some((_, early)) = self.context.borrow().early_vars.get(&key.0) {
+            state.extend(early.clone());
         }
         self.context
             .borrow_mut()
@@ -667,6 +684,10 @@ pub(crate) fn spawn_prefab(context: &mut Context, path: &str) -> Result<Vec<Enti
             eprintln!("[script] {path}: {warning}");
         }
         spawned.push(entity);
+    }
+    // Shapes give themselves models and colliders first, so solid shapes get bodies now.
+    if crate::scene::components::shape3d::shape3d_system(world) {
+        context.requests.models_loaded = true;
     }
     if world.get_unique::<&PhysicsEngine>().is_ok() {
         physics_bodies_creation_system(world);
@@ -888,6 +909,36 @@ mod tests {
         f.frame();
         f.frame();
         assert_eq!(f.x(target), 5.0);
+    }
+
+    #[test]
+    fn values_set_on_a_new_entity_reach_its_on_start() {
+        let mut f = Fixture::new();
+        let child = f.file("child.rhai", "fn on_start() { set_position(this.speed, 0, 0); }");
+        let prefab = SceneFile {
+            entities: vec![crate::scene::scene_file::EntityData {
+                components: vec![
+                    crate::scene::scene_file::ComponentData::named("Name").with("name", FieldValue::Text("Child".into())),
+                    crate::scene::scene_file::ComponentData::named("Transform"),
+                    crate::scene::scene_file::ComponentData::named("Scripts").with(
+                        "scripts",
+                        FieldValue::Scripts(vec![ScriptInstance { path: child, ..Default::default() }]),
+                    ),
+                ],
+            }],
+            ..Default::default()
+        };
+        let path = f.file("child.vscene", "");
+        prefab.save(&path).unwrap();
+        let spawner = format!(
+            "fn on_start() {{ let c = instantiate({path:?}); c.set_var(\"speed\", 7.0); this.c = c; }} fn on_update(dt) {{ if frame() == 1 {{ set_position(this.c.get_var(\"speed\"), 0, 0); }} }}"
+        );
+        let spawner = f.entity("Spawner", Some(&spawner));
+        f.frame();
+        assert_eq!(f.x(spawner), 7.0, "readable before the child starts");
+        f.frame();
+        let child = f.world.run(|names: View<Name>| names.iter().with_id().find(|(_, n)| n.0 == "Child").map(|(id, _)| id)).unwrap();
+        assert_eq!(f.x(child), 7.0);
     }
 
     #[test]

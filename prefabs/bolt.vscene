@@ -1,0 +1,11 @@
+(
+    entities: [
+        (components: [
+            (component: "Name", fields: {"name": Text("Bolt")}),
+            (component: "Transform", fields: {"position": Vec3((0.0, 0.0, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)}),
+            (component: "Shape3D", fields: {"shape": Text("Sphere"), "size": Vec3((0.22, 0.22, 0.22)), "collision": Bool(false)}),
+            (component: "MaterialOverride", fields: {"tint": Vec3((1.0, 1.0, 1.0)), "emissive": Vec3((1.0, 1.0, 1.0)), "emissive_strength": Float(5.0)}),
+            (component: "Scripts", fields: {"scripts": Scripts([(path: "scripts/homing_shot.rhai", exports: {"speed": Float(16.0)})])}),
+        ]),
+    ],
+)

@@ -1,0 +1,14 @@
+(
+    entities: [
+        (components: [
+            (component: "Name", fields: {"name": Text("Minion")}),
+            (component: "Transform", fields: {"position": Vec3((0.0, 0.0, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)}),
+            (component: "Shape3D", fields: {"shape": Text("Capsule"), "size": Vec3((0.6, 1.1, 0.6)), "collision": Bool(false)}),
+            (component: "MaterialOverride", fields: {"tint": Vec3((0.5, 0.5, 0.5)), "emissive": Vec3((1.0, 1.0, 1.0)), "emissive_strength": Float(0.0)}),
+            (component: "RigidBody", fields: {"body_type": Text("KinematicVelocity")}),
+            (component: "Collider", fields: {"shape": Text("Capsule"), "half_height": Float(0.25), "radius": Float(0.3), "sensor": Bool(false), "collision_layer": Int(4), "collision_mask": Int(65535)}),
+            (component: "KinematicCharacter", fields: {"gravity": Float(20.0)}),
+            (component: "Scripts", fields: {"scripts": Scripts([(path: "scripts/minion.rhai", exports: {})])}),
+        ]),
+    ],
+)

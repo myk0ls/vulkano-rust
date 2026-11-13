@@ -562,6 +562,8 @@ impl<G: Game> Application<G> {
         world.add_unique(CurrentScene(path.to_string()));
         self.game.on_scene_loaded();
 
+        // Shapes add their colliders before bodies are made, or they'd be left without.
+        crate::scene::components::shape3d::shape3d_system(self.game.get_world_mut());
         crate::physics::physics_engine::physics_bodies_creation_system(self.game.get_world_mut());
         self.sync_loaded_models();
         if let Ok(env) = self.game.get_world().get_unique::<&Environment>() {

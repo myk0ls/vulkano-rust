@@ -580,7 +580,11 @@ fn register_entity(engine: &mut Engine, ctx: &Shared) {
     // Another entity's script variables.
     ctx_fn!(engine, ctx, "get_var", |c, e: &mut Entity, name: &str| {
         let context = c.borrow();
-        let mut found = Dynamic::UNIT;
+        let mut found = e
+            .id()
+            .and_then(|id| context.early_vars.get(&id))
+            .and_then(|(_, vars)| vars.get(name).cloned())
+            .unwrap_or(Dynamic::UNIT);
         for (key, running) in &context.running {
             if Some(key.0) == e.id() {
                 if let Some(map) = running.state.read_lock::<rhai::Map>() {
@@ -594,12 +598,22 @@ fn register_entity(engine: &mut Engine, ctx: &Shared) {
     });
     ctx_fn!(engine, ctx, "set_var", |c, e: &mut Entity, name: &str, value: Dynamic| {
         let mut context = c.borrow_mut();
+        let mut set = false;
         for (key, running) in context.running.iter_mut() {
             if Some(key.0) == e.id() {
                 if let Some(mut map) = running.state.write_lock::<rhai::Map>() {
                     map.insert(name.into(), value.clone());
+                    set = true;
                 }
             }
+        }
+        // Not started yet (just instantiated): its scripts get the value when they start,
+        // before on_start runs.
+        if let (false, Some(id)) = (set, e.id()) {
+            let frame = context.frame;
+            let entry = context.early_vars.entry(id).or_insert_with(|| (frame, rhai::Map::new()));
+            entry.0 = frame;
+            entry.1.insert(name.into(), value);
         }
     });
     // `invoke` is the name that works as a method: Rhai reserves `x.call(...)` for calling

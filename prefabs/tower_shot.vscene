@@ -1,0 +1,11 @@
+(
+    entities: [
+        (components: [
+            (component: "Name", fields: {"name": Text("TowerShot")}),
+            (component: "Transform", fields: {"position": Vec3((0.0, 0.0, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)}),
+            (component: "Shape3D", fields: {"shape": Text("Sphere"), "size": Vec3((0.5, 0.5, 0.5)), "collision": Bool(false)}),
+            (component: "MaterialOverride", fields: {"tint": Vec3((1.0, 1.0, 1.0)), "emissive": Vec3((1.0, 1.0, 1.0)), "emissive_strength": Float(6.0)}),
+            (component: "Scripts", fields: {"scripts": Scripts([(path: "scripts/homing_shot.rhai", exports: {"speed": Float(22.0)})])}),
+        ]),
+    ],
+)

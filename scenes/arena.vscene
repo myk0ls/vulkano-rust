@@ -73,11 +73,31 @@
             components: [
                 (
                     component: "Name",
+                    fields: {"name": Text("FPSLabel")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((0.0, 0.0, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                ),
+                (
+                    component: "Scripts",
+                    fields: {"scripts": Scripts([(path: "scripts/fps_label.rhai", exports: {})])},
+                ),
+                (
+                    component: "UiElement",
+                    fields: {"anchor": Text("TopLeft"), "background": Vec3((0.1, 0.1, 0.1)), "background_opacity": Float(0.0), "font_size": Float(18.0), "height": Float(40.0), "kind": Text("Label"), "layer": Int(0), "text": Text("FPS: "), "text_color": Vec3((1.0, 1.0, 1.0)), "value": Float(0.5), "width": Float(200.9), "x": Float(1.8199997), "y": Float(-7.0)},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
                     fields: {"name": Text("Player")},
                 ),
                 (
                     component: "Transform",
-                    fields: {"position": Vec3((0.0, -2.0, 7.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                    fields: {"position": Vec3((3.0, -1.5, 26.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
                 ),
                 (
                     component: "Shape3D",
@@ -105,7 +125,7 @@
                 ),
                 (
                     component: "Scripts",
-                    fields: {"scripts": Scripts([(path: "scripts/tps_controller.rhai", exports: {"aim_distance": Float(1.85), "camera_distance": Float(3.0)})])},
+                    fields: {"scripts": Scripts([(path: "scripts/tps_controller.rhai", exports: {})])},
                 ),
             ],
         ),
@@ -117,7 +137,7 @@
                 ),
                 (
                     component: "Transform",
-                    fields: {"position": Vec3((0.0, -2.5, 7.4)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                    fields: {"position": Vec3((3.0, -2.0, 25.6)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
                 ),
                 (
                     component: "Shape3D",
@@ -141,11 +161,255 @@
                 ),
                 (
                     component: "Transform",
-                    fields: {"position": Vec3((0.0, -3.5, 11.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                    fields: {"position": Vec3((4.0, -3.0, 30.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
                 ),
                 (
                     component: "Camera",
-                    fields: {"active": Bool(true), "far": Float(1000.0), "fov": Float(80.0), "near": Float(0.05), "pitch": Float(0.25), "yaw": Float(-1.5708)},
+                    fields: {"active": Bool(true), "far": Float(1000.0), "fov": Float(80.0), "near": Float(0.05), "pitch": Float(0.2), "yaw": Float(-1.5708)},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("Game")},
+                ),
+                (
+                    component: "Scripts",
+                    fields: {"scripts": Scripts([(path: "scripts/aram_game.rhai", exports: {})])},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("BlueTower")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((0.0, -3.025, 22.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                ),
+                (
+                    component: "Shape3D",
+                    fields: {"collision": Bool(true), "shape": Text("Cylinder"), "size": Vec3((2.4, 6.0, 2.4))},
+                ),
+                (
+                    component: "Object3D",
+                    fields: {"model": Text("shape:cylinder:2.4,6")},
+                ),
+                (
+                    component: "MaterialOverride",
+                    fields: {"emissive": Vec3((0.3, 0.6, 1.0)), "emissive_strength": Float(0.12), "metallic": Float(0.0), "override_metallic": Bool(false), "override_roughness": Bool(false), "roughness": Float(0.5), "shader": Text(""), "tint": Vec3((0.2, 0.3, 0.7))},
+                ),
+                (
+                    component: "RigidBody",
+                    fields: {"body_type": Text("Fixed")},
+                ),
+                (
+                    component: "Collider",
+                    fields: {"collision_layer": Int(5), "collision_mask": Int(65535), "half_height": Float(3.0), "radius": Float(1.2), "sensor": Bool(false), "shape": Text("Cylinder")},
+                ),
+                (
+                    component: "Scripts",
+                    fields: {"scripts": Scripts([(path: "scripts/tower.rhai", exports: {"health_bar": Text("BlueTowerBar"), "orb_name": Text("BlueTowerOrb"), "team": Text("blue")})])},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("BlueTowerOrb")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((0.0, -6.725, 22.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                ),
+                (
+                    component: "Shape3D",
+                    fields: {"collision": Bool(false), "shape": Text("Sphere"), "size": Vec3((1.0, 1.0, 1.0))},
+                ),
+                (
+                    component: "Object3D",
+                    fields: {"model": Text("shape:sphere:1")},
+                ),
+                (
+                    component: "MaterialOverride",
+                    fields: {"emissive": Vec3((0.3, 0.6, 1.0)), "emissive_strength": Float(8.0), "metallic": Float(0.0), "override_metallic": Bool(false), "override_roughness": Bool(false), "roughness": Float(0.5), "shader": Text(""), "tint": Vec3((1.0, 1.0, 1.0))},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("BlueBase")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((0.0, -0.045, 26.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                ),
+                (
+                    component: "Shape3D",
+                    fields: {"collision": Bool(false), "shape": Text("Box"), "size": Vec3((14.0, 0.04, 12.0))},
+                ),
+                (
+                    component: "Object3D",
+                    fields: {"model": Text("shape:box:14,0.04,12")},
+                ),
+                (
+                    component: "MaterialOverride",
+                    fields: {"emissive": Vec3((0.0, 0.0, 0.0)), "emissive_strength": Float(0.0), "metallic": Float(0.0), "override_metallic": Bool(false), "override_roughness": Bool(false), "roughness": Float(0.5), "shader": Text(""), "tint": Vec3((0.2, 0.3, 0.7))},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("RedTower")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((0.0, -3.025, -22.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                ),
+                (
+                    component: "Shape3D",
+                    fields: {"collision": Bool(true), "shape": Text("Cylinder"), "size": Vec3((2.4, 6.0, 2.4))},
+                ),
+                (
+                    component: "Object3D",
+                    fields: {"model": Text("shape:cylinder:2.4,6")},
+                ),
+                (
+                    component: "MaterialOverride",
+                    fields: {"emissive": Vec3((1.0, 0.3, 0.15)), "emissive_strength": Float(0.12), "metallic": Float(0.0), "override_metallic": Bool(false), "override_roughness": Bool(false), "roughness": Float(0.5), "shader": Text(""), "tint": Vec3((0.7, 0.2, 0.15))},
+                ),
+                (
+                    component: "RigidBody",
+                    fields: {"body_type": Text("Fixed")},
+                ),
+                (
+                    component: "Collider",
+                    fields: {"collision_layer": Int(5), "collision_mask": Int(65535), "half_height": Float(3.0), "radius": Float(1.2), "sensor": Bool(false), "shape": Text("Cylinder")},
+                ),
+                (
+                    component: "Scripts",
+                    fields: {"scripts": Scripts([(path: "scripts/tower.rhai", exports: {"health_bar": Text("RedTowerBar"), "orb_name": Text("RedTowerOrb"), "team": Text("red")})])},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("RedTowerOrb")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((0.0, -6.725, -22.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                ),
+                (
+                    component: "Shape3D",
+                    fields: {"collision": Bool(false), "shape": Text("Sphere"), "size": Vec3((1.0, 1.0, 1.0))},
+                ),
+                (
+                    component: "Object3D",
+                    fields: {"model": Text("shape:sphere:1")},
+                ),
+                (
+                    component: "MaterialOverride",
+                    fields: {"emissive": Vec3((1.0, 0.3, 0.15)), "emissive_strength": Float(8.0), "metallic": Float(0.0), "override_metallic": Bool(false), "override_roughness": Bool(false), "roughness": Float(0.5), "shader": Text(""), "tint": Vec3((1.0, 1.0, 1.0))},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("RedBase")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((0.0, -0.045, -26.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                ),
+                (
+                    component: "Shape3D",
+                    fields: {"collision": Bool(false), "shape": Text("Box"), "size": Vec3((14.0, 0.04, 12.0))},
+                ),
+                (
+                    component: "Object3D",
+                    fields: {"model": Text("shape:box:14,0.04,12")},
+                ),
+                (
+                    component: "MaterialOverride",
+                    fields: {"emissive": Vec3((0.0, 0.0, 0.0)), "emissive_strength": Float(0.0), "metallic": Float(0.0), "override_metallic": Bool(false), "override_roughness": Bool(false), "roughness": Float(0.5), "shader": Text(""), "tint": Vec3((0.7, 0.2, 0.15))},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("LaneWallLeft")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((-8.0, -1.025, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                ),
+                (
+                    component: "Shape3D",
+                    fields: {"collision": Bool(true), "shape": Text("Box"), "size": Vec3((0.8, 2.0, 64.0))},
+                ),
+                (
+                    component: "Object3D",
+                    fields: {"model": Text("shape:box:0.8,2,64")},
+                ),
+                (
+                    component: "MaterialOverride",
+                    fields: {"emissive": Vec3((0.0, 0.0, 0.0)), "emissive_strength": Float(0.0), "metallic": Float(0.0), "override_metallic": Bool(false), "override_roughness": Bool(false), "roughness": Float(0.5), "shader": Text(""), "tint": Vec3((0.75, 0.72, 0.68))},
+                ),
+                (
+                    component: "RigidBody",
+                    fields: {"body_type": Text("Fixed")},
+                ),
+                (
+                    component: "Collider",
+                    fields: {"collision_layer": Int(1), "collision_mask": Int(65535), "half_extents": Vec3((0.4, 1.0, 32.0)), "sensor": Bool(false), "shape": Text("Box")},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("LaneWallRight")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((8.0, -1.025, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                ),
+                (
+                    component: "Shape3D",
+                    fields: {"collision": Bool(true), "shape": Text("Box"), "size": Vec3((0.8, 2.0, 64.0))},
+                ),
+                (
+                    component: "Object3D",
+                    fields: {"model": Text("shape:box:0.8,2,64")},
+                ),
+                (
+                    component: "MaterialOverride",
+                    fields: {"emissive": Vec3((0.0, 0.0, 0.0)), "emissive_strength": Float(0.0), "metallic": Float(0.0), "override_metallic": Bool(false), "override_roughness": Bool(false), "roughness": Float(0.5), "shader": Text(""), "tint": Vec3((0.75, 0.72, 0.68))},
+                ),
+                (
+                    component: "RigidBody",
+                    fields: {"body_type": Text("Fixed")},
+                ),
+                (
+                    component: "Collider",
+                    fields: {"collision_layer": Int(1), "collision_mask": Int(65535), "half_extents": Vec3((0.4, 1.0, 32.0)), "sensor": Bool(false), "shape": Text("Box")},
                 ),
             ],
         ),
@@ -157,7 +421,7 @@
                 ),
                 (
                     component: "Transform",
-                    fields: {"position": Vec3((-5.5, -2.33, -5.5)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                    fields: {"position": Vec3((-5.0, -2.33, -6.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
                 ),
                 (
                     component: "Shape3D",
@@ -189,7 +453,7 @@
                 ),
                 (
                     component: "Transform",
-                    fields: {"position": Vec3((5.5, -2.33, -5.5)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                    fields: {"position": Vec3((5.0, -2.33, -6.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
                 ),
                 (
                     component: "Shape3D",
@@ -221,7 +485,7 @@
                 ),
                 (
                     component: "Transform",
-                    fields: {"position": Vec3((-5.5, -2.33, 5.5)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                    fields: {"position": Vec3((-5.0, -2.33, 6.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
                 ),
                 (
                     component: "Shape3D",
@@ -253,7 +517,7 @@
                 ),
                 (
                     component: "Transform",
-                    fields: {"position": Vec3((5.5, -2.33, 5.5)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                    fields: {"position": Vec3((5.0, -2.33, 6.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
                 ),
                 (
                     component: "Shape3D",
@@ -281,410 +545,6 @@
             components: [
                 (
                     component: "Name",
-                    fields: {"name": Text("Crate1")},
-                ),
-                (
-                    component: "Transform",
-                    fields: {"position": Vec3((-3.0, -0.93, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
-                ),
-                (
-                    component: "Shape3D",
-                    fields: {"collision": Bool(true), "shape": Text("Box"), "size": Vec3((2.0, 1.2, 2.0))},
-                ),
-                (
-                    component: "Object3D",
-                    fields: {"model": Text("shape:box:2,1.2,2")},
-                ),
-                (
-                    component: "MaterialOverride",
-                    fields: {"emissive": Vec3((0.0, 0.0, 0.0)), "emissive_strength": Float(0.0), "metallic": Float(0.0), "override_metallic": Bool(false), "override_roughness": Bool(false), "roughness": Float(0.5), "shader": Text(""), "tint": Vec3((0.6, 0.42, 0.25))},
-                ),
-                (
-                    component: "RigidBody",
-                    fields: {"body_type": Text("Fixed")},
-                ),
-                (
-                    component: "Collider",
-                    fields: {"collision_layer": Int(1), "collision_mask": Int(65535), "half_extents": Vec3((1.0, 0.6, 1.0)), "sensor": Bool(false), "shape": Text("Box")},
-                ),
-            ],
-        ),
-        (
-            components: [
-                (
-                    component: "Name",
-                    fields: {"name": Text("Crate2")},
-                ),
-                (
-                    component: "Transform",
-                    fields: {"position": Vec3((3.5, -0.93, 2.5)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
-                ),
-                (
-                    component: "Shape3D",
-                    fields: {"collision": Bool(true), "shape": Text("Box"), "size": Vec3((1.6, 1.2, 1.6))},
-                ),
-                (
-                    component: "Object3D",
-                    fields: {"model": Text("shape:box:1.6,1.2,1.6")},
-                ),
-                (
-                    component: "MaterialOverride",
-                    fields: {"emissive": Vec3((0.0, 0.0, 0.0)), "emissive_strength": Float(0.0), "metallic": Float(0.0), "override_metallic": Bool(false), "override_roughness": Bool(false), "roughness": Float(0.5), "shader": Text(""), "tint": Vec3((0.6, 0.42, 0.25))},
-                ),
-                (
-                    component: "RigidBody",
-                    fields: {"body_type": Text("Fixed")},
-                ),
-                (
-                    component: "Collider",
-                    fields: {"collision_layer": Int(1), "collision_mask": Int(65535), "half_extents": Vec3((0.8, 0.6, 0.8)), "sensor": Bool(false), "shape": Text("Box")},
-                ),
-            ],
-        ),
-        (
-            components: [
-                (
-                    component: "Name",
-                    fields: {"name": Text("Crate3")},
-                ),
-                (
-                    component: "Transform",
-                    fields: {"position": Vec3((4.2, -1.53, 1.2)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
-                ),
-                (
-                    component: "Shape3D",
-                    fields: {"collision": Bool(true), "shape": Text("Box"), "size": Vec3((1.2, 2.4, 1.2))},
-                ),
-                (
-                    component: "Object3D",
-                    fields: {"model": Text("shape:box:1.2,2.4,1.2")},
-                ),
-                (
-                    component: "MaterialOverride",
-                    fields: {"emissive": Vec3((0.0, 0.0, 0.0)), "emissive_strength": Float(0.0), "metallic": Float(0.0), "override_metallic": Bool(false), "override_roughness": Bool(false), "roughness": Float(0.5), "shader": Text(""), "tint": Vec3((0.6, 0.42, 0.25))},
-                ),
-                (
-                    component: "RigidBody",
-                    fields: {"body_type": Text("Fixed")},
-                ),
-                (
-                    component: "Collider",
-                    fields: {"collision_layer": Int(1), "collision_mask": Int(65535), "half_extents": Vec3((0.6, 1.2, 0.6)), "sensor": Bool(false), "shape": Text("Box")},
-                ),
-            ],
-        ),
-        (
-            components: [
-                (
-                    component: "Name",
-                    fields: {"name": Text("Platform")},
-                ),
-                (
-                    component: "Transform",
-                    fields: {"position": Vec3((0.0, -1.13, -6.5)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
-                ),
-                (
-                    component: "Shape3D",
-                    fields: {"collision": Bool(true), "shape": Text("Box"), "size": Vec3((4.0, 1.6, 4.0))},
-                ),
-                (
-                    component: "Object3D",
-                    fields: {"model": Text("shape:box:4,1.6,4")},
-                ),
-                (
-                    component: "MaterialOverride",
-                    fields: {"emissive": Vec3((0.0, 0.0, 0.0)), "emissive_strength": Float(0.0), "metallic": Float(0.0), "override_metallic": Bool(false), "override_roughness": Bool(false), "roughness": Float(0.5), "shader": Text(""), "tint": Vec3((0.75, 0.72, 0.68))},
-                ),
-                (
-                    component: "RigidBody",
-                    fields: {"body_type": Text("Fixed")},
-                ),
-                (
-                    component: "Collider",
-                    fields: {"collision_layer": Int(1), "collision_mask": Int(65535), "half_extents": Vec3((2.0, 0.8, 2.0)), "sensor": Bool(false), "shape": Text("Box")},
-                ),
-            ],
-        ),
-        (
-            components: [
-                (
-                    component: "Name",
-                    fields: {"name": Text("Ramp")},
-                ),
-                (
-                    component: "Transform",
-                    fields: {"position": Vec3((0.0, -1.11, -2.1)), "rotation": Vec3((-18.7, 0.0, 0.0)), "scale": Float(1.0)},
-                ),
-                (
-                    component: "Shape3D",
-                    fields: {"collision": Bool(true), "shape": Text("Box"), "size": Vec3((2.4, 0.3, 5.0))},
-                ),
-                (
-                    component: "Object3D",
-                    fields: {"model": Text("shape:box:2.4,0.3,5")},
-                ),
-                (
-                    component: "MaterialOverride",
-                    fields: {"emissive": Vec3((0.0, 0.0, 0.0)), "emissive_strength": Float(0.0), "metallic": Float(0.0), "override_metallic": Bool(false), "override_roughness": Bool(false), "roughness": Float(0.5), "shader": Text(""), "tint": Vec3((0.55, 0.55, 0.6))},
-                ),
-                (
-                    component: "RigidBody",
-                    fields: {"body_type": Text("Fixed")},
-                ),
-                (
-                    component: "Collider",
-                    fields: {"collision_layer": Int(1), "collision_mask": Int(65535), "half_extents": Vec3((1.2, 0.15, 2.5)), "sensor": Bool(false), "shape": Text("Box")},
-                ),
-            ],
-        ),
-        (
-            components: [
-                (
-                    component: "Name",
-                    fields: {"name": Text("WallLeft")},
-                ),
-                (
-                    component: "Transform",
-                    fields: {"position": Vec3((-9.0, -1.58, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
-                ),
-                (
-                    component: "Shape3D",
-                    fields: {"collision": Bool(true), "shape": Text("Box"), "size": Vec3((0.6, 2.5, 7.0))},
-                ),
-                (
-                    component: "Object3D",
-                    fields: {"model": Text("shape:box:0.6,2.5,7")},
-                ),
-                (
-                    component: "MaterialOverride",
-                    fields: {"emissive": Vec3((0.0, 0.0, 0.0)), "emissive_strength": Float(0.0), "metallic": Float(0.0), "override_metallic": Bool(false), "override_roughness": Bool(false), "roughness": Float(0.5), "shader": Text(""), "tint": Vec3((0.75, 0.72, 0.68))},
-                ),
-                (
-                    component: "RigidBody",
-                    fields: {"body_type": Text("Fixed")},
-                ),
-                (
-                    component: "Collider",
-                    fields: {"collision_layer": Int(1), "collision_mask": Int(65535), "half_extents": Vec3((0.3, 1.25, 3.5)), "sensor": Bool(false), "shape": Text("Box")},
-                ),
-            ],
-        ),
-        (
-            components: [
-                (
-                    component: "Name",
-                    fields: {"name": Text("WallRight")},
-                ),
-                (
-                    component: "Transform",
-                    fields: {"position": Vec3((9.0, -1.58, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
-                ),
-                (
-                    component: "Shape3D",
-                    fields: {"collision": Bool(true), "shape": Text("Box"), "size": Vec3((0.6, 2.5, 7.0))},
-                ),
-                (
-                    component: "Object3D",
-                    fields: {"model": Text("shape:box:0.6,2.5,7")},
-                ),
-                (
-                    component: "MaterialOverride",
-                    fields: {"emissive": Vec3((0.0, 0.0, 0.0)), "emissive_strength": Float(0.0), "metallic": Float(0.0), "override_metallic": Bool(false), "override_roughness": Bool(false), "roughness": Float(0.5), "shader": Text(""), "tint": Vec3((0.75, 0.72, 0.68))},
-                ),
-                (
-                    component: "RigidBody",
-                    fields: {"body_type": Text("Fixed")},
-                ),
-                (
-                    component: "Collider",
-                    fields: {"collision_layer": Int(1), "collision_mask": Int(65535), "half_extents": Vec3((0.3, 1.25, 3.5)), "sensor": Bool(false), "shape": Text("Box")},
-                ),
-            ],
-        ),
-        (
-            components: [
-                (
-                    component: "Name",
-                    fields: {"name": Text("Target1")},
-                ),
-                (
-                    component: "Transform",
-                    fields: {"position": Vec3((-6.5, -1.33, -2.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
-                ),
-                (
-                    component: "Shape3D",
-                    fields: {"collision": Bool(true), "shape": Text("Capsule"), "size": Vec3((0.9, 2.0, 0.9))},
-                ),
-                (
-                    component: "Object3D",
-                    fields: {"model": Text("shape:capsule:0.9,2")},
-                ),
-                (
-                    component: "MaterialOverride",
-                    fields: {"emissive": Vec3((1.0, 1.0, 1.0)), "emissive_strength": Float(0.0), "metallic": Float(0.0), "override_metallic": Bool(false), "override_roughness": Bool(false), "roughness": Float(0.5), "shader": Text(""), "tint": Vec3((0.9, 0.2, 0.15))},
-                ),
-                (
-                    component: "RigidBody",
-                    fields: {"body_type": Text("Fixed")},
-                ),
-                (
-                    component: "Collider",
-                    fields: {"collision_layer": Int(4), "collision_mask": Int(65535), "half_height": Float(0.55), "radius": Float(0.45), "sensor": Bool(false), "shape": Text("Capsule")},
-                ),
-                (
-                    component: "Scripts",
-                    fields: {"scripts": Scripts([(path: "scripts/target.rhai", exports: {})])},
-                ),
-            ],
-        ),
-        (
-            components: [
-                (
-                    component: "Name",
-                    fields: {"name": Text("Target2")},
-                ),
-                (
-                    component: "Transform",
-                    fields: {"position": Vec3((6.5, -1.33, -1.5)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
-                ),
-                (
-                    component: "Shape3D",
-                    fields: {"collision": Bool(true), "shape": Text("Capsule"), "size": Vec3((0.9, 2.0, 0.9))},
-                ),
-                (
-                    component: "Object3D",
-                    fields: {"model": Text("shape:capsule:0.9,2")},
-                ),
-                (
-                    component: "MaterialOverride",
-                    fields: {"emissive": Vec3((1.0, 1.0, 1.0)), "emissive_strength": Float(0.0), "metallic": Float(0.0), "override_metallic": Bool(false), "override_roughness": Bool(false), "roughness": Float(0.5), "shader": Text(""), "tint": Vec3((0.9, 0.2, 0.15))},
-                ),
-                (
-                    component: "RigidBody",
-                    fields: {"body_type": Text("Fixed")},
-                ),
-                (
-                    component: "Collider",
-                    fields: {"collision_layer": Int(4), "collision_mask": Int(65535), "half_height": Float(0.55), "radius": Float(0.45), "sensor": Bool(false), "shape": Text("Capsule")},
-                ),
-                (
-                    component: "Scripts",
-                    fields: {"scripts": Scripts([(path: "scripts/target.rhai", exports: {})])},
-                ),
-            ],
-        ),
-        (
-            components: [
-                (
-                    component: "Name",
-                    fields: {"name": Text("Target3")},
-                ),
-                (
-                    component: "Transform",
-                    fields: {"position": Vec3((0.0, -2.93, -7.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
-                ),
-                (
-                    component: "Shape3D",
-                    fields: {"collision": Bool(true), "shape": Text("Capsule"), "size": Vec3((0.9, 2.0, 0.9))},
-                ),
-                (
-                    component: "Object3D",
-                    fields: {"model": Text("shape:capsule:0.9,2")},
-                ),
-                (
-                    component: "MaterialOverride",
-                    fields: {"emissive": Vec3((1.0, 1.0, 1.0)), "emissive_strength": Float(0.0), "metallic": Float(0.0), "override_metallic": Bool(false), "override_roughness": Bool(false), "roughness": Float(0.5), "shader": Text(""), "tint": Vec3((0.9, 0.2, 0.15))},
-                ),
-                (
-                    component: "RigidBody",
-                    fields: {"body_type": Text("Fixed")},
-                ),
-                (
-                    component: "Collider",
-                    fields: {"collision_layer": Int(4), "collision_mask": Int(65535), "half_height": Float(0.55), "radius": Float(0.45), "sensor": Bool(false), "shape": Text("Capsule")},
-                ),
-                (
-                    component: "Scripts",
-                    fields: {"scripts": Scripts([(path: "scripts/target.rhai", exports: {})])},
-                ),
-            ],
-        ),
-        (
-            components: [
-                (
-                    component: "Name",
-                    fields: {"name": Text("TargetMoving")},
-                ),
-                (
-                    component: "Transform",
-                    fields: {"position": Vec3((-4.5, -1.33, 3.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
-                ),
-                (
-                    component: "Shape3D",
-                    fields: {"collision": Bool(true), "shape": Text("Capsule"), "size": Vec3((0.9, 2.0, 0.9))},
-                ),
-                (
-                    component: "Object3D",
-                    fields: {"model": Text("shape:capsule:0.9,2")},
-                ),
-                (
-                    component: "MaterialOverride",
-                    fields: {"emissive": Vec3((1.0, 1.0, 1.0)), "emissive_strength": Float(0.0), "metallic": Float(0.0), "override_metallic": Bool(false), "override_roughness": Bool(false), "roughness": Float(0.5), "shader": Text(""), "tint": Vec3((0.9, 0.2, 0.15))},
-                ),
-                (
-                    component: "RigidBody",
-                    fields: {"body_type": Text("Fixed")},
-                ),
-                (
-                    component: "Collider",
-                    fields: {"collision_layer": Int(4), "collision_mask": Int(65535), "half_height": Float(0.55), "radius": Float(0.45), "sensor": Bool(false), "shape": Text("Capsule")},
-                ),
-                (
-                    component: "Scripts",
-                    fields: {"scripts": Scripts([(path: "scripts/target.rhai", exports: {"strafe_distance": Float(2.5)})])},
-                ),
-            ],
-        ),
-        (
-            components: [
-                (
-                    component: "Name",
-                    fields: {"name": Text("TargetFar")},
-                ),
-                (
-                    component: "Transform",
-                    fields: {"position": Vec3((2.0, -1.33, -15.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
-                ),
-                (
-                    component: "Shape3D",
-                    fields: {"collision": Bool(true), "shape": Text("Capsule"), "size": Vec3((0.9, 2.0, 0.9))},
-                ),
-                (
-                    component: "Object3D",
-                    fields: {"model": Text("shape:capsule:0.9,2")},
-                ),
-                (
-                    component: "MaterialOverride",
-                    fields: {"emissive": Vec3((1.0, 1.0, 1.0)), "emissive_strength": Float(0.0), "metallic": Float(0.0), "override_metallic": Bool(false), "override_roughness": Bool(false), "roughness": Float(0.5), "shader": Text(""), "tint": Vec3((0.9, 0.2, 0.15))},
-                ),
-                (
-                    component: "RigidBody",
-                    fields: {"body_type": Text("Fixed")},
-                ),
-                (
-                    component: "Collider",
-                    fields: {"collision_layer": Int(4), "collision_mask": Int(65535), "half_height": Float(0.55), "radius": Float(0.45), "sensor": Bool(false), "shape": Text("Capsule")},
-                ),
-                (
-                    component: "Scripts",
-                    fields: {"scripts": Scripts([(path: "scripts/target.rhai", exports: {"strafe_distance": Float(4.0), "strafe_speed": Float(0.8)})])},
-                ),
-            ],
-        ),
-        (
-            components: [
-                (
-                    component: "Name",
                     fields: {"name": Text("Crosshair")},
                 ),
                 (
@@ -701,7 +561,55 @@
                 ),
                 (
                     component: "UiElement",
-                    fields: {"anchor": Text("TopLeft"), "background": Vec3((0.1, 0.1, 0.1)), "background_opacity": Float(0.0), "font_size": Float(24.0), "height": Float(40.0), "kind": Text("Label"), "layer": Int(0), "text": Text("Targets down: 0"), "text_color": Vec3((1.0, 1.0, 1.0)), "value": Float(0.0), "width": Float(260.0), "x": Float(20.0), "y": Float(20.0)},
+                    fields: {"anchor": Text("TopLeft"), "background": Vec3((0.1, 0.1, 0.1)), "background_opacity": Float(0.0), "font_size": Float(20.0), "height": Float(40.0), "kind": Text("Label"), "layer": Int(0), "text": Text("Minions killed: 0"), "text_color": Vec3((1.0, 1.0, 1.0)), "value": Float(0.0), "width": Float(300.0), "x": Float(20.0), "y": Float(36.0)},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("BlueTowerBar")},
+                ),
+                (
+                    component: "UiElement",
+                    fields: {"anchor": Text("Top"), "background": Vec3((0.1, 0.1, 0.1)), "background_opacity": Float(0.6), "font_size": Float(15.0), "height": Float(22.0), "kind": Text("ProgressBar"), "layer": Int(0), "text": Text("Your tower"), "text_color": Vec3((0.25, 0.5, 1.0)), "value": Float(1.0), "width": Float(300.0), "x": Float(-170.0), "y": Float(20.0)},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("RedTowerBar")},
+                ),
+                (
+                    component: "UiElement",
+                    fields: {"anchor": Text("Top"), "background": Vec3((0.1, 0.1, 0.1)), "background_opacity": Float(0.6), "font_size": Float(15.0), "height": Float(22.0), "kind": Text("ProgressBar"), "layer": Int(0), "text": Text("Enemy tower"), "text_color": Vec3((0.9, 0.25, 0.15)), "value": Float(1.0), "width": Float(300.0), "x": Float(170.0), "y": Float(20.0)},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("WaveTimer")},
+                ),
+                (
+                    component: "UiElement",
+                    fields: {"anchor": Text("Top"), "background": Vec3((0.1, 0.1, 0.1)), "background_opacity": Float(0.0), "font_size": Float(18.0), "height": Float(30.0), "kind": Text("Label"), "layer": Int(0), "text": Text(""), "text_color": Vec3((1.0, 1.0, 1.0)), "value": Float(0.0), "width": Float(300.0), "x": Float(0.0), "y": Float(50.0)},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("HealthBar")},
+                ),
+                (
+                    component: "UiElement",
+                    fields: {"anchor": Text("Bottom"), "background": Vec3((0.1, 0.1, 0.1)), "background_opacity": Float(0.6), "font_size": Float(15.0), "height": Float(22.0), "kind": Text("ProgressBar"), "layer": Int(0), "text": Text(""), "text_color": Vec3((0.3, 0.8, 0.3)), "value": Float(1.0), "width": Float(340.0), "x": Float(0.0), "y": Float(60.0)},
                 ),
             ],
         ),
@@ -721,11 +629,15 @@
             components: [
                 (
                     component: "Name",
-                    fields: {"name": Text("Help")},
+                    fields: {"name": Text("DeathMessage")},
                 ),
                 (
                     component: "UiElement",
-                    fields: {"anchor": Text("BottomLeft"), "background": Vec3((0.1, 0.1, 0.1)), "background_opacity": Float(0.0), "font_size": Float(16.0), "height": Float(30.0), "kind": Text("Label"), "layer": Int(0), "text": Text("WASD move   Mouse aim   LMB shoot   RMB zoom   Space jump   Shift dash   V swap shoulder   Esc mouse"), "text_color": Vec3((0.85, 0.85, 0.85)), "value": Float(0.0), "width": Float(620.0), "x": Float(20.0), "y": Float(20.0)},
+                    fields: {"anchor": Text("Center"), "background": Vec3((0.1, 0.1, 0.1)), "background_opacity": Float(0.0), "font_size": Float(30.0), "height": Float(50.0), "kind": Text("Label"), "layer": Int(0), "text": Text(""), "text_color": Vec3((1.0, 0.4, 0.3)), "value": Float(0.0), "width": Float(600.0), "x": Float(0.0), "y": Float(-90.0)},
+                ),
+                (
+                    component: "Hidden",
+                    fields: {},
                 ),
             ],
         ),
@@ -733,19 +645,63 @@
             components: [
                 (
                     component: "Name",
-                    fields: {"name": Text("FPSLabel")},
-                ),
-                (
-                    component: "Transform",
-                    fields: {"position": Vec3((0.0, 0.0, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
-                ),
-                (
-                    component: "Scripts",
-                    fields: {"scripts": Scripts([(path: "scripts/fps_label.rhai", exports: {})])},
+                    fields: {"name": Text("TowerWarning")},
                 ),
                 (
                     component: "UiElement",
-                    fields: {"anchor": Text("TopLeft"), "background": Vec3((0.1, 0.1, 0.1)), "background_opacity": Float(0.0), "font_size": Float(18.0), "height": Float(40.0), "kind": Text("Label"), "layer": Int(0), "text": Text("FPS: "), "text_color": Vec3((1.0, 1.0, 1.0)), "value": Float(0.5), "width": Float(200.9), "x": Float(1.8199997), "y": Float(-7.0)},
+                    fields: {"anchor": Text("Center"), "background": Vec3((0.1, 0.1, 0.1)), "background_opacity": Float(0.4), "font_size": Float(20.0), "height": Float(36.0), "kind": Text("Label"), "layer": Int(0), "text": Text("The enemy tower is shooting you!"), "text_color": Vec3((1.0, 0.35, 0.25)), "value": Float(0.0), "width": Float(500.0), "x": Float(0.0), "y": Float(70.0)},
+                ),
+                (
+                    component: "Hidden",
+                    fields: {},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("Message")},
+                ),
+                (
+                    component: "UiElement",
+                    fields: {"anchor": Text("Center"), "background": Vec3((0.1, 0.1, 0.1)), "background_opacity": Float(0.0), "font_size": Float(64.0), "height": Float(90.0), "kind": Text("Label"), "layer": Int(0), "text": Text(""), "text_color": Vec3((1.0, 1.0, 1.0)), "value": Float(0.0), "width": Float(600.0), "x": Float(0.0), "y": Float(-120.0)},
+                ),
+                (
+                    component: "Hidden",
+                    fields: {},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("RestartButton")},
+                ),
+                (
+                    component: "Scripts",
+                    fields: {"scripts": Scripts([(path: "scripts/restart_button.rhai", exports: {})])},
+                ),
+                (
+                    component: "UiElement",
+                    fields: {"anchor": Text("Center"), "background": Vec3((0.1, 0.1, 0.1)), "background_opacity": Float(0.8), "font_size": Float(22.0), "height": Float(50.0), "kind": Text("Button"), "layer": Int(1), "text": Text("Restart"), "text_color": Vec3((1.0, 1.0, 1.0)), "value": Float(0.0), "width": Float(200.0), "x": Float(0.0), "y": Float(140.0)},
+                ),
+                (
+                    component: "Hidden",
+                    fields: {},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("Help")},
+                ),
+                (
+                    component: "UiElement",
+                    fields: {"anchor": Text("BottomLeft"), "background": Vec3((0.1, 0.1, 0.1)), "background_opacity": Float(0.0), "font_size": Float(16.0), "height": Float(30.0), "kind": Text("Label"), "layer": Int(0), "text": Text("WASD move   Mouse aim   LMB shoot   RMB zoom   Space jump   Shift dash   V swap shoulder   Esc mouse   R restart"), "text_color": Vec3((0.85, 0.85, 0.85)), "value": Float(0.0), "width": Float(760.0), "x": Float(20.0), "y": Float(20.0)},
                 ),
             ],
         ),
