@@ -22,3 +22,4 @@ shipyard = { workspace = true }
 image = { workspace = true }
 gltf = "1.4.1"
 smallvec = "1.9"
+symphonia = { version = "0.6.1", default-features = false, features = ["wav", "pcm", "vorbis", "ogg", "mp3", "flac", "adpcm"] }

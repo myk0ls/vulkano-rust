@@ -64,6 +64,8 @@ pub struct Application<G: Game> {
     pub scripts: ScriptRuntime,
     pub mouse_captured: bool,
     ui: Option<GameUi>,
+    /// Plays every AudioPlayback and AudioPlayback3D. Dropped before SDL shuts down.
+    pub audio: crate::audio::AudioEngine,
     // Fields drop in declaration order. The frame future and renderer hold the
     // swapchain, which must be destroyed before the window and SDL shut down.
     pub previous_frame_end: Option<Box<dyn vulkano::sync::GpuFuture>>,
@@ -105,8 +107,11 @@ impl<G: Game> Application<G> {
         let mut _previous_frame_end =
             Some(Box::new(sync::now(renderer.device.clone())) as Box<dyn GpuFuture>);
 
+        let audio = crate::audio::AudioEngine::new(&sdl);
+
         Self {
             game,
+            audio,
             last_frame: std::time::Instant::now(),
             sdl,
             window,
@@ -403,6 +408,7 @@ impl<G: Game> Application<G> {
                 break 'running;
             }
             self.update_animators(dt);
+            self.update_audio(dt);
             self.game.on_render();
 
             self.previous_frame_end
@@ -484,6 +490,15 @@ impl<G: Game> Application<G> {
     fn handle_script_requests(&mut self, environment: &mut BakedEnvironment) -> bool {
         let _ = environment;
         let requests = self.scripts.take_requests();
+        if !requests.sounds.is_empty() {
+            let listener = crate::audio::Listener::from_world(self.game.get_world());
+            for shot in &requests.sounds {
+                self.audio.play_one_shot(shot, &listener);
+            }
+        }
+        if let Some(volume) = requests.master_volume {
+            self.audio.set_master_volume(volume);
+        }
         if let Some(captured) = requests.mouse_captured {
             self.set_mouse_captured(captured);
         }
@@ -648,6 +663,14 @@ impl<G: Game> Application<G> {
         );
         for (entity, function) in calls {
             self.scripts.call(entity, &function);
+        }
+    }
+
+    /// Play, move and stop sounds to match the audio components. Scripts hear about sounds
+    /// that reached their end through the "audio_finished" signal.
+    pub fn update_audio(&mut self, delta_time: f32) {
+        for entity in self.audio.update(self.game.get_world_mut(), delta_time) {
+            self.scripts.send_event(entity, "audio_finished", Vec::new());
         }
     }
 

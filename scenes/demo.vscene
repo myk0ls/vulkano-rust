@@ -3,7 +3,7 @@
         exposure: 1.0,
         ambient_color: (1.0, 1.0, 1.0),
         ambient_intensity: 0.5,
-        sun_direction: (0.1, 0.86, 0.1),
+        sun_direction: (0.1, 0.91, 0.1),
         sun_color: (4.0, 4.0, 4.0),
         shadow_softness: 2.0,
         sun_shadows: true,

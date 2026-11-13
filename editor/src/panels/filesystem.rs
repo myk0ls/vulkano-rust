@@ -118,6 +118,7 @@ fn icon(entry: &FileEntry) -> (&'static str, Color32) {
         "glsl" => ("🖹", theme::collider()),
         "glb" | "gltf" => ("▣", theme::entity()),
         "hdr" | "png" | "jpg" | "jpeg" => ("🖼", theme::warning()),
+        "wav" | "ogg" | "mp3" | "flac" => ("♫", theme::play()),
         _ => ("🗋", theme::text_dim()),
     }
 }

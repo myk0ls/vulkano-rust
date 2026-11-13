@@ -11,6 +11,7 @@ use super::vec3::{Vec3, number, to_vec3};
 use super::{Connection, Context, Pending, Shared, Timer, from_field, spawn_prefab, to_field_like};
 use crate::physics::physics_engine::{ColliderComponent, PhysicsEngine, RigidBodyComponent, collider_entity};
 use crate::scene::components::animator::Animator;
+use crate::scene::components::audio_playback::{AudioPlayback, AudioPlayback3D, AudioSource};
 use crate::scene::components::pointlight::Pointlight;
 use crate::scene::components::transform::Transform;
 use crate::scene::scene_file::{Name, euler_from_rotation, rotation_from_euler};
@@ -362,6 +363,7 @@ pub fn register(engine: &mut Engine, ctx: &Shared) {
     register_signals(engine, ctx);
     register_input(engine, ctx);
     register_math(engine, ctx);
+    register_audio(engine, ctx);
 }
 
 /// `me()`, `find()`, and the Entity type's properties and methods.
@@ -860,5 +862,102 @@ fn register_math(engine: &mut Engine, ctx: &Shared) {
         }
         let t = c.borrow_mut().random();
         items[((items.len() as f64 * t) as usize).min(items.len() - 1)].clone()
+    });
+}
+
+/// Change an entity's AudioPlayback and AudioPlayback3D. Reports entities with neither.
+fn with_audio(ctx: &Shared, entity: Entity, what: &str, f: impl Fn(&mut AudioSource)) {
+    let found = with_entity(ctx, entity, |world, id| {
+        let mut found = false;
+        if let Ok(mut playback) = world.get::<&mut AudioPlayback>(id) {
+            f(&mut playback.source);
+            found = true;
+        }
+        if let Ok(mut playback) = world.get::<&mut AudioPlayback3D>(id) {
+            f(&mut playback.source);
+            found = true;
+        }
+        found
+    });
+    if found == Some(false) {
+        eprintln!("[script] {what}: this entity has no AudioPlayback or AudioPlayback3D");
+    }
+}
+
+/// Read an entity's audio source; an AudioPlayback wins over an AudioPlayback3D.
+fn read_audio<R>(ctx: &Shared, entity: Entity, f: impl Fn(&AudioSource) -> R) -> Option<R> {
+    with_entity(ctx, entity, |world, id| {
+        if let Ok(playback) = world.get::<&AudioPlayback>(id) {
+            return Some(f(&playback.source));
+        }
+        world.get::<&AudioPlayback3D>(id).ok().map(|playback| f(&playback.source))
+    })
+    .flatten()
+}
+
+fn one_shot(ctx: &Shared, path: &str, volume: Dynamic, at: Option<Vec3>) {
+    ctx.borrow_mut().requests.sounds.push(crate::audio::OneShot {
+        path: path.to_string(),
+        volume: number(&volume).unwrap_or(1.0).max(0.0) as f32,
+        at: at.map(Vec3::to_f32),
+        max_distance: 50.0,
+    });
+}
+
+/// Controlling AudioPlayback and AudioPlayback3D, and sounds no entity owns.
+fn register_audio(engine: &mut Engine, ctx: &Shared) {
+    let actions: [(&str, fn(&mut AudioSource)); 6] = [
+        ("play_audio", AudioSource::play),
+        ("stop_audio", AudioSource::stop),
+        ("pause_audio", AudioSource::pause),
+        ("resume_audio", AudioSource::resume),
+        ("restart_audio", AudioSource::restart),
+        ("reverse_audio", AudioSource::reverse),
+    ];
+    for (name, action) in actions {
+        ctx_fn!(engine, ctx, name, |c| with_audio(&c, me(&c), name, action));
+        ctx_fn!(engine, ctx, name, |c, e: &mut Entity| with_audio(&c, *e, name, action));
+    }
+    ctx_fn!(engine, ctx, "play_audio", |c, path: &str| with_audio(&c, me(&c), "play_audio", |s| s.play_sound(path)));
+    ctx_fn!(engine, ctx, "play_audio", |c, e: &mut Entity, path: &str| {
+        with_audio(&c, *e, "play_audio", |s| s.play_sound(path))
+    });
+    ctx_fn!(engine, ctx, "seek_audio", |c, seconds: Dynamic| {
+        let t = number(&seconds).unwrap_or(0.0) as f32;
+        with_audio(&c, me(&c), "seek_audio", |s| s.seek(t))
+    });
+    ctx_fn!(engine, ctx, "seek_audio", |c, e: &mut Entity, seconds: Dynamic| {
+        let t = number(&seconds).unwrap_or(0.0) as f32;
+        with_audio(&c, *e, "seek_audio", |s| s.seek(t))
+    });
+
+    ctx_fn!(engine, ctx, "is_audio_playing", |c| read_audio(&c, me(&c), AudioSource::is_playing).unwrap_or(false));
+    ctx_fn!(engine, ctx, "audio_time", |c| read_audio(&c, me(&c), |s| s.time() as FLOAT).unwrap_or(0.0));
+    ctx_fn!(engine, ctx, "audio_length", |c| read_audio(&c, me(&c), |s| s.length() as FLOAT).unwrap_or(0.0));
+    let c = ctx.clone();
+    engine.register_get("audio_playing", move |e: &mut Entity| read_audio(&c, *e, AudioSource::is_playing).unwrap_or(false));
+    let c = ctx.clone();
+    engine.register_get("audio_paused", move |e: &mut Entity| read_audio(&c, *e, AudioSource::is_paused).unwrap_or(false));
+    let c = ctx.clone();
+    engine.register_get("audio_length", move |e: &mut Entity| read_audio(&c, *e, |s| s.length() as FLOAT).unwrap_or(0.0));
+    let (c, c2) = (ctx.clone(), ctx.clone());
+    engine.register_get_set(
+        "audio_time",
+        move |e: &mut Entity| read_audio(&c, *e, |s| s.time() as FLOAT).unwrap_or(0.0),
+        move |e: &mut Entity, seconds: FLOAT| with_audio(&c2, *e, "audio_time", |s| s.seek(seconds as f32)),
+    );
+    let (c, c2) = (ctx.clone(), ctx.clone());
+    engine.register_get_set(
+        "audio_reversed",
+        move |e: &mut Entity| read_audio(&c, *e, |s| s.reversed).unwrap_or(false),
+        move |e: &mut Entity, reversed: bool| with_audio(&c2, *e, "audio_reversed", |s| s.reversed = reversed),
+    );
+
+    ctx_fn!(engine, ctx, "play_sound", |c, path: &str| one_shot(&c, path, Dynamic::from_float(1.0), None));
+    ctx_fn!(engine, ctx, "play_sound", |c, path: &str, volume: Dynamic| one_shot(&c, path, volume, None));
+    ctx_fn!(engine, ctx, "play_sound_at", |c, path: &str, at: Vec3| one_shot(&c, path, Dynamic::from_float(1.0), Some(at)));
+    ctx_fn!(engine, ctx, "play_sound_at", |c, path: &str, at: Vec3, volume: Dynamic| one_shot(&c, path, volume, Some(at)));
+    ctx_fn!(engine, ctx, "set_master_volume", |c, volume: Dynamic| {
+        c.borrow_mut().requests.master_volume = Some(number(&volume).unwrap_or(1.0).max(0.0) as f32);
     });
 }

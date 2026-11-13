@@ -10,3 +10,4 @@ pub mod shape3d;
 pub mod spotlight;
 pub mod transform;
 pub mod velocity;
+pub mod audio_playback;

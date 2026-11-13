@@ -1,5 +1,6 @@
 // Re-export all engine modules
 pub mod assets;
+pub mod audio;
 pub mod core;
 pub mod graphics;
 pub mod input;

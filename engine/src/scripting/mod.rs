@@ -192,6 +192,9 @@ pub struct ScriptRequests {
     pub quit: bool,
     /// New models were loaded and need uploading before they can be drawn.
     pub models_loaded: bool,
+    /// Sounds started with play_sound, which no entity owns.
+    pub sounds: Vec<crate::audio::OneShot>,
+    pub master_volume: Option<f32>,
 }
 
 /// State shared between the runtime and the functions scripts call.

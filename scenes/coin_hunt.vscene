@@ -6,6 +6,7 @@
         sun_direction: (8.85, 2.87, 0.1),
         sun_color: (4.0, 4.0, 4.0),
         shadow_softness: 2.0,
+        sun_shadows: true,
         fxaa: true,
         ao_radius: 0.05,
         ao_strength: 1.0,
@@ -169,7 +170,7 @@
                 ),
                 (
                     component: "Pointlight",
-                    fields: {"color": Vec3((2.35, 4.32, 0.7)), "intensity": Float(37.8), "position": Vec3((0.0, -1.2183561, 0.0)), "radius": Float(3.12)},
+                    fields: {"cast_shadows": Bool(true), "color": Vec3((2.35, 4.32, 0.7)), "intensity": Float(37.8), "position": Vec3((0.0, -1.2183561, 0.0)), "radius": Float(3.12)},
                 ),
             ],
         ),

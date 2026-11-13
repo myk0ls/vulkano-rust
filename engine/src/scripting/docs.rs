@@ -103,6 +103,26 @@ pub const API_HELP: &[(&str, &[(&str, &str)])] = &[
         ],
     ),
     (
+        "Audio",
+        &[
+            ("play_audio(), e.play_audio()", "Play this entity's AudioPlayback or AudioPlayback3D: from the start if stopped, carrying on if paused."),
+            ("play_audio(\"data/audio/x.ogg\")", "Switch to another sound and play it from the start. Also e.play_audio(path)."),
+            ("stop_audio(), e.stop_audio()", "Stop and go back to the start."),
+            ("pause_audio(), resume_audio()", "Hold the position and carry on from it. Also e.pause_audio(), e.resume_audio()."),
+            ("restart_audio(), e.restart_audio()", "Play from the start (the end when reversed), whatever it was doing."),
+            ("reverse_audio(), e.reverse_audio()", "Turn around: a playing sound carries on backwards from where it is."),
+            ("seek_audio(1.5), e.seek_audio(1.5)", "Jump to a time in seconds while playing or paused."),
+            ("is_audio_playing(), audio_time(), audio_length()", "This entity's sound: playing?, seconds in, and its length."),
+            ("e.audio_playing, e.audio_paused, e.audio_length", "Read another entity's sound."),
+            ("e.audio_time, e.audio_reversed", "Read or assign: assigning audio_time seeks."),
+            ("e.set(\"AudioPlayback\", \"volume\", 0.5)", "Change any setting: volume, pitch, looping, pan; on AudioPlayback3D min_distance, max_distance, rolloff."),
+            ("fn on_audio_finished()", "A sound that doesn't loop reached its end. It's also the \"audio_finished\" signal."),
+            ("play_sound(\"data/audio/coin.wav\", volume)", "Play a sound once, without an entity. The volume is optional."),
+            ("play_sound_at(\"data/audio/boom.wav\", pos, volume)", "The same, heard from a point."),
+            ("set_master_volume(0.5)", "The volume of everything."),
+        ],
+    ),
+    (
         "Scenes and the game",
         &[
             ("change_scene(\"scenes/level2.vscene\")", "Load another scene after this frame."),

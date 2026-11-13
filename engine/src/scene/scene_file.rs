@@ -20,6 +20,7 @@ use crate::physics::physics_engine::{
     ColliderComponent, KinematicCharacterComponent, RigidBodyComponent,
 };
 use crate::scene::components::animator::Animator;
+use crate::scene::components::audio_playback::{AudioPlayback, AudioPlayback3D, AudioSource, ROLLOFFS, Rolloff};
 use crate::scene::components::camera::Camera;
 use crate::scene::components::directional_light::DirectionalLight;
 use crate::scene::components::material_override::MaterialOverride;
@@ -214,6 +215,8 @@ impl ComponentRegistry {
         registry.register::<Pointlight>();
         registry.register::<Spotlight>();
         registry.register::<Camera>();
+        registry.register::<AudioPlayback>();
+        registry.register::<AudioPlayback3D>();
         registry.register::<Velocity>();
         registry.register::<RigidBodyComponent>();
         registry.register::<ColliderComponent>();
@@ -242,6 +245,16 @@ impl ComponentRegistry {
         }
         registry.add_template("Point Light", "A light shining in all directions.", vec![ComponentData::named("Pointlight")]);
         registry.add_template("Spot Light", "A cone of light that casts shadows.", vec![ComponentData::named("Spotlight")]);
+        registry.add_template(
+            "Audio Player",
+            "Plays a sound the same everywhere, for music and UI. Scripts control it with play_audio(), pause_audio(), ...",
+            vec![ComponentData::named("AudioPlayback")],
+        );
+        registry.add_template(
+            "Audio Player 3D",
+            "Plays a sound from its position, quieter with distance and panned to its side.",
+            vec![transform.clone(), ComponentData::named("AudioPlayback3D")],
+        );
         registry.add_template("Camera", "A camera with a position.", vec![transform.clone(), ComponentData::named("Camera")]);
         registry.add_template("UI Label", "Text on the screen. Scripts can change it with set_text.", vec![ComponentData::named("UiElement")]);
         registry.add_template(
@@ -776,6 +789,78 @@ impl EditableComponent for Camera {
     }
 }
 
+impl AudioSource {
+    fn source_fields(&self) -> Vec<Field> {
+        vec![
+            Field::hinted("sound", FieldValue::Text(self.sound.clone()), FieldHint::Asset(crate::audio::sound::SOUND_EXTENSIONS)),
+            Field::hinted("volume", FieldValue::Float(self.volume), FieldHint::Range(0.0, 4.0)),
+            Field::hinted("pitch", FieldValue::Float(self.pitch), FieldHint::Range(0.05, 8.0)),
+            Field::new("looping", FieldValue::Bool(self.looping)),
+            Field::new("autoplay", FieldValue::Bool(self.autoplay)),
+            Field::new("reversed", FieldValue::Bool(self.reversed)),
+        ]
+    }
+
+    /// Returns false for fields that aren't the source's.
+    fn set_source_field(&mut self, name: &str, value: &FieldValue) -> bool {
+        match (name, value) {
+            ("sound", FieldValue::Text(v)) => self.sound = v.clone(),
+            ("volume", FieldValue::Float(v)) => self.volume = v.max(0.0),
+            ("pitch", FieldValue::Float(v)) => self.pitch = v.max(0.01),
+            ("looping", FieldValue::Bool(v)) => self.looping = *v,
+            ("autoplay", FieldValue::Bool(v)) => self.autoplay = *v,
+            ("reversed", FieldValue::Bool(v)) => self.reversed = *v,
+            _ => return false,
+        }
+        true
+    }
+}
+
+impl EditableComponent for AudioPlayback {
+    const NAME: &'static str = "AudioPlayback";
+    fn create() -> Self {
+        AudioPlayback::default()
+    }
+    fn fields(&self) -> Vec<Field> {
+        let mut fields = self.source.source_fields();
+        fields.push(Field::hinted("pan", FieldValue::Float(self.pan), FieldHint::Range(-1.0, 1.0)));
+        fields
+    }
+    fn set_field(&mut self, name: &str, value: &FieldValue) {
+        if !self.source.set_source_field(name, value) {
+            if let ("pan", FieldValue::Float(v)) = (name, value) {
+                self.pan = v.clamp(-1.0, 1.0);
+            }
+        }
+    }
+}
+
+impl EditableComponent for AudioPlayback3D {
+    const NAME: &'static str = "AudioPlayback3D";
+    fn create() -> Self {
+        AudioPlayback3D::default()
+    }
+    fn fields(&self) -> Vec<Field> {
+        let distance = FieldHint::Range(0.01, 100000.0);
+        let mut fields = self.source.source_fields();
+        fields.push(Field::hinted("min_distance", FieldValue::Float(self.min_distance), distance));
+        fields.push(Field::hinted("max_distance", FieldValue::Float(self.max_distance), distance));
+        fields.push(Field::hinted("rolloff", FieldValue::Text(self.rolloff.name().into()), FieldHint::Choice(ROLLOFFS)));
+        fields
+    }
+    fn set_field(&mut self, name: &str, value: &FieldValue) {
+        if self.source.set_source_field(name, value) {
+            return;
+        }
+        match (name, value) {
+            ("min_distance", FieldValue::Float(v)) => self.min_distance = v.max(0.01),
+            ("max_distance", FieldValue::Float(v)) => self.max_distance = v.max(0.01),
+            ("rolloff", FieldValue::Text(v)) => self.rolloff = Rolloff::from_name(v).unwrap_or_default(),
+            _ => {}
+        }
+    }
+}
+
 impl EditableComponent for Velocity {
     const NAME: &'static str = "Velocity";
     fn create() -> Self {
@@ -1157,6 +1242,28 @@ mod tests {
                 .with("collision_mask", FieldValue::Int(0xFFFF)),
         );
         assert_round_trips(ComponentData::named("Hidden"));
+        assert_round_trips(
+            ComponentData::named("AudioPlayback")
+                .with("sound", FieldValue::Text("data/audio/music.ogg".into()))
+                .with("volume", FieldValue::Float(0.5))
+                .with("pitch", FieldValue::Float(1.5))
+                .with("looping", FieldValue::Bool(true))
+                .with("autoplay", FieldValue::Bool(true))
+                .with("reversed", FieldValue::Bool(false))
+                .with("pan", FieldValue::Float(-0.25)),
+        );
+        assert_round_trips(
+            ComponentData::named("AudioPlayback3D")
+                .with("sound", FieldValue::Text("data/audio/hum.wav".into()))
+                .with("volume", FieldValue::Float(2.0))
+                .with("pitch", FieldValue::Float(1.0))
+                .with("looping", FieldValue::Bool(false))
+                .with("autoplay", FieldValue::Bool(false))
+                .with("reversed", FieldValue::Bool(true))
+                .with("min_distance", FieldValue::Float(2.0))
+                .with("max_distance", FieldValue::Float(30.0))
+                .with("rolloff", FieldValue::Text("Linear".into())),
+        );
     }
 
     #[test]
