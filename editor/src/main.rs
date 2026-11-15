@@ -192,7 +192,12 @@ fn main() {
         }
 
         // ── Build the UI ───────────────────────────────────────────────────────
-        editor.viewport.look_delta += std::mem::take(&mut platform.relative_motion);
+        // Mouse look goes to whichever viewport is flying its camera.
+        let motion = std::mem::take(&mut platform.relative_motion);
+        match editor.extra_viewports.values_mut().find(|v| v.state.freelook) {
+            Some(extra) => extra.state.look_delta += motion,
+            None => editor.viewport.look_delta += motion,
+        }
         let input = platform.take_input(app.window.size());
         let output = ctx.run_ui(input, |ui| editor.ui(ui, app.game.get_world_mut()));
         platform.apply_output(output.platform_output);
@@ -206,8 +211,9 @@ fn main() {
         editor.scripts.poll(&mut editor.log);
 
         // Grab the mouse while flying, as it would otherwise leave the viewport.
-        if editor.viewport.freelook != relative {
-            relative = editor.viewport.freelook;
+        let flying = editor.viewport.freelook || editor.extra_viewports.values().any(|v| v.state.freelook);
+        if flying != relative {
+            relative = flying;
             platform.relative_mode = relative;
             app.sdl.mouse().set_relative_mouse_mode(&app.window, relative);
         }
@@ -226,6 +232,42 @@ fn main() {
                 app.renderer.offscreen_view().unwrap().clone(),
             );
         }
+        // SubViewports and the other viewports render first, each on its own.
+        app.update_subviewports(&mut environment, None);
+        if app.subviewports.take_changed() {
+            editor.viewport_pictures.clear();
+            for (name, view) in app.subviewports.pictures() {
+                let id = vulkano_engine::ui::viewport_texture_id(&name);
+                painter.set_user_texture(id, view);
+                editor.viewport_pictures.insert(name, egui::TextureId::User(id));
+            }
+        }
+        for (id, extra) in editor.extra_viewports.iter_mut() {
+            if !std::mem::take(&mut extra.shown) {
+                continue;
+            }
+            let extent = extra.state.wanted_extent;
+            if extra.target.as_ref().is_none_or(|(_, size)| *size != extent) {
+                let view = app.renderer.create_view_target(extent);
+                painter.set_user_texture(panels::viewport::extra_texture_id(*id), view.clone());
+                extra.target = Some((view, extent));
+            }
+            let aspect = extent[0] as f32 / extent[1].max(1) as f32;
+            let matrices = match &extra.camera {
+                None => Some((extra.state.camera.engine_view(), extra.state.camera.projection(aspect))),
+                Some(name) => vulkano_engine::core::subviewports::camera_matrices(app.game.get_world(), Some(name), aspect),
+            };
+            let (Some((view, projection)), Some((target, _))) = (matrices, extra.target.clone()) else {
+                continue;
+            };
+            app.renderer.set_view(&view);
+            app.renderer.set_projection(&projection);
+            if app.renderer.begin_view() {
+                app.render_scene(&mut environment);
+                app.renderer.end_view(&target);
+            }
+        }
+
         let camera = &editor.viewport.camera;
         let aspect = wanted[0] as f32 / wanted[1] as f32;
         app.renderer.set_projection(&camera.projection(aspect));
@@ -354,7 +396,9 @@ fn main() {
             panels::viewport::frame_scene(&mut editor, app.game.get_world());
         }
 
-        if let Some(ray) = editor.viewport.pending_pick.take() {
+        // A click in another viewport picks the same way.
+        let extra_pick = editor.extra_viewports.values_mut().find_map(|v| v.state.pending_pick.take());
+        if let Some(ray) = editor.viewport.pending_pick.take().or(extra_pick) {
             let hit = assets::pick_model(app.game.get_world(), &ray);
             editor.doc.selection = hit.map(|(entity, _)| entity);
         }

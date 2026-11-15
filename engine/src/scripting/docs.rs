@@ -106,6 +106,15 @@ pub const API_HELP: &[(&str, &[(&str, &str)])] = &[
         ],
     ),
     (
+        "AnimationPlayer",
+        &[
+            ("e.play_anim(\"open\"), play_anim(\"open\")", "Play one of the AnimationPlayer's animations from the start, by its file name."),
+            ("e.stop_anim(), e.pause_anim(), e.resume_anim()", "Stop (back to the start), hold, or carry on. Also without e. for this entity."),
+            ("e.anim_time, e.anim_playing, e.current_anim", "Where it is in seconds (assign to jump), whether it's playing, and which one."),
+            ("fn on_animation_finished(name)", "An animation that doesn't loop reached its end."),
+        ],
+    ),
+    (
         "Audio",
         &[
             ("play_audio(), e.play_audio()", "Play this entity's AudioPlayback or AudioPlayback3D: from the start if stopped, carrying on if paused."),

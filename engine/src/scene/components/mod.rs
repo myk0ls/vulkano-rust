@@ -11,3 +11,5 @@ pub mod spotlight;
 pub mod transform;
 pub mod velocity;
 pub mod audio_playback;
+pub mod sub_viewport;
+pub mod animation_player;

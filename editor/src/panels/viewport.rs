@@ -20,6 +20,95 @@ use crate::panels::filesystem::ModelDrag;
 use crate::theme;
 
 pub const SCENE_TEXTURE_ID: u64 = 1;
+
+/// The UI texture of an extra viewport's picture.
+pub fn extra_texture_id(id: u32) -> u64 {
+    1000 + id as u64
+}
+
+/// Another 3D view in its own tab: an editor camera of its own, or a scene camera's view.
+pub struct ExtraViewport {
+    pub state: ViewportState,
+    /// Look through the camera entity with this Name instead of an editor camera.
+    pub camera: Option<String>,
+    /// The picture and its size, made by the main loop.
+    pub target: Option<(std::sync::Arc<vulkano::image::view::ImageView>, [u32; 2])>,
+    /// Drawn this frame, so worth rendering.
+    pub shown: bool,
+}
+
+impl ExtraViewport {
+    pub fn new(camera: OrbitCamera) -> Self {
+        let mut state = ViewportState::new();
+        state.camera = camera;
+        Self { state, camera: None, target: None, shown: false }
+    }
+}
+
+/// An extra viewport's tab: which camera to look through, then the view itself.
+pub fn extra_ui(ui: &mut Ui, editor: &mut Editor, world: &mut World, id: u32) {
+    let Some(mut extra) = editor.extra_viewports.remove(&id) else {
+        ui.label("This viewport was closed.");
+        return;
+    };
+    let cameras: Vec<String> = world.run(
+        |cameras: shipyard::View<vulkano_engine::scene::components::camera::Camera>,
+         names: shipyard::View<vulkano_engine::scene::scene_file::Name>| {
+            use shipyard::IntoIter;
+            (&cameras, &names).iter().map(|(_, n)| n.0.clone()).collect()
+        },
+    );
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("View").color(theme::text_dim()));
+        let shown = extra.camera.clone().map_or("Editor camera".to_string(), |c| format!("Camera: {c}"));
+        egui::ComboBox::from_id_salt(("extra_view_camera", id)).selected_text(shown).show_ui(ui, |ui| {
+            if ui.selectable_label(extra.camera.is_none(), "Editor camera").clicked() {
+                extra.camera = None;
+            }
+            for name in &cameras {
+                if ui.selectable_label(extra.camera.as_ref() == Some(name), format!("Camera: {name}")).clicked() {
+                    extra.camera = Some(name.clone());
+                }
+            }
+        });
+        if cameras.is_empty() {
+            ui.label(egui::RichText::new("(no named cameras in the scene)").color(theme::text_dim()).small());
+        }
+    });
+    std::mem::swap(&mut editor.viewport, &mut extra.state);
+    let texture = egui::TextureId::User(extra_texture_id(id));
+    match extra.camera.clone() {
+        None => ui_for(ui, editor, world, texture),
+        Some(name) => camera_preview(ui, editor, world, texture, &name),
+    }
+    std::mem::swap(&mut editor.viewport, &mut extra.state);
+    extra.shown = true;
+    editor.extra_viewports.insert(id, extra);
+}
+
+/// What a scene camera sees, with the game's UI over it, as the game would show it.
+fn camera_preview(ui: &mut Ui, editor: &mut Editor, world: &mut World, texture: egui::TextureId, camera: &str) {
+    let rect = ui.available_rect_before_wrap();
+    ui.allocate_rect(rect, Sense::hover());
+    let pixels = ui.ctx().pixels_per_point();
+    editor.viewport.wanted_extent = [
+        (rect.width() * pixels).round().max(16.0) as u32,
+        (rect.height() * pixels).round().max(16.0) as u32,
+    ];
+    ui.painter().image(texture, rect, Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)), Color32::WHITE);
+    if editor.viewport.show_game_ui {
+        let mut overlay = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+        let options = vulkano_engine::ui::DrawOptions { viewport_textures: editor.viewport_pictures.clone(), ..Default::default() };
+        vulkano_engine::ui::draw_with(&mut overlay, rect, world, &options);
+    }
+    ui.painter().text(
+        rect.left_bottom() + vec2(8.0, -8.0),
+        egui::Align2::LEFT_BOTTOM,
+        format!("Camera: {camera}"),
+        FontId::proportional(12.0),
+        Color32::from_white_alpha(200),
+    );
+}
 const ICON_PICK_RADIUS: f32 = 14.0;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -97,6 +186,11 @@ fn set_entity_pose(world: &World, entity: EntityId, pose: &Pose) {
 }
 
 pub fn ui(ui: &mut Ui, editor: &mut Editor, world: &mut World) {
+    ui_for(ui, editor, world, egui::TextureId::User(SCENE_TEXTURE_ID));
+}
+
+/// A viewport showing `texture`, driven by `editor.viewport`.
+fn ui_for(ui: &mut Ui, editor: &mut Editor, world: &mut World, texture: egui::TextureId) {
     toolbar(ui, editor, world);
 
     let rect = ui.available_rect_before_wrap();
@@ -108,7 +202,7 @@ pub fn ui(ui: &mut Ui, editor: &mut Editor, world: &mut World) {
     ];
 
     ui.painter().image(
-        egui::TextureId::User(SCENE_TEXTURE_ID),
+        texture,
         rect,
         Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)),
         Color32::WHITE,
@@ -152,7 +246,8 @@ pub fn ui(ui: &mut Ui, editor: &mut Editor, world: &mut World) {
     let mut ui_rects = Vec::new();
     if editor.viewport.show_game_ui {
         let mut overlay = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-        ui_rects = vulkano_engine::ui::draw(&mut overlay, rect, world, false).rects;
+        let options = vulkano_engine::ui::DrawOptions { viewport_textures: editor.viewport_pictures.clone(), ..Default::default() };
+        ui_rects = vulkano_engine::ui::draw_with(&mut overlay, rect, world, &options).rects;
         if let Some((_, selected)) = ui_rects.iter().find(|(e, _)| Some(*e) == editor.doc.selection) {
             painter.rect_stroke(*selected, 2.0, Stroke::new(2.0, theme::selection_outline()), egui::StrokeKind::Outside);
         }

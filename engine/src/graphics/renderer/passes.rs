@@ -1060,9 +1060,10 @@ impl Renderer {
             .begin_render_pass(
                 RenderPassBeginInfo {
                     clear_values: vec![None],
-                    ..RenderPassBeginInfo::framebuffer(
-                        self.composite_framebuffers[self.target_index()].clone(),
-                    )
+                    ..RenderPassBeginInfo::framebuffer(match (&self.view_scratch, self.view_pass) {
+                        (Some((_, framebuffer)), true) => framebuffer.clone(),
+                        _ => self.composite_framebuffers[self.target_index()].clone(),
+                    })
                 },
                 SubpassBeginInfo {
                     contents: SubpassContents::Inline,

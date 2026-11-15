@@ -1,0 +1,117 @@
+(
+    environment: (
+        exposure: 1.0,
+        ambient_color: (1.0, 1.0, 1.0),
+        ambient_intensity: 0.5,
+        sun_direction: (0.1, 1.0, 0.1),
+        sun_color: (4.0, 4.0, 4.0),
+        shadow_softness: 2.0,
+        sun_shadows: true,
+        fxaa: true,
+        ao_radius: 0.05,
+        ao_strength: 1.0,
+        post_effects: [],
+    ),
+    entities: [
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("Ground")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((0.0, 0.1, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                ),
+                (
+                    component: "Shape3D",
+                    fields: {"collision": Bool(true), "shape": Text("Box"), "size": Vec3((20.0, 0.2, 20.0))},
+                ),
+                (
+                    component: "Object3D",
+                    fields: {"model": Text("shape:box:20,0.2,20")},
+                ),
+                (
+                    component: "RigidBody",
+                    fields: {"body_type": Text("Fixed")},
+                ),
+                (
+                    component: "Collider",
+                    fields: {"collision_layer": Int(1), "collision_mask": Int(65535), "half_extents": Vec3((10.0, 0.1, 10.0)), "sensor": Bool(false), "shape": Text("Box")},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("Slider")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((-2.0, -0.5, 6.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                ),
+                (
+                    component: "Shape3D",
+                    fields: {"collision": Bool(false), "shape": Text("Box"), "size": Vec3((1.0, 1.0, 1.0))},
+                ),
+                (
+                    component: "Object3D",
+                    fields: {"model": Text("shape:box:1,1,1")},
+                ),
+                (
+                    component: "AnimationPlayer",
+                    fields: {"animations": Text("animations/slide.vanim"), "autoplay": Text("slide"), "speed": Float(1.0)},
+                ),
+                (
+                    component: "MaterialOverride",
+                    fields: {"emissive": Vec3((1.0, 1.0, 1.0)), "emissive_strength": Float(0.0), "metallic": Float(0.0), "override_metallic": Bool(false), "override_roughness": Bool(false), "roughness": Float(0.5), "shader": Text(""), "tint": Vec3((0.9, 0.2, 0.1)), "viewport": Text(""), "viewport_glow": Float(1.0)},
+                ),
+                (
+                    component: "Scripts",
+                    fields: {"scripts": Scripts([(path: "scripts/slider.rhai", exports: {})])},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("Lamp")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((0.0, -2.5, 8.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                ),
+                (
+                    component: "Shape3D",
+                    fields: {"collision": Bool(false), "shape": Text("Sphere"), "size": Vec3((0.5, 0.5, 0.5))},
+                ),
+                (
+                    component: "Object3D",
+                    fields: {"model": Text("shape:sphere:0.5")},
+                ),
+                (
+                    component: "MaterialOverride",
+                    fields: {"emissive": Vec3((1.0, 0.8, 0.3)), "emissive_strength": Float(3.0), "metallic": Float(0.0), "override_metallic": Bool(false), "override_roughness": Bool(false), "roughness": Float(0.5), "shader": Text(""), "tint": Vec3((1.0, 1.0, 1.0)), "viewport": Text(""), "viewport_glow": Float(1.0)},
+                ),
+            ],
+        ),
+        (
+            components: [
+                (
+                    component: "Name",
+                    fields: {"name": Text("Main")},
+                ),
+                (
+                    component: "Transform",
+                    fields: {"position": Vec3((0.0, -1.5, 0.0)), "rotation": Vec3((0.0, 0.0, 0.0)), "scale": Float(1.0)},
+                ),
+                (
+                    component: "Camera",
+                    fields: {"active": Bool(true), "far": Float(1000.0), "fov": Float(70.0), "near": Float(0.1), "pitch": Float(0.1), "yaw": Float(1.5708)},
+                ),
+            ],
+        ),
+    ],
+)

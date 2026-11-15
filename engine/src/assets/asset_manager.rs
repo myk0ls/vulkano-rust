@@ -103,6 +103,9 @@ pub struct GpuOverride {
     pub pbr: [f32; 4],
     /// Values for the material shader's `@param`s, in the order it declares them.
     pub params: [[f32; 4]; 2],
+    /// x = a bindless texture shown instead of the model's colours (a SubViewport), or
+    /// NO_TEXTURE.
+    pub textures: [u32; 4],
 }
 
 impl GpuOverride {
@@ -111,6 +114,7 @@ impl GpuOverride {
         emissive: [0.0; 4],
         pbr: [-1.0, -1.0, 0.0, 0.0],
         params: [[0.0; 4]; 2],
+        textures: [NO_TEXTURE; 4],
     };
 }
 

@@ -1,0 +1,65 @@
+(
+    entities: [
+        (components: [
+            (component: "Name", fields: {"name": Text("Ground")}),
+            (component: "Transform", fields: {"position": Vec3((0.0, 0.1, 0.0))}),
+            (component: "Shape3D", fields: {"shape": Text("Box"), "size": Vec3((30.0, 0.2, 30.0)), "collision": Bool(true)}),
+            (component: "MaterialOverride", fields: {"tint": Vec3((0.5, 0.55, 0.5))}),
+        ]),
+        (components: [
+            (component: "Name", fields: {"name": Text("RedBox")}),
+            (component: "Transform", fields: {"position": Vec3((6.0, -0.5, 8.0)), "rotation": Vec3((0.0, 30.0, 0.0))}),
+            (component: "Shape3D", fields: {"shape": Text("Box"), "size": Vec3((1.0, 1.0, 1.0))}),
+            (component: "MaterialOverride", fields: {"tint": Vec3((0.9, 0.15, 0.1))}),
+        ]),
+        (components: [
+            (component: "Name", fields: {"name": Text("BlueBall")}),
+            (component: "Transform", fields: {"position": Vec3((7.5, -0.5, 9.0))}),
+            (component: "Shape3D", fields: {"shape": Text("Sphere"), "size": Vec3((1.0, 1.0, 1.0))}),
+            (component: "MaterialOverride", fields: {"tint": Vec3((0.1, 0.3, 0.9))}),
+        ]),
+        (components: [
+            (component: "Name", fields: {"name": Text("Main")}),
+            (component: "Transform", fields: {"position": Vec3((0.0, -1.6, -5.0))}),
+            (component: "Camera", fields: {"active": Bool(true), "fov": Float(70.0), "yaw": Float(1.5708), "pitch": Float(0.05)}),
+        ]),
+        (components: [
+            (component: "Name", fields: {"name": Text("SecurityCam")}),
+            (component: "Transform", fields: {"position": Vec3((6.8, -2.0, 4.5))}),
+            (component: "Camera", fields: {"active": Bool(false), "fov": Float(60.0), "yaw": Float(1.5708), "pitch": Float(0.25)}),
+        ]),
+        (components: [
+            (component: "Name", fields: {"name": Text("Monitor")}),
+            (component: "SubViewport", fields: {"camera": Text("SecurityCam"), "width": Int(640), "height": Int(360)}),
+        ]),
+        (components: [
+            (component: "Name", fields: {"name": Text("Screen")}),
+            (component: "Transform", fields: {"position": Vec3((-1.4, -1.5, 0.0)), "rotation": Vec3((-90.0, 180.0, 0.0))}),
+            (component: "Shape3D", fields: {"shape": Text("Plane"), "size": Vec3((2.4, 1.0, 1.35)), "collision": Bool(false)}),
+            (component: "MaterialOverride", fields: {"viewport": Text("Monitor"), "viewport_glow": Float(1.0)}),
+        ]),
+        (components: [
+            (component: "Name", fields: {"name": Text("Menu")}),
+            (component: "SubViewport", fields: {"width": Int(400), "height": Int(300), "background": Vec3((0.1, 0.12, 0.2))}),
+        ]),
+        (components: [
+            (component: "Name", fields: {"name": Text("MenuPanel")}),
+            (component: "Transform", fields: {"position": Vec3((1.6, -1.5, 0.0)), "rotation": Vec3((-90.0, 180.0, 0.0))}),
+            (component: "Shape3D", fields: {"shape": Text("Plane"), "size": Vec3((1.6, 1.0, 1.2)), "collision": Bool(false)}),
+            (component: "MaterialOverride", fields: {"viewport": Text("Menu")}),
+        ]),
+        (components: [
+            (component: "Name", fields: {"name": Text("MenuTitle")}),
+            (component: "UiElement", fields: {"viewport": Text("Menu"), "kind": Text("Label"), "anchor": Text("Top"), "x": Float(0.0), "y": Float(20.0), "width": Float(300.0), "height": Float(50.0), "text": Text("World Menu"), "font_size": Float(40.0)}),
+        ]),
+        (components: [
+            (component: "Name", fields: {"name": Text("MenuButton")}),
+            (component: "UiElement", fields: {"viewport": Text("Menu"), "kind": Text("Button"), "anchor": Text("Center"), "x": Float(0.0), "y": Float(30.0), "width": Float(220.0), "height": Float(70.0), "text": Text("Press me"), "font_size": Float(30.0), "background": Vec3((0.2, 0.5, 0.3)), "background_opacity": Float(1.0)}),
+            (component: "Scripts", fields: {"scripts": Scripts([(path: "scripts/menu_button.rhai", exports: {})])}),
+        ]),
+        (components: [
+            (component: "Name", fields: {"name": Text("HudCam")}),
+            (component: "UiElement", fields: {"kind": Text("Viewport"), "shows": Text("Monitor"), "anchor": Text("TopRight"), "x": Float(20.0), "y": Float(20.0), "width": Float(320.0), "height": Float(180.0)}),
+        ]),
+    ],
+)

@@ -142,8 +142,13 @@ impl Painter {
     /// With `clear`, the UI pass starts from a blank image. The editor uses this because
     /// its UI covers the whole window; a game must not, or it erases the scene.
     pub fn with_clear(renderer: &Renderer, clear: bool) -> Self {
+        Self::for_format(renderer, renderer.swapchain_format(), clear)
+    }
+
+    /// A painter for images of another format, such as SubViewport targets, which are
+    /// drawn into with `paint_into`.
+    pub fn for_format(renderer: &Renderer, format: Format, clear: bool) -> Self {
         let device = renderer.device.clone();
-        let format = renderer.swapchain_format();
 
         let render_pass = if clear {
             vulkano::single_pass_renderpass!(
@@ -421,6 +426,76 @@ impl Painter {
         }
 
         let framebuffer = self.framebuffers[image_index as usize].clone();
+        let extent = self.extent;
+        self.draw_primitives(commands, framebuffer, extent, primitives, pixels_per_point);
+
+        for id in freed {
+            self.textures.remove(&id);
+        }
+
+        if let Some(path) = self.capture_request.take() {
+            let image = renderer_images[image_index as usize].clone();
+            let [w, h, _] = image.extent();
+            let buffer = Buffer::new_slice::<u8>(
+                self.allocator.clone(),
+                BufferCreateInfo {
+                    usage: BufferUsage::TRANSFER_DST,
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                        | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                    ..Default::default()
+                },
+                (w * h * 4) as u64,
+            )
+            .unwrap();
+            let format = image.format();
+            commands
+                .copy_image_to_buffer(CopyImageToBufferInfo::image_buffer(image, buffer.clone()))
+                .unwrap();
+            self.capture_pending = Some((path, buffer, [w, h], format));
+        }
+    }
+
+    /// Draw UI into any image of this painter's format, such as a SubViewport's target.
+    pub fn paint_into(
+        &mut self,
+        commands: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        target: &Arc<ImageView>,
+        primitives: &[ClippedPrimitive],
+        pixels_per_point: f32,
+    ) {
+        let mut freed = Vec::new();
+        for mut delta in std::mem::take(&mut self.pending_deltas) {
+            for (id, image_deltas) in &delta.set {
+                for image_delta in image_deltas {
+                    self.apply_delta(commands, *id, image_delta);
+                }
+            }
+            freed.extend(delta.free.iter().copied());
+            delta.clear();
+        }
+        let framebuffer = Framebuffer::new(
+            self.render_pass.clone(),
+            FramebufferCreateInfo { attachments: vec![target.clone()], ..Default::default() },
+        )
+        .unwrap();
+        let [w, h, _] = target.image().extent();
+        self.draw_primitives(commands, framebuffer, [w, h], primitives, pixels_per_point);
+        for id in freed {
+            self.textures.remove(&id);
+        }
+    }
+
+    fn draw_primitives(
+        &mut self,
+        commands: &mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        framebuffer: Arc<Framebuffer>,
+        extent: [u32; 2],
+        primitives: &[ClippedPrimitive],
+        pixels_per_point: f32,
+    ) {
         commands
             .begin_render_pass(
                 RenderPassBeginInfo {
@@ -439,7 +514,7 @@ impl Painter {
                 0,
                 [Viewport {
                     offset: [0.0, 0.0],
-                    extent: [self.extent[0] as f32, self.extent[1] as f32],
+                    extent: [extent[0] as f32, extent[1] as f32],
                     depth_range: 0.0..=1.0,
                 }]
                 .into_iter()
@@ -448,8 +523,8 @@ impl Painter {
             .unwrap();
 
         let screen_size = [
-            self.extent[0] as f32 / pixels_per_point,
-            self.extent[1] as f32 / pixels_per_point,
+            extent[0] as f32 / pixels_per_point,
+            extent[1] as f32 / pixels_per_point,
         ];
 
         for primitive in primitives {
@@ -466,9 +541,9 @@ impl Painter {
             let min_x = (primitive.clip_rect.min.x * pixels_per_point).round().max(0.0) as u32;
             let min_y = (primitive.clip_rect.min.y * pixels_per_point).round().max(0.0) as u32;
             let max_x = ((primitive.clip_rect.max.x * pixels_per_point).round().max(0.0) as u32)
-                .min(self.extent[0]);
+                .min(extent[0]);
             let max_y = ((primitive.clip_rect.max.y * pixels_per_point).round().max(0.0) as u32)
-                .min(self.extent[1]);
+                .min(extent[1]);
             if max_x <= min_x || max_y <= min_y {
                 continue;
             }
@@ -533,33 +608,5 @@ impl Painter {
         }
 
         commands.end_render_pass(SubpassEndInfo::default()).unwrap();
-
-        for id in freed {
-            self.textures.remove(&id);
-        }
-
-        if let Some(path) = self.capture_request.take() {
-            let image = renderer_images[image_index as usize].clone();
-            let [w, h, _] = image.extent();
-            let buffer = Buffer::new_slice::<u8>(
-                self.allocator.clone(),
-                BufferCreateInfo {
-                    usage: BufferUsage::TRANSFER_DST,
-                    ..Default::default()
-                },
-                AllocationCreateInfo {
-                    memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                        | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                    ..Default::default()
-                },
-                (w * h * 4) as u64,
-            )
-            .unwrap();
-            let format = image.format();
-            commands
-                .copy_image_to_buffer(CopyImageToBufferInfo::image_buffer(image, buffer.clone()))
-                .unwrap();
-            self.capture_pending = Some((path, buffer, [w, h], format));
-        }
     }
 }

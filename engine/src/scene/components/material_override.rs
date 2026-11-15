@@ -21,6 +21,10 @@ pub struct MaterialOverride {
     pub shader: String,
     /// Values for the shader's `@param`s. Missing ones use the shader's default.
     pub params: BTreeMap<String, f32>,
+    /// The Name of a SubViewport entity whose picture covers the surface, like a screen.
+    pub viewport: String,
+    /// How much that picture lights itself, so screens stay readable in the dark.
+    pub viewport_glow: f32,
 }
 
 impl Default for MaterialOverride {
@@ -35,6 +39,8 @@ impl Default for MaterialOverride {
             roughness: 0.5,
             shader: String::new(),
             params: BTreeMap::new(),
+            viewport: String::new(),
+            viewport_glow: 1.0,
         }
     }
 }
@@ -49,10 +55,12 @@ impl MaterialOverride {
             pbr: [
                 if self.override_metallic { self.metallic.clamp(0.0, 1.0) } else { -1.0 },
                 if self.override_roughness { self.roughness.clamp(0.0, 1.0) } else { -1.0 },
-                0.0,
+                self.viewport_glow.max(0.0),
                 0.0,
             ],
             params: self.param_values(),
+            // Set by the renderer's caller once it knows where the viewport's image is.
+            textures: [crate::assets::asset_manager::NO_TEXTURE; 4],
         }
     }
 

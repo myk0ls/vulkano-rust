@@ -34,6 +34,8 @@ pub enum Tab {
     Inspector,
     Output,
     Animation,
+    /// Another 3D view; the number keys `Editor::extra_viewports`.
+    ExtraViewport(u32),
 }
 
 #[derive(Clone, Debug)]
@@ -104,6 +106,15 @@ pub struct Editor {
     pub actions: Vec<Action>,
     /// A blocking operation is about to run; the UI shows this while it does.
     pub busy: Option<String>,
+    /// The UI theme being edited, if its window is open.
+    pub theme_editor: Option<crate::panels::theme_editor::ThemeEditor>,
+    /// The Animation dock's track editor and its preview.
+    pub tracks: crate::panels::tracks::TrackEditor,
+    /// More 3D views, each in its own tab.
+    pub extra_viewports: std::collections::BTreeMap<u32, viewport::ExtraViewport>,
+    next_viewport: u32,
+    /// SubViewport pictures by Name, for previewing Viewport UI elements.
+    pub viewport_pictures: HashMap<String, egui::TextureId>,
     /// The open project, whose folder is the current directory. None outside a project.
     pub project: Option<vulkano_engine::core::project::Project>,
     /// Remembered across projects: recent projects, where Blender is.
@@ -150,6 +161,11 @@ impl Editor {
             dialog: None,
             actions: Vec::new(),
             busy: None,
+            extra_viewports: Default::default(),
+            theme_editor: None,
+            tracks: Default::default(),
+            next_viewport: 1,
+            viewport_pictures: HashMap::new(),
             project: None,
             global: crate::projects::GlobalConfig::load(),
             quit: false,
@@ -171,6 +187,9 @@ impl Editor {
 
     pub fn ui(&mut self, root: &mut Ui, world: &mut World) {
         let ctx = root.ctx().clone();
+        // The animation preview only shows while drawing; put the real values back first.
+        self.tracks.restore(world, &self.registry);
+        self.tracks.tick(ctx.input(|i| i.stable_dt).min(0.1));
 
         egui::Panel::top("menu_bar")
             .frame(egui::Frame::new().fill(theme::dark()).inner_margin(egui::Margin::symmetric(6, 4)))
@@ -182,7 +201,7 @@ impl Editor {
             .show(root, |ui| {
                 DockArea::new(&mut dock)
                     .style(theme::dock_style(&ctx))
-                    .show_close_buttons(false)
+                    .show_close_buttons(true)
                     .show_add_buttons(false)
                     .show_leaf_close_all_buttons(false)
                     .show_leaf_collapse_buttons(false)
@@ -193,6 +212,7 @@ impl Editor {
             self.dock = Some(dock);
         }
 
+        crate::panels::theme_editor::window(&ctx, self);
         self.dialogs(&ctx, world);
         self.shortcuts(&ctx);
         self.busy_overlay(&ctx);
@@ -207,6 +227,8 @@ impl Editor {
         vulkano_engine::physics::mesh_collider::mesh_collider_system(world);
         self.doc.refresh(world, &self.registry);
         self.doc.commit_changes(interacting);
+        // After the scene is recorded, so previewing never counts as an edit.
+        self.tracks.apply(world, &self.registry, self.doc.selection);
     }
 
     pub fn is_blocked_by_dialog(&self) -> bool {
@@ -289,6 +311,10 @@ impl Editor {
                     }
                 });
                 ui.separator();
+                if ui.button("Add 3D Viewport").on_hover_text("Another view of the scene in its own tab; it can look through a scene camera too.").clicked() {
+                    self.add_viewport();
+                    ui.close();
+                }
                 if ui.button("Reset Dock Layout").clicked() {
                     self.dock = Some(default_layout());
                     ui.close();
@@ -400,6 +426,21 @@ impl Editor {
             if pressed(Modifiers::NONE, Key::F2) {
                 self.rename_requested = true;
             }
+        }
+    }
+
+    /// Open another 3D view beside the main one, starting from the main view's camera.
+    pub fn add_viewport(&mut self) {
+        let id = self.next_viewport;
+        self.next_viewport += 1;
+        self.extra_viewports.insert(id, viewport::ExtraViewport::new(self.viewport.camera.clone()));
+        let tab = Tab::ExtraViewport(id);
+        let dock = self.dock.get_or_insert_with(default_layout);
+        match dock.find_tab(&Tab::Viewport) {
+            Some(path) if path.surface == egui_dock::SurfaceIndex::main() => {
+                dock.main_surface_mut().split_right(path.node, 0.5, vec![tab]);
+            }
+            _ => dock.push_to_focused_leaf(tab),
         }
     }
 
@@ -879,7 +920,7 @@ impl TabViewer for Tabs<'_> {
     type Tab = Tab;
 
     fn id(&mut self, tab: &mut Tab) -> egui::Id {
-        egui::Id::new(*tab as u8 as u64 + 1000)
+        egui::Id::new(("dock_tab", format!("{tab:?}")))
     }
 
     fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
@@ -891,6 +932,10 @@ impl TabViewer for Tabs<'_> {
             Tab::Inspector => "Inspector".to_string(),
             Tab::Output => "Output".to_string(),
             Tab::Animation => "Animation".to_string(),
+            Tab::ExtraViewport(id) => match self.editor.extra_viewports.get(id).and_then(|v| v.camera.clone()) {
+                Some(camera) => format!("3D ({camera})"),
+                None => format!("3D ({})", *id + 1),
+            },
         }
         .into()
     }
@@ -904,11 +949,19 @@ impl TabViewer for Tabs<'_> {
             Tab::Inspector => inspector::ui(ui, self.editor, self.world),
             Tab::Output => output::ui(ui, self.editor),
             Tab::Animation => crate::panels::animation::ui(ui, self.editor, self.world),
+            Tab::ExtraViewport(id) => viewport::extra_ui(ui, self.editor, self.world, *id),
         }
     }
 
-    fn is_closeable(&self, _tab: &Tab) -> bool {
-        false
+    fn is_closeable(&self, tab: &Tab) -> bool {
+        matches!(tab, Tab::ExtraViewport(_))
+    }
+
+    fn on_close(&mut self, tab: &mut Tab) -> egui_dock::widgets::tab_viewer::OnCloseResponse {
+        if let Tab::ExtraViewport(id) = tab {
+            self.editor.extra_viewports.remove(id);
+        }
+        egui_dock::widgets::tab_viewer::OnCloseResponse::Close
     }
 
     fn allowed_in_windows(&self, tab: &mut Tab) -> bool {
@@ -917,6 +970,6 @@ impl TabViewer for Tabs<'_> {
     }
 
     fn clear_background(&self, tab: &Tab) -> bool {
-        *tab != Tab::Viewport
+        !matches!(tab, Tab::Viewport | Tab::ExtraViewport(_))
     }
 }

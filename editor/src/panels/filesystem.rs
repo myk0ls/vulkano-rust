@@ -137,6 +137,9 @@ fn icon(entry: &FileEntry) -> (&'static str, Color32) {
         "glb" | "gltf" | "blend" => ("▣", theme::entity()),
         "hdr" | "png" | "jpg" | "jpeg" => ("🖼", theme::warning()),
         "wav" | "ogg" | "mp3" | "flac" => ("♫", theme::play()),
+        "vtheme" => ("🎨", theme::accent()),
+        "ttf" | "otf" => ("A", theme::text()),
+        "vanim" => ("⏵", theme::warning()),
         _ => ("🗋", theme::text_dim()),
     }
 }
@@ -231,6 +234,7 @@ fn row(ui: &mut Ui, editor: &mut Editor, entry: &FileEntry, depth: usize, filter
         match extension(&entry.path).as_str() {
             "vscene" => editor.actions.push(Action::OpenScene(entry.path.clone())),
             "rhai" | "glsl" => editor.scripts.open_in_editor(&asset_path(&entry.path), &mut editor.log),
+            "vtheme" => open_theme(editor, &asset_path(&entry.path)),
             "glb" | "gltf" | "blend" => editor.actions.push(Action::AddModel {
                 path: asset_path(&entry.path),
                 position: None,
@@ -281,6 +285,7 @@ pub enum NewFile {
     Script,
     Scene,
     Material,
+    Theme,
 }
 
 impl NewFile {
@@ -289,6 +294,7 @@ impl NewFile {
             NewFile::Script => "rhai",
             NewFile::Scene => "vscene",
             NewFile::Material => "glsl",
+            NewFile::Theme => "vtheme",
         }
     }
 
@@ -297,6 +303,7 @@ impl NewFile {
             NewFile::Script => "Script",
             NewFile::Scene => "Scene",
             NewFile::Material => "Material Shader",
+            NewFile::Theme => "UI Theme",
         }
     }
 }
@@ -356,6 +363,7 @@ impl FileOp {
                     NewFile::Script => std::fs::write(&path, FileKind::Script.template()).map_err(|e| fail("write", &path, e))?,
                     NewFile::Material => std::fs::write(&path, FileKind::Material.template()).map_err(|e| fail("write", &path, e))?,
                     NewFile::Scene => vulkano_engine::scene::scene_file::SceneFile::default().save(&path)?,
+                    NewFile::Theme => crate::panels::theme_editor::create(&path)?,
                 }
                 Ok(path)
             }
@@ -390,6 +398,7 @@ fn context_menu(ui: &mut Ui, editor: &mut Editor, entry: Option<&FileEntry>) {
         let ext = extension(&entry.path);
         let open_label = match ext.as_str() {
             "vscene" => Some("Open Scene"),
+            "vtheme" => Some("Edit Theme"),
             "rhai" | "glsl" => Some("Open in Code Editor"),
             _ if is_model(&entry.path) => Some("Add to Scene"),
             _ => None,
@@ -398,6 +407,7 @@ fn context_menu(ui: &mut Ui, editor: &mut Editor, entry: Option<&FileEntry>) {
             if ui.button(label).clicked() {
                 match ext.as_str() {
                     "vscene" => editor.actions.push(Action::OpenScene(entry.path.clone())),
+                    "vtheme" => open_theme(editor, &path),
                     "rhai" | "glsl" => editor.scripts.open_in_editor(&path, &mut editor.log),
                     _ => editor.actions.push(Action::AddModel { path: path.clone(), position: None }),
                 }
@@ -423,7 +433,12 @@ fn context_menu(ui: &mut Ui, editor: &mut Editor, entry: Option<&FileEntry>) {
         editor.dialog = Some(name_dialog(FileOp::NewFolder(folder.clone()), "new_folder"));
         ui.close();
     }
-    for (kind, default) in [(NewFile::Scene, "new_scene"), (NewFile::Script, "new_script"), (NewFile::Material, "new_material")] {
+    for (kind, default) in [
+        (NewFile::Scene, "new_scene"),
+        (NewFile::Script, "new_script"),
+        (NewFile::Material, "new_material"),
+        (NewFile::Theme, "new_theme"),
+    ] {
         if ui.button(format!("New {}…", kind.label())).clicked() {
             editor.dialog = Some(name_dialog(FileOp::NewFile(folder.clone(), kind), default));
             ui.close();
@@ -448,6 +463,13 @@ fn context_menu(ui: &mut Ui, editor: &mut Editor, entry: Option<&FileEntry>) {
     if ui.button("Rescan Files").clicked() {
         editor.files.refresh();
         ui.close();
+    }
+}
+
+pub fn open_theme(editor: &mut Editor, path: &str) {
+    match crate::panels::theme_editor::ThemeEditor::open(path) {
+        Ok(state) => editor.theme_editor = Some(state),
+        Err(e) => editor.log.error(e),
     }
 }
 

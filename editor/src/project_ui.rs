@@ -257,6 +257,7 @@ impl Editor {
                 self.log.info(format!("Created {shown}."));
                 match path.extension().and_then(|e| e.to_str()) {
                     Some("vscene") => self.actions.push(Action::OpenScene(path.to_path_buf())),
+                    Some("vtheme") => filesystem::open_theme(self, &shown),
                     _ => self.scripts.open_in_editor(&shown, &mut self.log),
                 }
             }

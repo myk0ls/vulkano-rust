@@ -4,6 +4,8 @@ pub mod filesystem;
 pub mod inspector;
 pub mod output;
 pub mod scripts;
+pub mod theme_editor;
+pub mod tracks;
 pub mod viewport;
 
 /// What was picked in a [`search_combo`].

@@ -41,8 +41,9 @@ layout(location = 4) out vec4 f_emissive;
 struct Override {
     vec4 tint;       // rgb multiplies albedo
     vec4 emissive;   // rgb, already multiplied by strength
-    vec4 pbr;        // x = metallic, y = roughness; negative keeps the material's own
+    vec4 pbr;        // x = metallic, y = roughness (negative keeps the material's own), z = viewport glow
     vec4 params[2];  // the material shader's @param values
+    uvec4 textures;  // x = a SubViewport's picture shown instead of the albedo
 };
 
 layout(set = 2, binding = 2) readonly buffer Overrides {
@@ -74,7 +75,11 @@ vec4 material_params[2];
 void main() {
     Material mat = materials.data[in_material_index];
 
+    Override o = overrides.data[in_override_index];
     vec4 albedo = texture(textures[nonuniformEXT(mat.albedo_tex)], in_tex_coords) * mat.base_color;
+    bool screen = o.textures.x != 0xFFFFFFFFu;
+    if (screen)
+        albedo = vec4(texture(textures[nonuniformEXT(o.textures.x)], in_tex_coords).rgb, 1.0);
     if (albedo.a < mat.alpha_cutoff)
         discard;
     vec3 emission = mat.emissive.rgb;
@@ -111,7 +116,8 @@ void main() {
     }
     roughness = max(roughness, 0.4); // floor for models with missing PBR data
 
-    Override o = overrides.data[in_override_index];
+    if (screen)
+        emission += albedo.rgb * o.pbr.z;
     Surface s;
     s.albedo = albedo.rgb * o.tint.rgb;
     s.normal = finalNormal;

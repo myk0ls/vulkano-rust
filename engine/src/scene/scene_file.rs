@@ -211,10 +211,12 @@ impl ComponentRegistry {
         registry.register::<Object3D>();
         registry.defs.push(animator_def());
         registry.register::<AnimationEvents>();
+        registry.register::<crate::scene::components::animation_player::AnimationPlayer>();
         registry.register::<MaterialOverride>();
         registry.register::<Pointlight>();
         registry.register::<Spotlight>();
         registry.register::<Camera>();
+        registry.register::<crate::scene::components::sub_viewport::SubViewport>();
         registry.register::<AudioPlayback>();
         registry.register::<AudioPlayback3D>();
         registry.register::<Velocity>();
@@ -254,6 +256,20 @@ impl ComponentRegistry {
             "Audio Player 3D",
             "Plays a sound from its position, quieter with distance and panned to its side.",
             vec![transform.clone(), ComponentData::named("AudioPlayback3D")],
+        );
+        registry.add_template(
+            "World Screen",
+            "A SubViewport shown on an upright Plane. Point its camera at a camera entity's Name, or leave it empty and put UI elements in it (their viewport set to this Name) for a menu you can click.",
+            vec![
+                ComponentData::named("Name").with("name", FieldValue::Text("Screen".into())),
+                transform.clone().with("rotation", FieldValue::Vec3([-90.0, 180.0, 0.0])),
+                ComponentData::named("Shape3D")
+                    .with("shape", FieldValue::Text("Plane".into()))
+                    .with("size", FieldValue::Vec3([1.6, 1.0, 0.9]))
+                    .with("collision", FieldValue::Bool(false)),
+                ComponentData::named("MaterialOverride").with("viewport", FieldValue::Text("Screen".into())),
+                ComponentData::named("SubViewport").with("width", FieldValue::Int(640)).with("height", FieldValue::Int(360)),
+            ],
         );
         registry.add_template("Camera", "A camera with a position.", vec![transform.clone(), ComponentData::named("Camera")]);
         registry.add_template("UI Label", "Text on the screen. Scripts can change it with set_text.", vec![ComponentData::named("UiElement")]);
@@ -633,6 +649,8 @@ impl EditableComponent for MaterialOverride {
             Field::new("override_roughness", FieldValue::Bool(self.override_roughness)),
             Field::hinted("roughness", FieldValue::Float(self.roughness), unit),
             Field::hinted("shader", FieldValue::Text(self.shader.clone()), FieldHint::Asset(&["glsl"])),
+            Field::new("viewport", FieldValue::Text(self.viewport.clone())),
+            Field::hinted("viewport_glow", FieldValue::Float(self.viewport_glow), FieldHint::Range(0.0, 20.0)),
         ]
         .into_iter()
         // The shader's `@param`s, so each entity can set its own values.
@@ -654,6 +672,8 @@ impl EditableComponent for MaterialOverride {
             ("override_roughness", FieldValue::Bool(v)) => self.override_roughness = *v,
             ("roughness", FieldValue::Float(v)) => self.roughness = *v,
             ("shader", FieldValue::Text(v)) => self.shader = v.clone(),
+            ("viewport", FieldValue::Text(v)) => self.viewport = v.clone(),
+            ("viewport_glow", FieldValue::Float(v)) => self.viewport_glow = v.max(0.0),
             (name, value) if name.starts_with(PARAM_PREFIX) => {
                 if let Some(v) = value.as_float() {
                     self.params.insert(name[PARAM_PREFIX.len()..].to_string(), v);
@@ -784,6 +804,60 @@ impl EditableComponent for Camera {
             ("far", FieldValue::Float(v)) => self.far = *v,
             ("yaw", FieldValue::Float(v)) => self.yaw = *v,
             ("pitch", FieldValue::Float(v)) => self.pitch = *v,
+            _ => {}
+        }
+    }
+}
+
+impl EditableComponent for crate::scene::components::animation_player::AnimationPlayer {
+    const NAME: &'static str = "AnimationPlayer";
+    fn create() -> Self {
+        Self::default()
+    }
+    fn fields(&self) -> Vec<Field> {
+        vec![
+            // Edited in the Animation dock; a comma-separated list in scene files.
+            Field::new("animations", FieldValue::Text(self.animations.join(", "))),
+            Field::new("autoplay", FieldValue::Text(self.autoplay.clone())),
+            Field::hinted("speed", FieldValue::Float(self.speed), FieldHint::Range(-10.0, 10.0)),
+        ]
+    }
+    fn set_field(&mut self, name: &str, value: &FieldValue) {
+        match (name, value) {
+            ("animations", FieldValue::Text(v)) => {
+                self.animations = v.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect();
+            }
+            ("autoplay", FieldValue::Text(v)) => self.autoplay = v.clone(),
+            ("speed", FieldValue::Float(v)) => self.speed = *v,
+            _ => {}
+        }
+    }
+}
+
+impl EditableComponent for crate::scene::components::sub_viewport::SubViewport {
+    const NAME: &'static str = "SubViewport";
+    fn create() -> Self {
+        Self::default()
+    }
+    fn fields(&self) -> Vec<Field> {
+        let size = FieldHint::Range(16.0, 4096.0);
+        vec![
+            Field::new("camera", FieldValue::Text(self.camera.clone())),
+            Field::hinted("width", FieldValue::Int(self.width), size),
+            Field::hinted("height", FieldValue::Int(self.height), size),
+            Field::hinted("background", FieldValue::Vec3(self.background), FieldHint::Color),
+            Field::hinted("background_opacity", FieldValue::Float(self.background_opacity), FieldHint::Range(0.0, 1.0)),
+            Field::new("enabled", FieldValue::Bool(self.enabled)),
+        ]
+    }
+    fn set_field(&mut self, name: &str, value: &FieldValue) {
+        match (name, value) {
+            ("camera", FieldValue::Text(v)) => self.camera = v.clone(),
+            ("width", FieldValue::Int(v)) => self.width = (*v).clamp(16, 4096),
+            ("height", FieldValue::Int(v)) => self.height = (*v).clamp(16, 4096),
+            ("background", FieldValue::Vec3(v)) => self.background = *v,
+            ("background_opacity", FieldValue::Float(v)) => self.background_opacity = v.clamp(0.0, 1.0),
+            ("enabled", FieldValue::Bool(v)) => self.enabled = *v,
             _ => {}
         }
     }
@@ -1088,6 +1162,10 @@ impl EditableComponent for UiElement {
             Field::hinted("background_opacity", FieldValue::Float(self.background_opacity), FieldHint::Range(0.0, 1.0)),
             Field::hinted("value", FieldValue::Float(self.value), FieldHint::Range(0.0, 1.0)),
             Field::new("layer", FieldValue::Int(self.layer)),
+            Field::new("viewport", FieldValue::Text(self.viewport.clone())),
+            Field::new("shows", FieldValue::Text(self.shows.clone())),
+            Field::hinted("theme", FieldValue::Text(self.theme.clone()), FieldHint::Asset(&["vtheme"])),
+            Field::new("custom_colors", FieldValue::Bool(self.custom_colors)),
         ]
     }
     fn set_field(&mut self, name: &str, value: &FieldValue) {
@@ -1105,6 +1183,10 @@ impl EditableComponent for UiElement {
             ("background_opacity", FieldValue::Float(v)) => self.background_opacity = *v,
             ("value", FieldValue::Float(v)) => self.value = *v,
             ("layer", FieldValue::Int(v)) => self.layer = *v,
+            ("viewport", FieldValue::Text(v)) => self.viewport = v.clone(),
+            ("shows", FieldValue::Text(v)) => self.shows = v.clone(),
+            ("theme", FieldValue::Text(v)) => self.theme = v.clone(),
+            ("custom_colors", FieldValue::Bool(v)) => self.custom_colors = *v,
             _ => {}
         }
     }

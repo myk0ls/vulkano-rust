@@ -6,6 +6,8 @@ mod custom;
 mod pipelines;
 pub use custom::{PostParam, check_material, check_post_effect, parse_post_params, shader_params};
 mod upload;
+mod views;
+pub use views::VIEW_FORMAT;
 
 use std::{mem, sync::Arc};
 
@@ -429,6 +431,16 @@ pub struct Renderer {
     pub(super) post_output: Option<Arc<ImageView>>,
     pub(super) start_time: std::time::Instant,
     pub(super) offscreen: Option<Arc<ImageView>>,
+    /// Set while recording an extra view (see views.rs): composite goes to `view_scratch`.
+    pub(super) view_pass: bool,
+    /// What an extra view composites into before being scaled into its target.
+    pub(super) view_scratch: Option<(Arc<ImageView>, Arc<Framebuffer>)>,
+    /// The material buffer and textures from the last geometry build, so the bindless set
+    /// can be rebuilt when `extra_textures` change.
+    pub(super) material_buffer: Option<Subbuffer<[crate::assets::asset_manager::GpuMaterial]>>,
+    pub(super) material_textures: Vec<Arc<ImageView>>,
+    /// Images materials can sample besides model textures, such as SubViewport targets.
+    pub(super) extra_textures: Vec<Arc<ImageView>>,
     pub(super) swapchain_images: Vec<Arc<Image>>,
     pub(super) swapchain_generation: u64,
 
@@ -1152,6 +1164,11 @@ impl Renderer {
             post_output: None,
             start_time: std::time::Instant::now(),
             offscreen,
+            view_pass: false,
+            view_scratch: None,
+            material_buffer: None,
+            material_textures: Vec::new(),
+            extra_textures: Vec::new(),
             swapchain_images: images,
             swapchain_generation: 0,
             window: window.clone(),
@@ -1385,8 +1402,11 @@ impl Renderer {
     }
 
     /// Replace the projection used by subsequent frames.
+    /// Takes effect at once, whether it's set before or after the view.
     pub fn set_projection(&mut self, projection: &TMat4<f32>) {
         self.vp.projection = *projection;
+        let view = self.vp.view;
+        self.set_view(&view);
     }
 
     /// Apply the renderer-side settings of a scene's environment.

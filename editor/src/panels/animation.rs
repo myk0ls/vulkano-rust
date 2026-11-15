@@ -16,12 +16,33 @@ pub struct AnimationState {
     /// Stops every animator in the editor, so a pose can be inspected.
     pub paused: bool,
     new_function: String,
+    /// With both an Animator and an AnimationPlayer: show the skeleton's clips.
+    pub skeleton: bool,
 }
 
 pub fn ui(ui: &mut Ui, editor: &mut Editor, world: &mut World) {
+    use vulkano_engine::scene::components::animation_player::AnimationPlayer;
+    let selected = editor.doc.selection;
+    let has_player = selected.is_some_and(|e| world.get::<&AnimationPlayer>(e).is_ok());
+    let has_animator = selected.is_some_and(|e| world.get::<&Animator>(e).is_ok());
+    if has_player && has_animator {
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut editor.animation.skeleton, false, "Tracks");
+            ui.selectable_value(&mut editor.animation.skeleton, true, "Skeleton");
+        });
+    }
+    if has_player && !(has_animator && editor.animation.skeleton) {
+        crate::panels::tracks::ui(ui, editor, world, selected.unwrap());
+        return;
+    }
     let Some(entity) = editor.doc.selection.filter(|e| world.get::<&Animator>(*e).is_ok()) else {
         ui.add_space(8.0);
-        ui.label(RichText::new("Select an entity with an Animator to see its animations.").color(theme::text_dim()));
+        ui.label(RichText::new("Select an entity with an Animator or AnimationPlayer to see its animations.").color(theme::text_dim()));
+        ui.label(
+            RichText::new("Add an AnimationPlayer from the Inspector to animate any component's values over time.")
+                .color(theme::text_dim())
+                .small(),
+        );
         ui.label(
             RichText::new("Models with a skeleton get one when added; it can also be added from the Inspector.")
                 .color(theme::text_dim())

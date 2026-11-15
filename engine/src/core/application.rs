@@ -66,6 +66,8 @@ pub struct Application<G: Game> {
     ui: Option<GameUi>,
     /// Plays every AudioPlayback and AudioPlayback3D. Dropped before SDL shuts down.
     pub audio: crate::audio::AudioEngine,
+    /// Pictures rendered from SubViewports, kept between frames.
+    pub subviewports: crate::core::subviewports::SubViewports,
     // Fields drop in declaration order. The frame future and renderer hold the
     // swapchain, which must be destroyed before the window and SDL shut down.
     pub previous_frame_end: Option<Box<dyn vulkano::sync::GpuFuture>>,
@@ -112,6 +114,7 @@ impl<G: Game> Application<G> {
         Self {
             game,
             audio,
+            subviewports: Default::default(),
             last_frame: std::time::Instant::now(),
             sdl,
             window,
@@ -414,6 +417,7 @@ impl<G: Game> Application<G> {
                 break 'running;
             }
             self.update_animators(dt);
+            self.update_animation_players(dt);
             self.update_audio(dt);
             self.game.on_render();
 
@@ -457,6 +461,9 @@ impl<G: Game> Application<G> {
             // The view comes from this frame's input and (interpolated) physics, so it must
             // be set before rendering; afterwards, every frame showed the previous frame's
             // camera, a whole frame of extra input lag.
+            // SubViewports first: each renders on its own, then the main camera is set.
+            let pointer = self.world_pointer();
+            self.update_subviewports(&mut environment, pointer);
             self.update_camera_view();
             let primitives = self.build_ui();
             self.renderer.start();
@@ -481,12 +488,30 @@ impl<G: Game> Application<G> {
         let size = self.window.size();
         let input = ui.platform.take_input(size);
         let world = self.game.get_world();
+        if self.subviewports.take_changed() {
+            for (name, view) in self.subviewports.pictures() {
+                ui.painter.set_user_texture(crate::ui::viewport_texture_id(&name), view);
+            }
+        }
+        let options = crate::ui::DrawOptions {
+            interactive: true,
+            viewport: String::new(),
+            viewport_textures: self
+                .subviewports
+                .pictures()
+                .into_iter()
+                .map(|(name, _)| {
+                    let id = egui::TextureId::User(crate::ui::viewport_texture_id(&name));
+                    (name, id)
+                })
+                .collect(),
+        };
         let mut pressed = Vec::new();
         let output = ui.context.run_ui(input, |root| {
             let screen = root.max_rect();
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
-                .show(root, |panel| pressed = crate::ui::draw(panel, screen, world, true).pressed);
+                .show(root, |panel| pressed = crate::ui::draw_with(panel, screen, world, &options).pressed);
         });
         ui.platform.apply_output(output.platform_output);
         ui.painter.queue_textures(output.textures_delta);
@@ -591,23 +616,14 @@ impl<G: Game> Application<G> {
         println!("Loaded scene {path}");
     }
 
+    /// Look through the active camera, with its field of view, near and far.
     pub fn update_camera_view(&mut self) {
-        let world = self.game.get_world();
-        world.run(|cameras: View<Camera>, transforms: View<Transform>| {
-            for (camera, transform) in (&cameras, &transforms).iter().filter(|(c, _)| c.active) {
-                //FPS camera: look from position in the direction we're facing
-                let pos = transform.get_position_vector();
-                let position = vec3(pos[0], pos[1], pos[2]);
-
-                let forward = camera.get_forward_vector();
-                let target = position + forward; // Look ahead from our position
-                let up = vec3(0.0, 1.0, 0.0);
-
-                let view = look_at(&position, &target, &up);
-                self.renderer.set_view(&view);
-                break;
-            }
-        });
+        let [w, h] = self.renderer.render_extent();
+        let aspect = w as f32 / h.max(1) as f32;
+        if let Some((view, projection)) = crate::core::subviewports::camera_matrices(self.game.get_world(), None, aspect) {
+            self.renderer.set_view(&view);
+            self.renderer.set_projection(&projection);
+        }
     }
 
     pub fn build_culled_draw_list(&mut self) -> Option<CulledDrawBuffers> {
@@ -618,6 +634,12 @@ impl<G: Game> Application<G> {
         let mut items: Vec<DrawItem> = Vec::new();
         let mut all_joint_matrices: Vec<[[f32; 4]; 4]> = Vec::new();
         let mut overrides = vec![GpuOverride::NONE];
+        let viewport_indices: std::collections::HashMap<String, u32> = self
+            .subviewports
+            .pictures()
+            .into_iter()
+            .filter_map(|(name, _)| self.subviewports.texture_index(&name, &self.renderer).map(|i| (name, i)))
+            .collect();
 
         world.run(
             |objects: View<Object3D>,
@@ -640,7 +662,11 @@ impl<G: Game> Application<G> {
                     };
                     let (override_index, shader) = match materials.get(entity_id) {
                         Ok(material) => {
-                            overrides.push(material.gpu());
+                            let mut gpu = material.gpu();
+                            if let Some(index) = viewport_indices.get(&material.viewport) {
+                                gpu.textures[0] = *index;
+                            }
+                            overrides.push(gpu);
                             ((overrides.len() - 1) as u32, material.shader_path())
                         }
                         Err(_) => (0, None),
@@ -689,6 +715,74 @@ impl<G: Game> Application<G> {
         );
         for (entity, function) in calls {
             self.scripts.call(entity, &function);
+        }
+    }
+
+    /// Move every AnimationPlayer on and apply its tracks. Scripts hear about the end of
+    /// an animation through the "animation_finished" signal, with its name.
+    pub fn update_animation_players(&mut self, delta_time: f32) {
+        use crate::scene::components::animation_player::{self as anim, AnimationPlayer, TrackKind};
+        let registry = self.scripts.registry();
+        let world = self.game.get_world_mut();
+        let players: Vec<shipyard::EntityId> =
+            world.run(|players: View<AnimationPlayer>| players.iter().with_id().map(|(id, _)| id).collect());
+        let mut calls: Vec<(shipyard::EntityId, String)> = Vec::new();
+        let mut finished: Vec<(shipyard::EntityId, String)> = Vec::new();
+        for entity in players {
+            let (path, before, after, ended) = {
+                let Ok(mut player) = world.get::<&mut AnimationPlayer>(entity) else {
+                    continue;
+                };
+                if !player.started {
+                    player.started = true;
+                    let autoplay = player.autoplay.clone();
+                    if !autoplay.is_empty() && !player.play(&autoplay) {
+                        eprintln!("[animation] autoplay: no animation named {autoplay}");
+                    }
+                }
+                let Some(path) = player.current_path().map(str::to_string) else {
+                    continue;
+                };
+                if !player.is_playing() {
+                    continue;
+                }
+                let Some(animation) = anim::get(&path) else {
+                    player.pause();
+                    continue;
+                };
+                let (before, after, ended) = player.advance(delta_time, &animation);
+                (path, before, after, ended)
+            };
+            let Some(animation) = anim::get(&path) else {
+                continue;
+            };
+            for track in &animation.tracks {
+                let target = if track.target.is_empty() {
+                    Some(entity)
+                } else {
+                    crate::core::subviewports::entity_named(world, &track.target)
+                };
+                let Some(target) = target else {
+                    continue;
+                };
+                match &track.kind {
+                    TrackKind::Property { component, field, .. } => {
+                        if let (Some(def), Some(value)) = (registry.def(component), track.sample(after)) {
+                            def.set_field(world, target, field, &value);
+                        }
+                    }
+                    TrackKind::Call => calls.extend(track.crossed(before, after).into_iter().map(|f| (target, f))),
+                }
+            }
+            if ended {
+                finished.push((entity, anim::animation_name(&path)));
+            }
+        }
+        for (entity, function) in calls {
+            self.scripts.call(entity, &function);
+        }
+        for (entity, name) in finished {
+            self.scripts.send_event(entity, "animation_finished", vec![rhai::Dynamic::from(name)]);
         }
     }
 

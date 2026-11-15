@@ -364,6 +364,64 @@ pub fn register(engine: &mut Engine, ctx: &Shared) {
     register_input(engine, ctx);
     register_math(engine, ctx);
     register_audio(engine, ctx);
+    register_animation_players(engine, ctx);
+}
+
+/// Change an entity's AnimationPlayer. Reports entities without one.
+fn with_player<R>(
+    ctx: &Shared,
+    entity: Entity,
+    what: &str,
+    f: impl FnOnce(&mut crate::scene::components::animation_player::AnimationPlayer) -> R,
+) -> Option<R> {
+    let result = with_entity(ctx, entity, |world, id| {
+        world.get::<&mut crate::scene::components::animation_player::AnimationPlayer>(id).ok().map(|mut p| f(&mut p))
+    })
+    .flatten();
+    if result.is_none() {
+        eprintln!("[script] {what}: this entity has no AnimationPlayer");
+    }
+    result
+}
+
+/// AnimationPlayer: keyframed animations of component fields (.vanim files).
+fn register_animation_players(engine: &mut Engine, ctx: &Shared) {
+    ctx_fn!(engine, ctx, "play_anim", |c, e: &mut Entity, name: &str| {
+        let played = with_player(&c, *e, "play_anim", |p| p.play(name));
+        if played == Some(false) {
+            eprintln!("[script] play_anim: the AnimationPlayer has no animation named {name}");
+        }
+    });
+    ctx_fn!(engine, ctx, "play_anim", |c, name: &str| {
+        let played = with_player(&c, me(&c), "play_anim", |p| p.play(name));
+        if played == Some(false) {
+            eprintln!("[script] play_anim: the AnimationPlayer has no animation named {name}");
+        }
+    });
+    for (name, action) in [
+        ("stop_anim", (|p| p.stop()) as fn(&mut crate::scene::components::animation_player::AnimationPlayer)),
+        ("pause_anim", |p| p.pause()),
+        ("resume_anim", |p| p.resume()),
+    ] {
+        ctx_fn!(engine, ctx, name, |c| {
+            with_player(&c, me(&c), name, action);
+        });
+        ctx_fn!(engine, ctx, name, |c, e: &mut Entity| {
+            with_player(&c, *e, name, action);
+        });
+    }
+    let (c, c2) = (ctx.clone(), ctx.clone());
+    engine.register_get_set(
+        "anim_time",
+        move |e: &mut Entity| with_player(&c, *e, "anim_time", |p| p.time() as FLOAT).unwrap_or(0.0),
+        move |e: &mut Entity, t: FLOAT| {
+            with_player(&c2, *e, "anim_time", |p| p.seek(t as f32));
+        },
+    );
+    let c = ctx.clone();
+    engine.register_get("anim_playing", move |e: &mut Entity| with_player(&c, *e, "anim_playing", |p| p.is_playing()).unwrap_or(false));
+    let c = ctx.clone();
+    engine.register_get("current_anim", move |e: &mut Entity| with_player(&c, *e, "current_anim", |p| p.current_name()).unwrap_or_default());
 }
 
 /// `me()`, `find()`, and the Entity type's properties and methods.

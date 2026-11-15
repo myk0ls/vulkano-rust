@@ -1,0 +1,39 @@
+(
+    length: 2.0,
+    looping: true,
+    tracks: [
+        (
+            target: "",
+            kind: Property(component: "Transform", field: "position", interpolation: Smooth),
+            keys: [
+                (time: 0.0, value: Vec3((-2.0, -0.5, 6.0))),
+                (time: 1.0, value: Vec3((2.0, -0.5, 6.0))),
+                (time: 2.0, value: Vec3((-2.0, -0.5, 6.0))),
+            ],
+        ),
+        (
+            target: "",
+            kind: Property(component: "MaterialOverride", field: "tint", interpolation: Linear),
+            keys: [
+                (time: 0.0, value: Vec3((0.9, 0.2, 0.1))),
+                (time: 1.0, value: Vec3((0.1, 0.4, 0.9))),
+                (time: 2.0, value: Vec3((0.9, 0.2, 0.1))),
+            ],
+        ),
+        (
+            target: "Lamp",
+            kind: Property(component: "Shape3D", field: "size", interpolation: Step),
+            keys: [
+                (time: 0.0, value: Vec3((0.5, 0.5, 0.5))),
+                (time: 1.0, value: Vec3((1.0, 1.0, 1.0))),
+            ],
+        ),
+        (
+            target: "",
+            kind: Call,
+            keys: [
+                (time: 1.0, value: Text("on_turn")),
+            ],
+        ),
+    ],
+)

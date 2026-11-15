@@ -430,6 +430,8 @@ impl Renderer {
     pub fn build_bindless_material_set(&mut self, unified: &UnifiedGeometry) {
         // Vulkan buffers cannot be empty; an empty scene simply has no material set.
         if unified.material_data.is_empty() {
+            self.material_buffer = None;
+            self.material_textures.clear();
             self.bindless_material_set = None;
             return;
         }
@@ -448,17 +450,35 @@ impl Renderer {
             unified.material_data.iter().copied(),
         )
         .unwrap();
+        self.material_buffer = Some(material_buffer);
+        self.material_textures = unified.textures.clone();
+        self.write_material_set();
+    }
 
+    /// Images materials may sample besides model textures, in a fixed order: the i-th is
+    /// at bindless index `extra_texture_index(i)`. Rebuilds the material set.
+    pub fn set_extra_textures(&mut self, textures: Vec<Arc<ImageView>>) {
+        self.extra_textures = textures;
+        self.write_material_set();
+    }
+
+    pub fn extra_texture_index(&self, i: usize) -> u32 {
+        (self.material_textures.len() + i) as u32
+    }
+
+    fn write_material_set(&mut self) {
+        let Some(material_buffer) = self.material_buffer.clone() else {
+            self.bindless_material_set = None;
+            return;
+        };
+        let textures: Vec<Arc<ImageView>> =
+            self.material_textures.iter().chain(&self.extra_textures).cloned().collect();
         let texture_writes: Vec<WriteDescriptorSet> = vec![
             WriteDescriptorSet::buffer(0, material_buffer),
             WriteDescriptorSet::image_view_sampler_array(
                 1,
                 0,
-                unified
-                    .textures
-                    .iter()
-                    .map(|iv| (iv.clone() as _, self.sampler.clone()))
-                    .collect::<Vec<_>>(),
+                textures.iter().map(|iv| (iv.clone() as _, self.sampler.clone())).collect::<Vec<_>>(),
             ),
         ];
 
@@ -473,7 +493,7 @@ impl Renderer {
         let set = DescriptorSet::new_variable(
             self.descriptor_set_allocator.clone(),
             layout,
-            unified.textures.len() as u32,
+            textures.len() as u32,
             texture_writes,
             [],
         )
