@@ -54,6 +54,7 @@ pub const API_HELP: &[(&str, &[(&str, &str)])] = &[
             ("e.look_at(point or entity), e.forward()", "Face something; the direction it faces."),
             ("e.distance_to(other)", "Distance to an entity or point."),
             ("e.apply_impulse(v)", "Push a physics body."),
+            ("e.angular_velocity, e.mass", "Read or assign a physics body's spin (radians per second per axis); its mass."),
             ("e.move_velocity = vec3(x, 0, z)", "Walk a KinematicCharacter at this speed in m/s; Y is ignored. Physics keeps it on the ground and out of walls."),
             ("e.jump(6.0), e.grounded", "Launch a KinematicCharacter upward at this speed; whether it stands on something."),
             ("e.play_animation(\"Walk\")", "On an Animator."),

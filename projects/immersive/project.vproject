@@ -1,0 +1,6 @@
+(
+    name: "immersive",
+    main_scene: "scenes/main.vscene",
+    autoload: [],
+    sky: "",
+)

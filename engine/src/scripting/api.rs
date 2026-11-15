@@ -507,6 +507,41 @@ fn register_entity(engine: &mut Engine, ctx: &Shared) {
         },
     );
 
+    // Spin of a physics body in radians per second around each axis, in the engine's
+    // space (a mirror of physics space, which flips the axis vector).
+    let (c, c2) = (ctx.clone(), ctx.clone());
+    engine.register_get_set(
+        "angular_velocity",
+        move |e: &mut Entity| {
+            with_entity(&c, *e, |w, id| {
+                let (Some(handle), Ok(physics)) = (body_of(w, id), w.get_unique::<&PhysicsEngine>()) else {
+                    return Vec3::default();
+                };
+                physics.rigid_body_set.get(handle).map_or(Vec3::default(), |rb| {
+                    let a = rb.angvel();
+                    Vec3::new(-a.x as FLOAT, a.y as FLOAT, -a.z as FLOAT)
+                })
+            })
+            .unwrap_or_default()
+        },
+        move |e: &mut Entity, a: Vec3| {
+            with_entity(&c2, *e, |w, id| {
+                with_body(w, id, |rb| rb.set_angvel(Vector::new(-a.x as f32, a.y as f32, -a.z as f32), true))
+            });
+        },
+    );
+    // A physics body's mass (0 for bodies without one, such as fixed ones).
+    let c = ctx.clone();
+    engine.register_get("mass", move |e: &mut Entity| {
+        with_entity(&c, *e, |w, id| {
+            let (Some(handle), Ok(physics)) = (body_of(w, id), w.get_unique::<&PhysicsEngine>()) else {
+                return 0.0;
+            };
+            physics.rigid_body_set.get(handle).filter(|rb| rb.is_dynamic()).map_or(0.0, |rb| rb.mass() as FLOAT)
+        })
+        .unwrap_or(0.0)
+    });
+
     for (property, is_mask) in [("collision_layer", false), ("collision_mask", true)] {
         let (c, c2) = (ctx.clone(), ctx.clone());
         engine.register_get_set(
