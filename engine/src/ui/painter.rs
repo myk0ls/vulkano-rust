@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use egui::epaint::{ImageDelta, Primitive};
 use egui::{ClippedPrimitive, ImageData, TextureId, TexturesDelta};
-use vulkano::buffer::allocator::{SubbufferAllocator, SubbufferAllocatorCreateInfo};
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::{
     AutoCommandBufferBuilder, BufferImageCopy, CopyBufferToImageInfo, CopyImageToBufferInfo,
@@ -122,7 +121,6 @@ pub struct Painter {
     framebuffer_generation: Option<u64>,
     allocator: Arc<vulkano::memory::allocator::StandardMemoryAllocator>,
     descriptors: Arc<vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator>,
-    buffers: SubbufferAllocator,
     textures: HashMap<TextureId, UiTexture>,
     pending_deltas: Vec<TexturesDelta>,
     target_is_srgb: bool,
@@ -230,18 +228,6 @@ impl Painter {
         .unwrap();
 
         let allocator = renderer.memory_allocator.clone();
-        let buffers = SubbufferAllocator::new(
-            allocator.clone(),
-            SubbufferAllocatorCreateInfo {
-                arena_size: 4 * 1024 * 1024,
-                buffer_usage: BufferUsage::VERTEX_BUFFER
-                    | BufferUsage::INDEX_BUFFER
-                    | BufferUsage::TRANSFER_SRC,
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-        );
 
         Self {
             render_pass,
@@ -251,7 +237,6 @@ impl Painter {
             framebuffer_generation: None,
             allocator,
             descriptors: renderer.descriptor_set_allocator(),
-            buffers,
             textures: HashMap::new(),
             pending_deltas: Vec::new(),
             clear,
@@ -357,8 +342,17 @@ impl Painter {
         let [w, h] = image.size.map(|v| v as u32);
         let data: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_array()).collect();
 
-        let staging = self.buffers.allocate_slice::<u8>(data.len() as u64).unwrap();
-        staging.write().unwrap().copy_from_slice(&data);
+        // A buffer of its own, for the same reason as the frame's geometry (see draw_primitives).
+        let staging = Buffer::from_iter(
+            self.allocator.clone(),
+            BufferCreateInfo { usage: BufferUsage::TRANSFER_SRC, ..Default::default() },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            data,
+        )
+        .unwrap();
 
         let target = match delta.pos {
             Some(_) => self.textures[&id].view.image().clone(),
@@ -527,6 +521,20 @@ impl Painter {
             extent[1] as f32 / pixels_per_point,
         ];
 
+        // The whole frame's geometry goes into two buffers made for this frame. Reusing
+        // long-lived buffers instead made vulkano track every distinct range ever written,
+        // which grew without end as the UI changed from frame to frame.
+        struct Draw {
+            scissor: Scissor,
+            set: Arc<DescriptorSet>,
+            is_linear: bool,
+            first_index: u32,
+            index_count: u32,
+            vertex_offset: i32,
+        }
+        let mut draws = Vec::new();
+        let mut all_vertices: Vec<UiVertex> = Vec::new();
+        let mut all_indices: Vec<u32> = Vec::new();
         for primitive in primitives {
             let Primitive::Mesh(mesh) = &primitive.primitive else {
                 continue;
@@ -537,73 +545,59 @@ impl Painter {
             let Some(texture) = self.textures.get(&mesh.texture_id) else {
                 continue;
             };
-
             let min_x = (primitive.clip_rect.min.x * pixels_per_point).round().max(0.0) as u32;
             let min_y = (primitive.clip_rect.min.y * pixels_per_point).round().max(0.0) as u32;
-            let max_x = ((primitive.clip_rect.max.x * pixels_per_point).round().max(0.0) as u32)
-                .min(extent[0]);
-            let max_y = ((primitive.clip_rect.max.y * pixels_per_point).round().max(0.0) as u32)
-                .min(extent[1]);
+            let max_x = ((primitive.clip_rect.max.x * pixels_per_point).round().max(0.0) as u32).min(extent[0]);
+            let max_y = ((primitive.clip_rect.max.y * pixels_per_point).round().max(0.0) as u32).min(extent[1]);
             if max_x <= min_x || max_y <= min_y {
                 continue;
             }
+            draws.push(Draw {
+                scissor: Scissor { offset: [min_x, min_y], extent: [max_x - min_x, max_y - min_y] },
+                set: texture.set.clone(),
+                is_linear: texture.is_linear,
+                first_index: all_indices.len() as u32,
+                index_count: mesh.indices.len() as u32,
+                vertex_offset: all_vertices.len() as i32,
+            });
+            all_vertices.extend(mesh.vertices.iter().map(|v| UiVertex {
+                pos: [v.pos.x, v.pos.y],
+                uv: [v.uv.x, v.uv.y],
+                color: v.color.to_array(),
+            }));
+            all_indices.extend_from_slice(&mesh.indices);
+        }
 
-            let vertices = self
-                .buffers
-                .allocate_slice::<UiVertex>(mesh.vertices.len() as u64)
-                .unwrap();
-            {
-                let mut mapped = vertices.write().unwrap();
-                for (out, v) in mapped.iter_mut().zip(&mesh.vertices) {
-                    *out = UiVertex {
-                        pos: [v.pos.x, v.pos.y],
-                        uv: [v.uv.x, v.uv.y],
-                        color: v.color.to_array(),
-                    };
+        if !draws.is_empty() {
+            let upload = |usage: BufferUsage| BufferCreateInfo { usage, ..Default::default() };
+            let memory = || AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            };
+            let vertices = Buffer::from_iter(self.allocator.clone(), upload(BufferUsage::VERTEX_BUFFER), memory(), all_vertices).unwrap();
+            let indices = Buffer::from_iter(self.allocator.clone(), upload(BufferUsage::INDEX_BUFFER), memory(), all_indices).unwrap();
+            commands.bind_vertex_buffers(0, vertices).unwrap().bind_index_buffer(indices).unwrap();
+            for draw in draws {
+                commands
+                    .set_scissor(0, [draw.scissor].into_iter().collect())
+                    .unwrap()
+                    .bind_descriptor_sets(PipelineBindPoint::Graphics, self.pipeline.layout().clone(), 0, draw.set)
+                    .unwrap()
+                    .push_constants(
+                        self.pipeline.layout().clone(),
+                        0,
+                        vs::PushConstants {
+                            screen_size,
+                            texture_is_linear: draw.is_linear as u32,
+                            target_is_srgb: self.target_is_srgb as u32,
+                        },
+                    )
+                    .unwrap();
+                // SAFETY: indices come from egui and refer to their own mesh's vertices, which
+                // start at vertex_offset in the shared buffer.
+                unsafe {
+                    commands.draw_indexed(draw.index_count, 1, draw.first_index, draw.vertex_offset, 0).unwrap();
                 }
-            }
-            let indices = self
-                .buffers
-                .allocate_slice::<u32>(mesh.indices.len() as u64)
-                .unwrap();
-            indices.write().unwrap().copy_from_slice(&mesh.indices);
-
-            let index_count = mesh.indices.len() as u32;
-            commands
-                .set_scissor(
-                    0,
-                    [Scissor {
-                        offset: [min_x, min_y],
-                        extent: [max_x - min_x, max_y - min_y],
-                    }]
-                    .into_iter()
-                    .collect(),
-                )
-                .unwrap()
-                .bind_descriptor_sets(
-                    PipelineBindPoint::Graphics,
-                    self.pipeline.layout().clone(),
-                    0,
-                    texture.set.clone(),
-                )
-                .unwrap()
-                .push_constants(
-                    self.pipeline.layout().clone(),
-                    0,
-                    vs::PushConstants {
-                        screen_size,
-                        texture_is_linear: texture.is_linear as u32,
-                        target_is_srgb: self.target_is_srgb as u32,
-                    },
-                )
-                .unwrap()
-                .bind_vertex_buffers(0, vertices)
-                .unwrap()
-                .bind_index_buffer(indices)
-                .unwrap();
-            // SAFETY: indices come from egui and refer to the vertices bound above.
-            unsafe {
-                commands.draw_indexed(index_count, 1, 0, 0, 0).unwrap();
             }
         }
 
